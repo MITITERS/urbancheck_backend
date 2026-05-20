@@ -11,6 +11,12 @@ Moved to [settings](https://cookiecutter-django.readthedocs.io/en/latest/1-getti
 
 ## Basic Commands
 
+### Levantar el entorno local
+
+```bash
+docker compose -f docker-compose.local.yml up
+```
+
 ### Setting Up Your Users
 
 - To create a **normal user account**, just go to Sign Up and fill out the form. Once you submit it, you'll see a "Verify Your E-mail Address" page. Go to your console to see a simulated email verification message. Copy the link into your browser. Now the user's email should be verified and ready to go.
@@ -38,10 +44,6 @@ To run the tests, check your test coverage, and generate an HTML coverage report
 #### Running tests with pytest
 
     uv run pytest
-
-### Live reloading and Sass CSS compilation
-
-Moved to [Live reloading and SASS compilation](https://cookiecutter-django.readthedocs.io/en/latest/2-local-development/developing-locally.html#using-webpack-or-gulp).
 
 ### Celery
 
@@ -86,3 +88,15 @@ The following details how to deploy this application.
 ### Docker
 
 See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
+
+## Flujo de trabajo
+
+El proyecto utiliza Git Flow:
+
+- `main`: código estable.
+- `develop`: integración de funcionalidades.
+- `feature/US-<nro>-<descripcion>`: desarrollo de historias.
+- `release/<version>`: preparación de entregas.
+- `hotfix/<descripcion>`: correcciones urgentes.
+
+Toda funcionalidad debe desarrollarse desde `develop` y mergearse mediante Pull Request.
