@@ -13,6 +13,7 @@ SECRET_KEY = env(
     default="yfl76JFOkfH1yoUDWxQw10mXSCrQJ1tv8ntH0CDTBvmVEOhxDaPNSXOVIxUPcn5A",
 )
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
+# Add your Mac's LAN IP here for physical device testing, e.g. "192.168.1.x"
 ALLOWED_HOSTS = ["localhost", "0.0.0.0", "127.0.0.1"]  # noqa: S104
 
 # CACHES
