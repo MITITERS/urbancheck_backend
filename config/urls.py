@@ -9,6 +9,10 @@ from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
 
+from config.deeplink import android_assetlinks
+from config.deeplink import apple_app_site_association
+from config.deeplink import reset_password_web_fallback
+
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
     path(
@@ -16,6 +20,13 @@ urlpatterns = [
         TemplateView.as_view(template_name="pages/about.html"),
         name="about",
     ),
+    # Universal Links (iOS) / App Links (Android) + fallback web del reset
+    path(
+        ".well-known/apple-app-site-association",
+        apple_app_site_association,
+    ),
+    path(".well-known/assetlinks.json", android_assetlinks),
+    path("reset-password", reset_password_web_fallback, name="reset_password"),
     # Django Admin, use {% url 'admin:index' %}
     path(settings.ADMIN_URL, admin.site.urls),
     # User management

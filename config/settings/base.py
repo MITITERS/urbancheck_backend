@@ -331,9 +331,44 @@ SOCIALACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSocialSignupForm"}
 # -------------------------------------------------------------------------------
 HEADLESS_ONLY = False
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+# Link enviado en el correo de recuperación de contraseña.
+# Se usa un https:// que apunta a la página web de reset de allauth (/accounts/...),
+# porque los clientes de correo no rompen los enlaces https como sí ocurre con los
+# esquemas custom (urbancheck://). El key de headless tiene el mismo formato que la
+# URL web de allauth, así que funciona directamente en el navegador de cualquier
+# dispositivo, sin depender de Expo Go ni de deep links.
+# Configurable por entorno: en dev apuntar a la IP/LAN del backend, en prod al dominio.
+# Por defecto (prod) usa el Universal Link /reset-password, que abre la app de
+# UrbanCheck directamente cuando está instalada (ver config/deeplink.py) y cae en
+# la web de allauth como fallback. En dev/Expo Go se sobreescribe por la URL web
+# de allauth, porque los Universal Links no funcionan en Expo Go ni sobre una IP LAN.
+ACCOUNT_RESET_PASSWORD_URL = env(
+    "DJANGO_ACCOUNT_RESET_PASSWORD_URL",
+    default="https://urbancheck.com.ar/reset-password?key={key}",
+)
 HEADLESS_FRONTEND_URLS = {
-    "account_reset_password_from_key": "urbancheck://reset-password?key={key}",
+    "account_reset_password_from_key": ACCOUNT_RESET_PASSWORD_URL,
 }
+
+# Universal Links (iOS) / App Links (Android)
+# -------------------------------------------------------------------------------
+# Identificadores usados por los archivos de asociación servidos en
+# /.well-known/ (ver config/deeplink.py). Completar al generar el build:
+#   - IOS_UNIVERSAL_LINK_APP_ID: "<APPLE_TEAM_ID>.<bundleIdentifier>"
+#   - ANDROID_SHA256_CERT_FINGERPRINTS: huella(s) SHA256 del certificado de firma
+#     (se obtiene con `eas credentials` o `keytool`).
+IOS_UNIVERSAL_LINK_APP_ID = env(
+    "IOS_UNIVERSAL_LINK_APP_ID",
+    default="TEAMID.com.anonymous.urbancheck",
+)
+ANDROID_APP_PACKAGE = env(
+    "ANDROID_APP_PACKAGE",
+    default="com.anonymous.urbancheck",
+)
+ANDROID_SHA256_CERT_FINGERPRINTS = env.list(
+    "ANDROID_SHA256_CERT_FINGERPRINTS",
+    default=[],
+)
 
 # django-rest-framework
 # -------------------------------------------------------------------------------
