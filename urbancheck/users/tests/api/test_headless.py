@@ -70,6 +70,7 @@ class TestSignup:
         )
         user = User.objects.get(email="ciudadano@example.com")
         assert user.role == "ciudadano"
+        assert user.name == "Ciudadano Test"
 
     def test_signup_sends_email(self, client):
         json_post(

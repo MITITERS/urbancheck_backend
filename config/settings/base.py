@@ -322,6 +322,7 @@ ACCOUNT_EMAIL_VERIFICATION = "optional"
 ACCOUNT_ADAPTER = "urbancheck.users.adapters.AccountAdapter"
 # https://docs.allauth.org/en/latest/account/forms.html
 ACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSignupForm"}
+ACCOUNT_SIGNUP_FORM_CLASS = "urbancheck.users.signup_forms.HeadlessUserSignupForm"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
 SOCIALACCOUNT_ADAPTER = "urbancheck.users.adapters.SocialAccountAdapter"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
