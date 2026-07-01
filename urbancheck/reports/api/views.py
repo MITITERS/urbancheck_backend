@@ -32,7 +32,7 @@ class ReportViewSet(CreateModelMixin, ListModelMixin, RetrieveModelMixin, Generi
         qs = Report.objects.annotate(
             like_count=Count("likes", distinct=True),
             comment_count=Count("comments", distinct=True),
-        )
+        ).order_by("-created_at")
         if self.request.query_params.get("mine") == "true":
             qs = qs.filter(author=self.request.user)
         return qs
