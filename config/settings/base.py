@@ -371,6 +371,20 @@ ANDROID_SHA256_CERT_FINGERPRINTS = env.list(
     default=[],
 )
 
+# Geocodificación (Nominatim / OpenStreetMap)
+# -------------------------------------------------------------------------------
+# Convierte direcciones escritas a mano en coordenadas. El servidor público es
+# gratuito pero exige un User-Agent identificable con datos de contacto y un
+# máximo de 1 req/seg. Para producción con volumen conviene self-hostear Nominatim
+# y apuntar NOMINATIM_URL a esa instancia.
+NOMINATIM_URL = env("NOMINATIM_URL", default="https://nominatim.openstreetmap.org/search")
+NOMINATIM_USER_AGENT = env(
+    "NOMINATIM_USER_AGENT",
+    default="UrbanCheck/1.0 (contacto: stefano.riscaldino@yahoo.com)",
+)
+# Restringe los resultados a estos países (códigos ISO separados por coma). Vacío = global.
+NOMINATIM_COUNTRYCODES = env("NOMINATIM_COUNTRYCODES", default="ar")
+
 # django-rest-framework
 # -------------------------------------------------------------------------------
 # django-rest-framework - https://www.django-rest-framework.org/api-guide/settings/
