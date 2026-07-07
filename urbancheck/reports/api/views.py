@@ -65,7 +65,7 @@ class ReportViewSet(CreateModelMixin, ListModelMixin, RetrieveModelMixin, Generi
         report = serializer.save(author=self.request.user, **extra)
         ReportStatusHistory.objects.create(
             report=report,
-            status=Report.Status.REPORTADO,
+            status=Report.Status.PENDIENTE_VALIDACION,
             changed_by=self.request.user,
         )
 

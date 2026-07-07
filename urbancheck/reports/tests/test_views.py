@@ -50,7 +50,7 @@ class TestReportCreate:
         assert res.status_code == 201
         report = Report.objects.get(id=res.data["id"])
         assert report.author == user
-        assert report.status == Report.Status.REPORTADO
+        assert report.status == Report.Status.PENDIENTE_VALIDACION
 
     def test_create_adds_initial_status_history(self, auth_client):
         client, _ = auth_client
@@ -66,7 +66,7 @@ class TestReportCreate:
         )
         assert res.status_code == 201
         assert ReportStatusHistory.objects.filter(
-            report_id=res.data["id"], status="reportado"
+            report_id=res.data["id"], status="pendiente_validacion"
         ).exists()
 
     def test_create_without_photo_returns_400(self, auth_client):

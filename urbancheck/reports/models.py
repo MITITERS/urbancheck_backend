@@ -12,11 +12,12 @@ class Report(models.Model):
         OTRO = "otro", "Otro"
 
     class Status(models.TextChoices):
+        PENDIENTE_VALIDACION = "pendiente_validacion", "Pendiente de validación"
         REPORTADO = "reportado", "Reportado"
-        EN_REVISION = "en_revision", "En revisión"
         EN_PROCESO = "en_proceso", "En proceso"
         RESUELTO = "resuelto", "Resuelto"
-        RECHAZADO = "rechazado", "Rechazado"
+        CANCELADO = "cancelado", "Cancelado"
+        ARCHIVADO = "archivado", "Archivado"
 
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -30,9 +31,9 @@ class Report(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
     status = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=Status.choices,
-        default=Status.REPORTADO,
+        default=Status.PENDIENTE_VALIDACION,
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -50,7 +51,7 @@ class ReportStatusHistory(models.Model):
         on_delete=models.CASCADE,
         related_name="status_history",
     )
-    status = models.CharField(max_length=20, choices=Report.Status.choices)
+    status = models.CharField(max_length=30, choices=Report.Status.choices)
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
