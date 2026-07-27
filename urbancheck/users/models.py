@@ -2,6 +2,7 @@
 from typing import ClassVar
 
 from django.contrib.auth.models import AbstractUser
+from django.db.models import BooleanField
 from django.db.models import CharField
 from django.db.models import EmailField
 from django.db.models import ImageField
@@ -35,6 +36,14 @@ class User(AbstractUser):
         default=Role.CIUDADANO,
     )
     avatar = ImageField(upload_to="avatars/", blank=True)
+    # Perfil público: si es False, otros usuarios solo ven nombre y avatar.
+    is_public = BooleanField(
+        _("public profile"),
+        default=True,
+        help_text=_(
+            "Si se desactiva, otros usuarios no ven tus reportes ni tus estadísticas.",
+        ),
+    )
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
