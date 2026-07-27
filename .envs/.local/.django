@@ -12,3 +12,7 @@ REDIS_URL=redis://redis:6379/0
 # Flower
 CELERY_FLOWER_USER=frEhbFehKdDLsEKveCXUTtgoizjAzbuO
 CELERY_FLOWER_PASSWORD=4Rgf0VI1oTw30RylMBswSvq38aDXC0ocldRtJHtJBDKaJqoLxdKsc5jMWTRATSeA
+DJANGO_ALLOWED_HOSTS=*
+# Link de recuperación de contraseña (dev): apunta a la página web de reset
+# en la IP/LAN del backend para que abra en el navegador del celular.
+DJANGO_ACCOUNT_RESET_PASSWORD_URL=http://192.168.0.116:8000/accounts/password/reset/key/{key}/
