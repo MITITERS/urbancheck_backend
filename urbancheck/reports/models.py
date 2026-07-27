@@ -37,12 +37,26 @@ class Report(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Última edición hecha por el autor. Se diferencia de ``updated_at`` (que se
+    # mueve con cualquier guardado, incluido un cambio de estado municipal) para
+    # poder mostrar "editado el ..." solo cuando el ciudadano tocó el contenido.
+    edited_at = models.DateTimeField(null=True, blank=True)
+
+    # El autor solo puede modificar o borrar su reporte mientras el municipio no
+    # empezó a gestionarlo.
+    EDITABLE_STATUSES = frozenset(
+        {Status.PENDIENTE_VALIDACION, Status.REPORTADO},
+    )
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return f"{self.category} — {self.author} ({self.status})"
+
+    @property
+    def is_editable(self) -> bool:
+        return self.status in self.EDITABLE_STATUSES
 
 
 class ReportStatusHistory(models.Model):
