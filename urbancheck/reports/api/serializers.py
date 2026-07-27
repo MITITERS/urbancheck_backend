@@ -6,6 +6,8 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.users.models import User
 
+EMPTY_DESCRIPTION_MESSAGE = "La descripción no puede quedar vacía."
+
 
 class AuthorSerializer(serializers.ModelSerializer):
     class Meta:
@@ -23,17 +25,24 @@ class StatusHistorySerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     author = AuthorSerializer(read_only=True)
+    is_mine = serializers.SerializerMethodField()
 
     class Meta:
         model = Comment
-        fields = ["id", "author", "text", "created_at"]
+        fields = ["id", "author", "text", "created_at", "is_mine"]
         read_only_fields = ["id", "author", "created_at"]
+
+    def get_is_mine(self, obj) -> bool:
+        """Permite al cliente mostrar la opción Eliminar solo en los propios."""
+        request = self.context.get("request")
+        return bool(request and obj.author_id == request.user.id)
 
 
 class ReportListSerializer(serializers.ModelSerializer):
     author = AuthorSerializer(read_only=True)
     like_count = serializers.IntegerField(read_only=True)
     comment_count = serializers.IntegerField(read_only=True)
+    is_liked = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -46,30 +55,74 @@ class ReportListSerializer(serializers.ModelSerializer):
             "author",
             "like_count",
             "comment_count",
+            "is_liked",
             "created_at",
+            "edited_at",
         ]
+
+    def get_is_liked(self, obj) -> bool:
+        """Usa la anotación del queryset si está, y si no consulta.
+
+        ``ReportViewSet.get_queryset`` anota ``is_liked`` con un ``Exists`` para
+        no disparar una query por reporte en el feed. El respaldo existe porque
+        un campo declarativo se omitiría en silencio cuando falta la anotación, y
+        una respuesta sin ``is_liked`` rompe el botón de like del cliente sin dar
+        ninguna señal de error.
+        """
+        annotated = getattr(obj, "is_liked", None)
+        if annotated is not None:
+            return annotated
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        return Like.objects.filter(report=obj, user=request.user).exists()
 
 
 class ReportDetailSerializer(ReportListSerializer):
-    is_liked = serializers.SerializerMethodField()
     comments = CommentSerializer(many=True, read_only=True)
     status_history = StatusHistorySerializer(many=True, read_only=True)
+    can_edit = serializers.SerializerMethodField()
 
     class Meta(ReportListSerializer.Meta):
-        fields = ReportListSerializer.Meta.fields + [
+        fields = [
+            *ReportListSerializer.Meta.fields,
             "latitude",
             "longitude",
             "address",
-            "is_liked",
             "comments",
             "status_history",
+            "can_edit",
         ]
 
-    def get_is_liked(self, obj):
+    def get_can_edit(self, obj) -> bool:
+        """True solo si quien mira es el autor y el reporte todavía es editable.
+
+        El cliente usa esto para habilitar o deshabilitar los botones de editar y
+        eliminar sin tener que replicar la regla de estados.
+        """
         request = self.context.get("request")
-        if request and request.user.is_authenticated:
-            return Like.objects.filter(report=obj, user=request.user).exists()
-        return False
+        if not request or obj.author_id != request.user.id:
+            return False
+        return obj.is_editable
+
+
+class ReportMapSerializer(serializers.ModelSerializer):
+    """Payload mínimo para pintar marcadores y su popup (US-010)."""
+
+    like_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Report
+        fields = [
+            "id",
+            "photo",
+            "category",
+            "status",
+            "latitude",
+            "longitude",
+            "address",
+            "like_count",
+        ]
 
 
 class ReportCreateSerializer(serializers.ModelSerializer):
@@ -96,3 +149,27 @@ class ReportCreateSerializer(serializers.ModelSerializer):
                 {"location": "Debés proporcionar coordenadas GPS o una dirección."}
             )
         return attrs
+
+
+class ReportUpdateSerializer(serializers.ModelSerializer):
+    """Edición del autor (US-018): solo descripción, categoría y foto.
+
+    La ubicación no se edita: cambiarla convertiría el reporte en otro distinto y
+    dejaría inconsistente el historial de estados ya registrado.
+    """
+
+    class Meta:
+        model = Report
+        fields = [
+            "id",
+            "photo",
+            "description",
+            "category",
+            "edited_at",
+        ]
+        read_only_fields = ["id", "edited_at"]
+
+    def validate_description(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(EMPTY_DESCRIPTION_MESSAGE)
+        return value
