@@ -18,6 +18,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.reports.geocoding import geocode_one
+from urbancheck.reports.geocoding import reverse_geocode
 from urbancheck.reports.geocoding import search_addresses
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
@@ -107,6 +108,14 @@ class ReportViewSet(
             if match:
                 extra["latitude"] = match["latitude"]
                 extra["longitude"] = match["longitude"]
+        elif has_coords and not address:
+            # Camino inverso: el reporte llega del GPS, solo con coordenadas. Sin
+            # texto de dirección la búsqueda por calle, barrio o localidad
+            # (US-020) nunca podría encontrarlo, así que la resolvemos acá.
+            extra["address"] = reverse_geocode(
+                serializer.validated_data["latitude"],
+                serializer.validated_data["longitude"],
+            )
 
         report = serializer.save(author=self.request.user, **extra)
         ReportStatusHistory.objects.create(
