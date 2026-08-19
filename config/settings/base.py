@@ -89,6 +89,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     "urbancheck.users",
     "urbancheck.reports",
+    "urbancheck.notifications",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -378,6 +379,10 @@ ANDROID_SHA256_CERT_FINGERPRINTS = env.list(
 # máximo de 1 req/seg. Para producción con volumen conviene self-hostear Nominatim
 # y apuntar NOMINATIM_URL a esa instancia.
 NOMINATIM_URL = env("NOMINATIM_URL", default="https://nominatim.openstreetmap.org/search")
+NOMINATIM_REVERSE_URL = env(
+    "NOMINATIM_REVERSE_URL",
+    default="https://nominatim.openstreetmap.org/reverse",
+)
 NOMINATIM_USER_AGENT = env(
     "NOMINATIM_USER_AGENT",
     default="UrbanCheck/1.0 (contacto: stefano.riscaldino@yahoo.com)",

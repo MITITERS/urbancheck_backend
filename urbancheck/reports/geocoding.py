@@ -92,3 +92,53 @@ def geocode_one(query: str) -> dict | None:
     """
     results = search_addresses(query, limit=1)
     return results[0] if results else None
+
+
+def reverse_geocode(latitude, longitude) -> str:
+    """Devuelve la dirección de unas coordenadas, o ``""`` si no se pudo resolver.
+
+    Es la operación inversa de ``geocode_one``: hace falta porque un reporte
+    creado con GPS llega solo con lat/lng, y sin texto de dirección la búsqueda
+    por calle, barrio o localidad (US-020) no puede encontrarlo.
+
+    Best-effort, igual que el resto del módulo: ante cualquier error devuelve
+    cadena vacía en vez de romper el alta del reporte.
+    """
+    if latitude is None or longitude is None:
+        return ""
+
+    digest = hashlib.sha1(f"{latitude},{longitude}".encode()).hexdigest()
+    cache_key = f"{_CACHE_PREFIX}rev:{digest}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        response = requests.get(
+            settings.NOMINATIM_REVERSE_URL,
+            params={
+                "lat": str(latitude),
+                "lon": str(longitude),
+                "format": "jsonv2",
+                # Nivel de detalle: calle y numeración, sin bajar a cada edificio.
+                "zoom": 18,
+                "addressdetails": 0,
+            },
+            headers={"User-Agent": settings.NOMINATIM_USER_AGENT},
+            timeout=_TIMEOUT,
+        )
+        response.raise_for_status()
+        raw = response.json()
+    except (requests.RequestException, ValueError):
+        logger.warning(
+            "Nominatim reverse failed for lat=%r lon=%r",
+            latitude,
+            longitude,
+            exc_info=True,
+        )
+        return ""
+
+    address = raw.get("display_name", "") if isinstance(raw, dict) else ""
+    if address:
+        cache.set(cache_key, address, _CACHE_TTL)
+    return address
