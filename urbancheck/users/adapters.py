@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing
 
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.headless.adapter import DefaultHeadlessAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.conf import settings
 
@@ -46,3 +47,30 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
                 if last_name := data.get("last_name"):
                     user.name += f" {last_name}"
         return user
+
+
+class HeadlessAdapter(DefaultHeadlessAdapter):
+    """Payload de usuario que devuelve allauth headless.
+
+    El panel necesita el rol, la municipalidad y el flag de contraseña temporal
+    en la respuesta del login para decidir el flujo sin una llamada extra
+    (US-017). El adapter por defecto además descarta las claves con valor vacío
+    o nulo, así que ``municipality`` se agrega después del filtrado: que llegue
+    en ``null`` es información, no ausencia de dato.
+    """
+
+    def serialize_user(self, user) -> dict[str, typing.Any]:
+        data = super().serialize_user(user)
+        municipality = getattr(user, "municipality", None)
+        data["role"] = user.role
+        data["must_change_password"] = user.must_change_password
+        data["municipality"] = (
+            {
+                "id": municipality.pk,
+                "city": municipality.city,
+                "province": municipality.province,
+            }
+            if municipality
+            else None
+        )
+        return data

@@ -90,28 +90,52 @@ class TestNotifyNewComment:
 
 @pytest.mark.django_db
 class TestNotifyStatusChange:
-    def test_notifies_the_author_with_the_readable_label(self):
+    """El aviso ahora describe la transición, no el estado suelto (US-011).
+
+    La firma cambió cuando la función se cableó al evento de cambio de estado:
+    un aviso sin estado anterior no puede redactar "el municipio comenzó a
+    trabajar en tu reporte" en lugar de "pasó a En proceso".
+    """
+
+    def test_notifies_the_author_describing_the_change(self):
         report = ReportFactory.create(status=Report.Status.EN_PROCESO)
         municipal = UserFactory.create()
 
-        notification = notify_status_change(report, changed_by=municipal)
+        notification = notify_status_change(
+            report,
+            previous_status=Report.Status.REPORTADO,
+            new_status=Report.Status.EN_PROCESO,
+            changed_by=municipal,
+        )
 
         assert notification.recipient == report.author
         assert notification.kind == Notification.Kind.CAMBIO_ESTADO
         assert notification.actor == municipal
-        assert "En proceso" in notification.message
+        assert "comenzó a trabajar" in notification.message
 
     def test_system_change_leaves_the_actor_empty(self):
         report = ReportFactory.create(status=Report.Status.RESUELTO)
 
-        notification = notify_status_change(report)
+        notification = notify_status_change(
+            report,
+            previous_status=Report.Status.EN_PROCESO,
+            new_status=Report.Status.RESUELTO,
+        )
 
         assert notification.actor is None
-        assert "Resuelto" in notification.message
+        assert "resuelto" in notification.message.lower()
 
     def test_returns_none_when_the_author_changed_it_themselves(self):
         author = UserFactory.create()
         report = ReportFactory.create(author=author, status=Report.Status.RESUELTO)
 
-        assert notify_status_change(report, changed_by=author) is None
+        assert (
+            notify_status_change(
+                report,
+                previous_status=Report.Status.EN_PROCESO,
+                new_status=Report.Status.RESUELTO,
+                changed_by=author,
+            )
+            is None
+        )
         assert Notification.objects.count() == 0

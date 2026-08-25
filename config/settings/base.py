@@ -83,10 +83,14 @@ THIRD_PARTY_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "corsheaders",
+    "django_filters",
     "drf_spectacular",
 ]
 
 LOCAL_APPS = [
+    # Antes de ``users``: el admin de usuarios arma un ModelForm en tiempo de
+    # importación sobre la FK a Municipality, que ya tiene que estar cargada.
+    "urbancheck.municipalities",
     "urbancheck.users",
     "urbancheck.reports",
     "urbancheck.notifications",
@@ -308,6 +312,17 @@ CELERY_WORKER_SEND_TASK_EVENTS = True
 CELERY_TASK_SEND_SENT_EVENT = True
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-hijack-root-logger
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+# UrbanCheck
+# ------------------------------------------------------------------------------
+# Municipalidad a la que se asocian los reportes nuevos (US-034). Vacío significa
+# "la única registrada"; se vuelve obligatorio cuando haya más de una.
+ACTIVE_MUNICIPALITY_ID = env.int("DJANGO_ACTIVE_MUNICIPALITY_ID", default=None)
+
+# Radio dentro del cual un validador puede confirmar un reporte en terreno
+# (US-036). Es un único parámetro y no una constante repartida por el código;
+# la verificación se hace siempre en el servidor, nunca en el dispositivo.
+VALIDATION_RADIUS_METERS = env.int("DJANGO_VALIDATION_RADIUS_METERS", default=50)
+
 # django-allauth
 # ------------------------------------------------------------------------------
 ACCOUNT_ALLOW_REGISTRATION = env.bool("DJANGO_ACCOUNT_ALLOW_REGISTRATION", True)
@@ -332,6 +347,9 @@ SOCIALACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSocialSignupForm"}
 # django-allauth headless
 # -------------------------------------------------------------------------------
 HEADLESS_ONLY = False
+# El payload de usuario del login incluye rol, municipalidad y el flag de
+# contraseña temporal, para que el panel decida el flujo sin una llamada extra.
+HEADLESS_ADAPTER = "urbancheck.users.adapters.HeadlessAdapter"
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
 # Link enviado en el correo de recuperación de contraseña.
 # Se usa un https:// que apunta a la página web de reset de allauth (/accounts/...),
@@ -403,6 +421,10 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    # Solo lo declaramos como backend disponible: las vistas que filtran lo
+    # activan explícitamente con ``filter_backends``. El feed ciudadano sigue
+    # resolviendo sus filtros a mano (ver urbancheck/reports/api/filters.py).
+    "DEFAULT_FILTER_BACKENDS": [],
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup

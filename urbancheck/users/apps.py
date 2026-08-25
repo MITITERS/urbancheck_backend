@@ -7,6 +7,5 @@ class UsersConfig(AppConfig):
     verbose_name = _("Users")
 
     def ready(self):
-        """
-        Override this method in subclasses to run code when Django starts.
-        """
+        # Importado por su efecto: registra los receivers de allauth.
+        from . import signals  # noqa: F401, PLC0415

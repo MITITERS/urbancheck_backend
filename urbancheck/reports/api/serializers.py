@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from urbancheck.common.fields import LatitudeField
+from urbancheck.common.fields import LongitudeField
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
@@ -126,6 +128,11 @@ class ReportMapSerializer(serializers.ModelSerializer):
 
 
 class ReportCreateSerializer(serializers.ModelSerializer):
+    # El GPS del teléfono manda trece decimales; se redondean en vez de
+    # rechazar el reporte con un error de precisión que el vecino no entiende.
+    latitude = LatitudeField(required=False, allow_null=True)
+    longitude = LongitudeField(required=False, allow_null=True)
+
     class Meta:
         model = Report
         fields = [

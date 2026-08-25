@@ -19,9 +19,10 @@ class TestReport:
         report = ReportFactory.create(category=Report.Category.BACHE)
         assert str(report) == f"bache — {report.author} ({report.status})"
 
-    def test_default_status_is_pendiente_validacion(self):
+    def test_default_status_is_pendiente_validacion(self, active_municipality):
         report = Report.objects.create(
             author=UserFactory.create(),
+            municipality=active_municipality,
             photo="reports/2026/07/test.jpg",
             description="Bache en la esquina",
             category=Report.Category.BACHE,

@@ -37,6 +37,11 @@ class Notification(models.Model):
         blank=True,
     )
     message = models.CharField(max_length=255)
+    # Detalle del cambio de estado (US-011). Vacío en los avisos sociales, que
+    # no tienen transición asociada.
+    previous_status = models.CharField(max_length=30, blank=True, default="")
+    new_status = models.CharField(max_length=30, blank=True, default="")
+    reason = models.TextField(blank=True, default="")
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -53,3 +58,45 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.kind} → {self.recipient}"
+
+
+class NotificationPreference(models.Model):
+    """Preferencia de un usuario sobre un tipo de aviso (US-025).
+
+    Un registro por tipo y no un booleano por columna: agregar un tipo nuevo al
+    catálogo no requiere migrar el esquema.
+
+    **Default: todo activado.** Un usuario sin preferencias registradas recibe
+    todo, así que la ausencia de fila significa "habilitado".
+
+    Qué desactiva: **solo el push**. La notificación igual queda en la bandeja.
+    Es el comportamiento menos sorpresivo y el que menos riesgo tiene de que el
+    vecino se pierda información de su propio reclamo.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notification_preferences",
+    )
+    kind = models.CharField(max_length=30, choices=Notification.Kind.choices)
+    enabled = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "kind"],
+                name="unique_notification_preference",
+            ),
+        ]
+        ordering = ["kind"]
+
+    def __str__(self) -> str:
+        return f"{self.user}: {self.kind} = {self.enabled}"
+
+    @classmethod
+    def is_enabled(cls, user, kind: str) -> bool:
+        """Única consulta de preferencia del sistema."""
+        preference = cls.objects.filter(user=user, kind=kind).first()
+        return True if preference is None else preference.enabled

@@ -5,6 +5,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ValidationError
 from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import DestroyModelMixin
 from rest_framework.mixins import ListModelMixin
@@ -16,6 +17,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.municipalities.services import OutOfCoverageError
+from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.reports.geocoding import geocode_one
 from urbancheck.reports.geocoding import reverse_geocode
@@ -34,8 +37,11 @@ from .serializers import ReportListSerializer
 from .serializers import ReportMapSerializer
 from .serializers import ReportUpdateSerializer
 
-# Estados que no se dibujan en el mapa: el reporte ya no es un problema activo.
-INACTIVE_MAP_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
+# Estados que dejan de ser visibles en el feed y en el mapa público: el reporte
+# ya no es un problema activo (US-013). El autor sigue viéndolos en "mis
+# reportes" y en el detalle, que es a donde lo lleva la notificación del cambio.
+INACTIVE_PUBLIC_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
+INACTIVE_MAP_STATUSES = INACTIVE_PUBLIC_STATUSES
 
 EDIT_BLOCKED_MESSAGE = (
     "Este reporte ya está siendo gestionado por el municipio y no puede modificarse."
@@ -78,8 +84,16 @@ class ReportViewSet(
             )
             .order_by("-created_at")
         )
-        if self.request.query_params.get("mine") == "true":
+        # El validador solo ve su jurisdicción, en todas las acciones: pedir por
+        # id un reporte de otro municipio devuelve 404 porque no existe para él.
+        if user.sees_only_own_municipality:
+            qs = qs.for_user(user)
+
+        is_own_listing = self.request.query_params.get("mine") == "true"
+        if is_own_listing:
             qs = qs.filter(author=user)
+        elif self.action in {"list", "map"}:
+            qs = qs.exclude(status__in=INACTIVE_PUBLIC_STATUSES)
         return apply_report_filters(qs, self.request.query_params, requesting_user=user)
 
     def get_serializer_class(self):
@@ -117,7 +131,20 @@ class ReportViewSet(
                 serializer.validated_data["longitude"],
             )
 
-        report = serializer.save(author=self.request.user, **extra)
+        # US-034: la jurisdicción se resuelve en el servidor por área de
+        # cobertura. Si el cliente mandó una municipalidad, se ignora.
+        latitude = extra.get("latitude", serializer.validated_data.get("latitude"))
+        longitude = extra.get("longitude", serializer.validated_data.get("longitude"))
+        try:
+            municipality = resolve_municipality_for(latitude, longitude)
+        except OutOfCoverageError as error:
+            raise ValidationError({"location": error.message}) from error
+
+        report = serializer.save(
+            author=self.request.user,
+            municipality=municipality,
+            **extra,
+        )
         ReportStatusHistory.objects.create(
             report=report,
             status=Report.Status.PENDIENTE_VALIDACION,
