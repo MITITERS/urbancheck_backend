@@ -42,6 +42,14 @@ class User(AbstractUser):
     #: Roles que deben pertenecer sí o sí a una municipalidad.
     MUNICIPALITY_BOUND_ROLES = frozenset({Role.AGENTE_MUNICIPAL, Role.VALIDADOR})
 
+    #: Cuentas de trabajo: operan el circuito en vez de usarlo como vecinos.
+    #: Quien además quiera reportar se crea una cuenta personal. Es el
+    #: complemento exacto de ``CIUDADANO``, y se declara por extensión a
+    #: propósito: agregar un rol nuevo obliga a decidir de qué lado cae.
+    WORK_ROLES = frozenset(
+        {Role.ADMIN_PLATAFORMA, Role.AGENTE_MUNICIPAL, Role.VALIDADOR},
+    )
+
     # First and last name do not cover name patterns around the globe
     name = CharField(_("Name of User"), blank=True, max_length=255)
     first_name = None  # type: ignore[assignment]
@@ -66,7 +74,9 @@ class User(AbstractUser):
     )
     # Baja lógica del validador (US-035). Es independiente de ``is_active`` de
     # Django a propósito: el validador dado de baja sigue entrando a la app y
-    # operando como ciudadano común, solo pierde la capacidad de validar.
+    # consultando reportes, solo pierde la capacidad de validar. Lo que no
+    # recupera es reportar: eso lo decide el rol, no esta bandera (ver
+    # ``can_create_reports``).
     is_validator_active = BooleanField(
         _("validator active"),
         default=True,
@@ -149,14 +159,56 @@ class User(AbstractUser):
         )
 
     @property
+    def participates_as_citizen(self) -> bool:
+        """Si puede participar como vecino: reportar, comentar y dar me gusta.
+
+        Solo el vecino participa. Las cuentas de trabajo operan el circuito: el
+        validador verifica en terreno lo que reportan los vecinos, el agente lo
+        gestiona desde el panel y el administrador opera la plataforma. Un
+        reporte, un comentario o un me gusta propios los pondrían de los dos
+        lados del mismo caso, y sobre un reporte que además van a resolver, un
+        comentario del municipio no se distingue del de un vecino. Quien además
+        quiera usar UrbanCheck como vecino se crea una cuenta personal, igual
+        que en ``sees_only_own_municipality``.
+
+        Las tres acciones comparten una sola verificación a propósito: son la
+        misma pregunta, y separarlas era garantizar que se fueran divergiendo.
+        Leer no está alcanzado: el personal municipal sigue viendo el feed, el
+        detalle y los comentarios de su jurisdicción.
+
+        Es una regla del rol y no del estado de la cuenta: el validador dado de
+        baja tampoco participa, porque la cuenta sigue siendo de trabajo.
+        """
+        return self.role not in self.WORK_ROLES
+
+    @property
     def sees_only_own_municipality(self) -> bool:
         """Si la app le muestra únicamente reportes de su jurisdicción.
 
-        El validador es personal municipal, no un vecino con un permiso extra:
-        su cuenta es de trabajo y no ve nada de otros municipios. Quien además
-        quiera usar UrbanCheck como ciudadano se crea una cuenta personal.
+        El validador y el agente son personal municipal, no vecinos con un
+        permiso extra: su cuenta es de trabajo y no ve nada de otros municipios,
+        ni en la app ni en el panel. Quien además quiera usar UrbanCheck como
+        ciudadano se crea una cuenta personal.
+
+        Son exactamente los roles atados a una municipalidad: el administrador
+        de la plataforma también es cuenta de trabajo, pero no está acotado a
+        ningún municipio, así que esta regla no lo alcanza.
         """
-        return self.role == self.Role.VALIDADOR
+        return self.role in self.MUNICIPALITY_BOUND_ROLES
+
+    @property
+    def sees_every_municipality(self) -> bool:
+        """Si el panel le muestra los datos de todas las jurisdicciones.
+
+        Es la excepción a ``JurisdictionScopedMixin``, y la única: el
+        administrador de la plataforma la opera entera, así que acotarlo a un
+        municipio no tendría a cuál. Vive acá y no en el mixin para que la lista
+        de quién cruza jurisdicciones sea una sola y se lea de un vistazo.
+
+        Es el complemento de ``sees_only_own_municipality`` dentro del panel:
+        el agente ve lo suyo, el admin ve todo.
+        """
+        return self.is_platform_admin
 
     @property
     def is_panel_user(self) -> bool:

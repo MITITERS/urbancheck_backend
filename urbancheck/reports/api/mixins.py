@@ -17,8 +17,19 @@ class JurisdictionScopedMixin:
     devuelve ``404`` y no ``403``, porque el objeto directamente no existe para
     ese usuario. Un ``403`` confirmaría que el reporte existe.
 
+    **Única excepción**: el administrador de la plataforma, que la opera entera
+    y no tendría a qué municipio acotarse. Quién cruza jurisdicciones lo decide
+    ``User.sees_every_municipality`` y no una condición escrita acá: si la
+    excepción se escribiera vista por vista, cada una podría ampliarla por su
+    cuenta. Ojo con invertir la condición: el default de ``for_user()`` es no
+    devolver nada, así que un error acá se ve como una lista vacía y no como una
+    fuga, salvo justamente en este camino.
+
     Toda vista nueva del panel tiene que heredar de este mixin.
     """
 
     def get_queryset(self):
-        return super().get_queryset().for_user(self.request.user)
+        queryset = super().get_queryset()
+        if self.request.user.sees_every_municipality:
+            return queryset
+        return queryset.for_user(self.request.user)

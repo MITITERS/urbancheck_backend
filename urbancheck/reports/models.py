@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.db import transaction
 
 
 class ReportQuerySet(models.QuerySet):
@@ -56,6 +57,19 @@ class Report(models.Model):
         on_delete=models.PROTECT,
         related_name="reports",
     )
+    # Número del reporte **dentro de su municipalidad**, que es como lo nombran
+    # el vecino y el municipio: "el reporte 12 de Villa María". El id de la base
+    # sigue siendo la clave técnica y es lo que viaja en las URLs; este número es
+    # el identificador de cara al usuario. Se asigna al crear y no cambia nunca.
+    #
+    # La secuencia sale del máximo entregado en ese municipio. Consecuencia
+    # asumida: si se borra el último reporte, el próximo recibe ese número. Solo
+    # puede pasar con el más reciente y solo el autor puede borrarlo, mientras el
+    # municipio todavía no lo tomó. La alternativa —un contador persistente en
+    # ``Municipality``— tiene un problema peor: cualquier ``save()`` sobre una
+    # instancia leída antes del alta lo rebobina, y el número se repite en
+    # silencio hasta chocar contra la restricción de unicidad.
+    number = models.PositiveIntegerField(null=True, blank=True, editable=False)
     photo = models.ImageField(upload_to="reports/%Y/%m/")
     description = models.TextField()
     category = models.CharField(max_length=20, choices=Category.choices)
@@ -84,9 +98,47 @@ class Report(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["municipality", "number"],
+                name="unique_report_number_per_municipality",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.category} — {self.author} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        """Asigna el número de municipio la primera vez que se guarda.
+
+        Va en ``save()`` y no en la vista para que lo tengan todos los caminos de
+        alta —la API, el seed de demo, las factories de los tests—: uno que se
+        olvidara dejaría un reporte sin número y la pantalla mostrando un hueco.
+
+        El bloqueo sobre la fila de la municipalidad serializa las altas de ese
+        municipio. Sin él, dos altas simultáneas leen el mismo máximo y la
+        segunda choca contra la restricción de unicidad. Es un candado corto y
+        por municipio: no frena las altas de los demás.
+        """
+        if self.number is None and self.municipality_id is not None:
+            # Import local: a nivel de módulo sería una dependencia circular.
+            from urbancheck.municipalities.models import Municipality  # noqa: PLC0415
+
+            with transaction.atomic():
+                # La fila del municipio se usa solo como candado: es lo único
+                # que existe siempre y que todas las altas de ese municipio
+                # comparten.
+                Municipality.objects.select_for_update().get(pk=self.municipality_id)
+                self.number = self._next_number_for(self.municipality_id)
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
+
+    @staticmethod
+    def _next_number_for(municipality_id: int) -> int:
+        last = Report.objects.filter(municipality_id=municipality_id).aggregate(
+            last=models.Max("number"),
+        )["last"]
+        return (last or 0) + 1
 
     @property
     def is_editable(self) -> bool:

@@ -30,6 +30,7 @@ from urbancheck.reports.models import ReportStatusHistory
 
 from .filters import apply_report_filters
 from .permissions import IsAuthorOrReadOnly
+from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
 from .serializers import ReportCreateSerializer
 from .serializers import ReportDetailSerializer
@@ -63,15 +64,33 @@ class ReportViewSet(
     parser_classes = [MultiPartParser, JSONParser]
 
     def get_permissions(self):
-        """La restricción de autoría aplica solo a editar y borrar.
+        """Permisos por acción: autoría para editar/borrar, rol para participar.
 
-        No puede vivir en ``permission_classes`` de la clase: ``like`` y
-        ``comments`` también usan ``get_object()`` con métodos no seguros sobre
-        reportes ajenos, que es exactamente lo que deben poder hacer.
+        La restricción de autoría no puede vivir en ``permission_classes`` de
+        la clase: ``like`` y ``comments`` también usan ``get_object()`` con
+        métodos no seguros sobre reportes ajenos, que es exactamente lo que
+        debe poder hacer un vecino.
         """
         if self.action in {"update", "partial_update", "destroy"}:
             return [IsAuthenticated(), IsAuthorOrReadOnly()]
+        if self._is_citizen_participation():
+            return [IsAuthenticated(), ParticipatesAsCitizen()]
         return [IsAuthenticated()]
+
+    def _is_citizen_participation(self) -> bool:
+        """Si la petición es un aporte de vecino: reportar, comentar o gustar.
+
+        ``like`` y ``comments`` atienden más de un método bajo la misma acción,
+        así que no alcanza con mirar ``self.action``. Solo se restringe el alta:
+
+        - ``GET /comments/`` es lectura, y el personal municipal tiene que poder
+          leer lo que comentan los vecinos sobre lo que va a resolver.
+        - ``DELETE /like/`` deshace. Bloquearlo dejaría trabado un me gusta
+          anterior a esta regla, sin forma de sacarlo.
+        """
+        if self.action == "create":
+            return True
+        return self.action in {"like", "comments"} and self.request.method == "POST"
 
     def get_queryset(self):
         user = self.request.user

@@ -97,6 +97,8 @@ class MunicipalityReportMarkerSerializer(serializers.Serializer):
     """Payload mínimo del mapa: un marcador no necesita más que esto."""
 
     id = serializers.IntegerField(read_only=True)
+    # El popup lo nombra por su número de municipio, no por el id de la base.
+    number = serializers.IntegerField(read_only=True)
     category = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
     latitude = serializers.DecimalField(max_digits=9, decimal_places=6, read_only=True)

@@ -1,4 +1,4 @@
-"""US-035 — gestión de validadores por el agente municipal."""
+"""US-035 — gestión de validadores, por el agente municipal y por el admin."""
 
 import pytest
 from rest_framework.test import APIClient
@@ -211,12 +211,144 @@ class TestCanValidate:
 class TestValidatorPermissions:
     @pytest.mark.parametrize(
         "factory",
-        [UserFactory, PlatformAdminFactory, ValidatorFactory],
-        ids=["citizen", "platform_admin", "validator"],
+        [UserFactory, ValidatorFactory],
+        ids=["citizen", "validator"],
     )
-    def test_only_the_municipal_agent_manages_validators(self, factory):
+    def test_only_panel_users_manage_validators(self, factory):
+        """Ni el vecino ni el propio validador entran a la gestión."""
         client = APIClient()
         client.force_authenticate(factory.create())
 
         assert client.get(URL).status_code == 403
         assert client.post(URL, payload(), format="json").status_code == 403
+
+
+class TestPlatformAdminManagesValidators:
+    """El admin da altas eligiendo el municipio, y ve los de todos."""
+
+    @pytest.fixture
+    def admin_client(self) -> APIClient:
+        client = APIClient()
+        client.force_authenticate(PlatformAdminFactory.create())
+        return client
+
+    def test_the_admin_chooses_the_municipality(self, admin_client):
+        municipality = MunicipalityFactory.create()
+
+        response = admin_client.post(
+            URL,
+            payload(municipality_id=municipality.id),
+            format="json",
+        )
+
+        assert response.status_code == 201
+        validator = User.objects.get(email="validador@muni.gob.ar")
+        assert validator.role == User.Role.VALIDADOR
+        assert validator.municipality == municipality
+
+    def test_the_municipality_is_required(self, admin_client):
+        """Sin jurisdicción propia de la cual derivarla, no hay default posible."""
+        response = admin_client.post(URL, payload(), format="json")
+
+        assert response.status_code == 400
+        assert "municipality_id" in response.data
+
+    def test_an_unknown_municipality_is_rejected(self, admin_client):
+        response = admin_client.post(
+            URL,
+            payload(municipality_id=999_999),
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "municipality_id" in response.data
+
+    def test_the_new_validator_must_change_the_password(self, admin_client):
+        municipality = MunicipalityFactory.create()
+
+        admin_client.post(
+            URL,
+            payload(municipality_id=municipality.id),
+            format="json",
+        )
+
+        assert User.objects.get(email="validador@muni.gob.ar").must_change_password
+
+    def test_the_admin_sees_validators_of_every_municipality(self, admin_client):
+        one, other = MunicipalityFactory.create(), MunicipalityFactory.create()
+        mine = ValidatorFactory.create(municipality=one)
+        theirs = ValidatorFactory.create(municipality=other)
+
+        ids = {row["id"] for row in admin_client.get(URL).data["results"]}
+
+        assert {mine.id, theirs.id} <= ids
+
+    def test_the_admin_can_filter_by_municipality(self, admin_client):
+        one, other = MunicipalityFactory.create(), MunicipalityFactory.create()
+        mine = ValidatorFactory.create(municipality=one)
+        theirs = ValidatorFactory.create(municipality=other)
+
+        response = admin_client.get(URL, {"municipality": one.id})
+
+        ids = {row["id"] for row in response.data["results"]}
+        assert mine.id in ids
+        assert theirs.id not in ids
+
+    def test_the_row_says_which_municipality(self, admin_client):
+        """Sin esto el admin no puede distinguir filas de municipios distintos."""
+        municipality = MunicipalityFactory.create()
+        ValidatorFactory.create(municipality=municipality)
+
+        row = admin_client.get(URL).data["results"][0]
+
+        assert row["municipality"]["id"] == municipality.id
+
+    def test_the_admin_can_deactivate_any_validator(self, admin_client):
+        validator = ValidatorFactory.create(
+            municipality=MunicipalityFactory.create(),
+        )
+
+        response = admin_client.post(f"{URL}{validator.id}/deactivate/")
+
+        assert response.status_code == 200
+        validator.refresh_from_db()
+        assert validator.is_validator_active is False
+
+
+class TestTheAgentIsUnaffected:
+    """Abrirle la gestión al admin no le cambia nada al agente."""
+
+    def test_the_agent_still_does_not_choose_the_municipality(
+        self,
+        agent_client,
+        agent,
+    ):
+        """Si manda una ajena en el body, se ignora: manda su jurisdicción."""
+        other = MunicipalityFactory.create()
+
+        response = agent_client.post(
+            URL,
+            payload(municipality_id=other.id),
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert User.objects.get(
+            email="validador@muni.gob.ar",
+        ).municipality == agent.municipality
+
+    def test_the_agent_still_sees_only_its_own(self, agent_client, agent):
+        mine = ValidatorFactory.create(municipality=agent.municipality)
+        theirs = ValidatorFactory.create(municipality=MunicipalityFactory.create())
+
+        ids = {row["id"] for row in agent_client.get(URL).data["results"]}
+
+        assert mine.id in ids
+        assert theirs.id not in ids
+
+    def test_the_agent_cannot_reach_a_foreign_validator(self, agent_client):
+        theirs = ValidatorFactory.create(municipality=MunicipalityFactory.create())
+
+        response = agent_client.post(f"{URL}{theirs.id}/deactivate/")
+
+        assert response.status_code == 404

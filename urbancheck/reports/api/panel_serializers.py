@@ -8,6 +8,7 @@ campo editable — la jurisdicción se resuelve siempre en el servidor (US-034).
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.state_machine import Actor
@@ -18,10 +19,16 @@ from .serializers import CommentSerializer
 
 
 class PanelReportListSerializer(serializers.ModelSerializer):
-    """Fila de la tabla del panel (US-012)."""
+    """Fila de la tabla del panel (US-012).
+
+    ``municipality`` viaja siempre, aunque para el agente sea constante: es lo
+    que el admin de la plataforma necesita para distinguir filas de municipios
+    distintos, y una sola forma de respuesta es más fácil de sostener que dos.
+    """
 
     author = AuthorSerializer(read_only=True)
     like_count = serializers.IntegerField(read_only=True)
+    municipality = MunicipalitySerializer(read_only=True)
     # US-028 (áreas operativas) no está en este sprint: la columna existe y
     # viaja siempre nula, para que el panel no tenga que adivinar.
     operative_area = serializers.SerializerMethodField()
@@ -30,6 +37,8 @@ class PanelReportListSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "category",
             "status",
             "created_at",
@@ -38,6 +47,7 @@ class PanelReportListSerializer(serializers.ModelSerializer):
             "longitude",
             "like_count",
             "operative_area",
+            "municipality",
             "author",
         ]
         read_only_fields = fields
@@ -79,11 +89,16 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
     comments = CommentSerializer(many=True, read_only=True)
     status_history = PanelStatusHistorySerializer(many=True, read_only=True)
     available_transitions = serializers.SerializerMethodField()
+    # La necesita el panel para saber a dónde vuelve el administrador, que llega
+    # al detalle desde la ficha de una municipalidad y no desde un listado.
+    municipality = MunicipalitySerializer(read_only=True)
 
     class Meta:
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "description",
             "category",
@@ -93,6 +108,7 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
             "longitude",
             "created_at",
             "updated_at",
+            "municipality",
             "author",
             "like_count",
             "comments",

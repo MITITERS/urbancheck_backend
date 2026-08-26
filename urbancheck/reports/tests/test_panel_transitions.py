@@ -8,6 +8,7 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
+from urbancheck.users.tests.factories import PlatformAdminFactory
 
 pytestmark = pytest.mark.django_db
 
@@ -310,3 +311,63 @@ class TestPublicVisibility:
 
         assert report.id in {row["id"] for row in own.data["results"]}
         assert detail.status_code == 200
+
+
+class TestThePlatformAdminCanAlsoTransition:
+    """Opera la plataforma entera, incluidos los reportes de cualquier municipio.
+
+    La transición se registra con ``Actor.MUNICIPAL_AGENT`` igual que la del
+    agente: el actor nombra la operación del panel, no quién la ejecutó. Quién la
+    ejecutó queda en ``changed_by``, y eso es lo que se verifica acá.
+    """
+
+    @pytest.fixture
+    def admin(self):
+        return PlatformAdminFactory.create()
+
+    @pytest.fixture
+    def admin_client(self, admin) -> APIClient:
+        client = APIClient()
+        client.force_authenticate(admin)
+        return client
+
+    @pytest.mark.parametrize(("operation", "source", "target"), PANEL_TRANSITIONS)
+    def test_it_runs_every_panel_transition(
+        self,
+        admin_client,
+        municipality,
+        operation,
+        source,
+        target,
+    ):
+        report = ReportFactory.create(municipality=municipality, status=source)
+
+        response = admin_client.post(url(report.id, f"{operation}/"), body(operation))
+
+        assert response.status_code == 200
+        report.refresh_from_db()
+        assert report.status == target
+
+    def test_it_reaches_a_report_of_any_municipality(self, admin_client):
+        """No está acotado a un municipio, así que ninguno le es ajeno."""
+        elsewhere = ReportFactory.create(
+            municipality=MunicipalityFactory.create(),
+            status=Report.Status.REPORTADO,
+        )
+
+        response = admin_client.post(url(elsewhere.id, "process/"))
+
+        assert response.status_code == 200
+        elsewhere.refresh_from_db()
+        assert elsewhere.status == Report.Status.EN_PROCESO
+
+    def test_the_history_records_who_did_it(self, admin_client, admin, municipality):
+        report = ReportFactory.create(
+            municipality=municipality,
+            status=Report.Status.REPORTADO,
+        )
+
+        admin_client.post(url(report.id, "process/"))
+
+        last = ReportStatusHistory.objects.filter(report=report).latest("id")
+        assert last.changed_by == admin

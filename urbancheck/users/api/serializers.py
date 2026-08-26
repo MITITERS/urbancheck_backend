@@ -85,10 +85,14 @@ class PanelUserCreateSerializer(serializers.ModelSerializer[User]):
         return user
 
 
-class MunicipalAgentCreateSerializer(PanelUserCreateSerializer):
-    """Alta de un agente municipal, hecha por el admin de la plataforma."""
+class AdminCreatesPanelUserSerializer(PanelUserCreateSerializer):
+    """Alta hecha por el administrador de la plataforma, que elige el municipio.
 
-    role = User.Role.AGENTE_MUNICIPAL
+    El admin no tiene jurisdicción propia de la cual derivarla, así que la
+    municipalidad viaja en el body y es obligatoria. La comparten el alta de
+    agentes (US-017) y la de validadores: si cada una lo resolviera por su
+    cuenta, terminarían con validaciones distintas para el mismo campo.
+    """
 
     municipality_id = serializers.PrimaryKeyRelatedField(
         queryset=Municipality.objects.all(),
@@ -103,9 +107,14 @@ class MunicipalAgentCreateSerializer(PanelUserCreateSerializer):
         return self._municipality
 
     def create(self, validated_data: dict) -> User:
-        # A diferencia del validador (US-035), acá el admin elige el municipio.
         self._municipality = validated_data.pop("municipality")
         return super().create(validated_data)
+
+
+class MunicipalAgentCreateSerializer(AdminCreatesPanelUserSerializer):
+    """Alta de un agente municipal, hecha por el admin de la plataforma."""
+
+    role = User.Role.AGENTE_MUNICIPAL
 
 
 class MunicipalAgentSerializer(serializers.ModelSerializer[User]):
@@ -150,7 +159,8 @@ class ValidatorCreateSerializer(PanelUserCreateSerializer):
     """Alta de un validador, hecha por el agente municipal (US-035).
 
     El agente no elige municipalidad: se le asigna la suya. Si el body trae una,
-    se ignora — la jurisdicción se deriva siempre del usuario autenticado.
+    se ignora — la jurisdicción se deriva siempre del usuario autenticado. Para
+    el alta hecha por el admin, ver ``AdminValidatorCreateSerializer``.
     """
 
     role = User.Role.VALIDADOR
@@ -159,14 +169,30 @@ class ValidatorCreateSerializer(PanelUserCreateSerializer):
         return self.context["request"].user.municipality
 
 
+class AdminValidatorCreateSerializer(AdminCreatesPanelUserSerializer):
+    """Alta de un validador hecha por el admin de la plataforma.
+
+    Mismo alta que la del agente, salvo de dónde sale la municipalidad: el admin
+    no está acotado a ninguna, así que la elige y viaja en ``municipality_id``.
+    """
+
+    role = User.Role.VALIDADOR
+
+
 class ValidatorSerializer(serializers.ModelSerializer[User]):
-    """Fila de la tabla de validadores del panel."""
+    """Fila de la tabla de validadores del panel.
+
+    La municipalidad viaja siempre, aunque para el agente sea constante: es la
+    que el admin necesita para distinguir filas de municipios distintos, y una
+    sola forma de la respuesta es más fácil de sostener que dos.
+    """
 
     validation_count = serializers.IntegerField(read_only=True)
     is_active_validator = serializers.BooleanField(
         source="is_validator_active",
         read_only=True,
     )
+    municipality = MunicipalitySerializer(read_only=True)
 
     class Meta:
         model = User
@@ -174,6 +200,7 @@ class ValidatorSerializer(serializers.ModelSerializer[User]):
             "id",
             "name",
             "email",
+            "municipality",
             "is_active_validator",
             "validation_count",
             "must_change_password",

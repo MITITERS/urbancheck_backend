@@ -12,8 +12,9 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.users.models import User
 
-from .permissions import IsMunicipalAgent
+from .permissions import IsPanelUser
 from .permissions import IsPlatformAdmin
+from .serializers import AdminValidatorCreateSerializer
 from .serializers import MunicipalAgentCreateSerializer
 from .serializers import MunicipalAgentSerializer
 from .serializers import PublicUserSerializer
@@ -106,26 +107,46 @@ class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
 
 
 class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
-    """Gestión de validadores por parte del agente municipal (US-035).
+    """Gestión de validadores, por el agente municipal (US-035) o por el admin.
 
-    El listado pasa por la capa de jurisdicción de US-034: un agente solo ve
-    —y solo puede activar o desactivar— validadores de su propia municipalidad.
+    Los dos hacen lo mismo; lo único que cambia es el alcance y de dónde sale la
+    municipalidad:
+
+    - El **agente** pasa por la capa de jurisdicción de US-034: solo ve —y solo
+      puede activar o desactivar— validadores de su propia municipalidad, y las
+      altas se le asignan a esa municipalidad sin poder elegir.
+    - El **admin de la plataforma** no está acotado a ningún municipio: ve
+      todos, puede filtrar por ``?municipality=<id>`` y elige la municipalidad
+      en cada alta.
+
+    Un ciudadano o un validador autenticado recibe ``403`` por ``IsPanelUser``.
     """
 
-    permission_classes = [IsAuthenticated, IsMunicipalAgent]
+    permission_classes = [IsAuthenticated, IsPanelUser]
 
     def get_queryset(self):
+        user = self.request.user
+        qs = User.objects.filter(role=User.Role.VALIDADOR)
+        if user.is_platform_admin:
+            municipality = self.request.query_params.get("municipality")
+            if municipality:
+                qs = qs.filter(municipality_id=municipality)
+        else:
+            qs = qs.for_user(user)
         return (
-            User.objects.filter(role=User.Role.VALIDADOR)
-            .for_user(self.request.user)
+            qs.select_related("municipality")
             .with_validation_count()
             .order_by("name", "email")
         )
 
     def get_serializer_class(self):
-        if self.action == "create":
-            return ValidatorCreateSerializer
-        return ValidatorSerializer
+        if self.action != "create":
+            return ValidatorSerializer
+        # De dónde sale la municipalidad depende de quién da el alta: el agente
+        # tiene la suya, el admin la elige.
+        if self.request.user.is_platform_admin:
+            return AdminValidatorCreateSerializer
+        return ValidatorCreateSerializer
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

@@ -5,7 +5,13 @@ múltiple, rango de fechas y ordenamiento. El feed ciudadano sigue con sus
 filtros a mano en ``filters.py``, que responden a otra pregunta.
 
 Los filtros se combinan con AND entre sí y con OR dentro de una misma selección
-múltiple. Ninguno acepta municipio: la jurisdicción la resuelve el servidor.
+múltiple.
+
+``municipality`` es para el administrador de la plataforma, que ve todas las
+jurisdicciones y necesita poder acotar. **No es un agujero en la jurisdicción**:
+el filtro se aplica sobre el queryset que ya devolvió
+``JurisdictionScopedMixin``, así que un agente que lo pida con un municipio
+ajeno recibe una lista vacía, no la del otro municipio.
 """
 
 from django_filters import rest_framework as filters
@@ -18,6 +24,7 @@ class CharInFilter(filters.BaseInFilter, filters.CharFilter):
 
 
 class PanelReportFilterSet(filters.FilterSet):
+    municipality = filters.NumberFilter(field_name="municipality_id")
     status = CharInFilter(field_name="status", lookup_expr="in")
     category = CharInFilter(field_name="category", lookup_expr="in")
     created_from = filters.DateFilter(field_name="created_at", lookup_expr="date__gte")
@@ -36,4 +43,11 @@ class PanelReportFilterSet(filters.FilterSet):
 
     class Meta:
         model = Report
-        fields = ["status", "category", "created_from", "created_to", "zone"]
+        fields = [
+            "municipality",
+            "status",
+            "category",
+            "created_from",
+            "created_to",
+            "zone",
+        ]

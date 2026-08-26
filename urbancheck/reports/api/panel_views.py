@@ -15,7 +15,7 @@ from rest_framework.viewsets import GenericViewSet
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
-from urbancheck.users.api.permissions import IsMunicipalAgent
+from urbancheck.users.api.permissions import IsPanelUser
 
 from .mixins import JurisdictionScopedMixin
 from .panel_actions import ReportTransitionActionsMixin
@@ -31,13 +31,18 @@ class PanelReportViewSet(
     RetrieveModelMixin,
     GenericViewSet,
 ):
-    """Reportes del municipio del agente autenticado.
+    """Reportes que el usuario del panel puede gestionar.
+
+    El agente municipal ve los de su municipio; el administrador de la
+    plataforma, los de todos, y puede acotarlos con ``?municipality=<id>``.
+    Quién cruza jurisdicciones lo decide ``JurisdictionScopedMixin``, no esta
+    vista.
 
     El mixin de jurisdicción va primero en el MRO a propósito: lo último que se
     aplica sobre el queryset es el filtro por municipalidad.
     """
 
-    permission_classes = [IsAuthenticated, IsMunicipalAgent]
+    permission_classes = [IsAuthenticated, IsPanelUser]
     filter_backends = [DjangoFilterBackend]
     filterset_class = PanelReportFilterSet
     # El conteo de likes viaja anotado, nunca calculado por fila, y es también

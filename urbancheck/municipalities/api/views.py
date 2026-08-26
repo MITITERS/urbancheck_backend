@@ -94,7 +94,15 @@ class MunicipalityViewSet(ModelViewSet):
         queryset = (
             Report.objects.filter(municipality=municipality)
             .filter(latitude__isnull=False, longitude__isnull=False)
-            .only("id", "category", "status", "latitude", "longitude", "address")
+            .only(
+                "id",
+                "number",
+                "category",
+                "status",
+                "latitude",
+                "longitude",
+                "address",
+            )
             .order_by("-created_at")
         )
         serializer = MunicipalityReportMarkerSerializer(queryset, many=True)

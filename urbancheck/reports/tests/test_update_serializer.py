@@ -149,6 +149,8 @@ class TestReportMapSerializer:
         ).data
         assert set(data) == {
             "id",
+            # El popup lo nombra por su número de municipio, no por el id.
+            "number",
             "photo",
             "category",
             "status",

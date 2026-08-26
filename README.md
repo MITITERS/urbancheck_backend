@@ -119,16 +119,110 @@ El test de fuga vive en `urbancheck/reports/tests/test_jurisdiction.py`: dos
 municipalidades pobladas y la verificación, endpoint por endpoint, de que un
 agente no ve ni un registro de la otra.
 
-### El validador también está acotado, en toda la app
+### Validadores: los gestionan los dos roles del panel
 
-La cuenta de validador es una **cuenta de trabajo**: no ve nada de otros
-municipios, ni siquiera en el feed y el mapa ciudadanos. Pedir por id un reporte
-de otra jurisdicción devuelve `404`, igual que en el panel. Quien además quiera
-usar UrbanCheck como vecino se crea una cuenta personal.
+`/api/validators/` lo usan el agente municipal (US-035) y el administrador de la
+plataforma. Hacen lo mismo; lo único que cambia es el alcance y de dónde sale la
+municipalidad:
 
-La regla vive en `User.sees_only_own_municipality` y se aplica en
-`ReportViewSet.get_queryset()`, así que alcanza a todas las acciones del
-viewset —detalle, comentarios, likes— y no solo al listado.
+- El **agente** pasa por la jurisdicción de US-034: ve, activa y desactiva solo
+  validadores de su municipalidad, y las altas caen ahí sin que pueda elegir. Si
+  manda `municipality_id` en el body, se ignora.
+- El **admin** no está acotado a ningún municipio: ve todos, filtra con
+  `?municipality=<id>`, y **elige** la municipalidad en cada alta, donde
+  `municipality_id` es obligatorio. Sin jurisdicción propia no hay default
+  posible, así que faltarla es un `400` y no un alta en el municipio equivocado.
+
+El permiso pasó de `IsMunicipalAgent` a `IsPanelUser`. Un ciudadano o un
+validador autenticado sigue recibiendo `403`.
+
+De dónde sale la municipalidad se resuelve eligiendo serializer por rol en
+`get_serializer_class()`, no con ramas dentro de un serializer. La parte «el
+admin elige el municipio» vive en `AdminCreatesPanelUserSerializer`, que
+comparten el alta de agentes (US-017) y la de validadores: si cada una lo
+resolviera por su cuenta, terminarían con validaciones distintas para el mismo
+campo.
+
+`ValidatorSerializer` devuelve `municipality` siempre, aunque para el agente sea
+constante: es lo que el admin necesita para distinguir filas de municipios
+distintos, y una sola forma de respuesta es más fácil de sostener que dos.
+
+### El reporte se numera por municipio
+
+`Report.number` es el identificador **de cara al usuario**: «el reporte 12 de
+Villa María». Cada municipio arranca en 1 y lleva su propia serie, así que el
+mismo número existe en varios municipios a la vez. El `id` de la base sigue
+siendo la clave técnica y es lo único que viaja en las URLs.
+
+La asignación vive en `Report.save()` y no en la vista, para que la tengan todos
+los caminos de alta —la API, el seed de demo, las factories de los tests—: uno
+que se olvidara dejaría un reporte sin número y la pantalla con un hueco. Va
+bajo `select_for_update()` sobre la fila del municipio, que se usa solo como
+candado: sin él dos altas simultáneas leen el mismo máximo y la segunda choca
+contra `unique_report_number_per_municipality`.
+
+**Consecuencia asumida**: la serie sale del máximo entregado, así que borrar el
+reporte más reciente hace que el próximo reciba ese número. Solo alcanza al
+último, y solo su autor puede borrarlo mientras el municipio no lo tomó. Está
+probado en `test_report_number.py`, para que el día que se decida cambiarlo el
+test diga qué se está cambiando.
+
+Se evaluó un contador persistente en `Municipality` —que no reutilizaría nunca—
+y se descartó: cualquier `save()` sobre una instancia del municipio leída antes
+del alta lo rebobina, y el número se repite en silencio hasta chocar contra la
+restricción. Un identificador que se reasigna por una escritura no relacionada
+es peor que uno que se reasigna al borrar el último.
+
+El backfill (`reports.0006`) numera lo existente por antigüedad dentro de cada
+municipio, desempatando por `id`: el mismo criterio que los nuevos, así el
+histórico y lo que viene son una sola secuencia.
+
+### El admin de la plataforma cruza jurisdicciones, y es el único
+
+`JurisdictionScopedMixin` acota toda vista del panel a la municipalidad del
+usuario. Tiene **una sola excepción**: el administrador de la plataforma, que la
+opera entera y no tendría a qué municipio acotarse. Ve y gestiona los reportes
+de todos los municipios, y puede acotarlos con `?municipality=<id>`.
+
+Quién cruza lo decide `User.sees_every_municipality` y no una condición escrita
+en cada vista: si la excepción se repartiera, cada vista podría ampliarla por su
+cuenta. Hay un test que verifica que hoy es solo el admin.
+
+Cuidado al tocar esa condición: el default de `for_user()` es no devolver nada,
+así que un error en la capa de jurisdicción normalmente se ve como una lista
+vacía —ruidoso, pero inofensivo—. Este camino es la excepción: invertido, filtra.
+
+El filtro `municipality` del listado **no es un agujero**. Se aplica sobre el
+queryset que ya devolvió el mixin, así que para el agente solo puede achicar: si
+pide un municipio ajeno recibe una lista vacía, nunca la del otro. Está cubierto
+en `test_jurisdiction.py`, por los dos lados.
+
+Las transiciones de estado también quedan disponibles para el admin. Se
+registran con `Actor.MUNICIPAL_AGENT` igual que las del agente: el actor nombra
+la operación del panel, no quién la ejecutó — eso queda en `changed_by`.
+
+**El panel web no usa todo esto igual que la API.** El admin no tiene ahí un
+listado global de reportes: los mira por municipalidad, desde la ficha de cada
+una (`/api/municipalities/{id}/reports/`). El listado transversal de
+`/api/panel/reports/` y su filtro `?municipality=` siguen disponibles para quien
+consuma la API, y el panel sí los usa para el **detalle** de un reporte, que es a
+donde lleva la tabla de una municipalidad.
+
+### El personal municipal está acotado, en toda la app
+
+Las cuentas de **validador** y de **agente municipal** son cuentas de trabajo:
+no ven nada de otros municipios, ni siquiera en el feed y el mapa ciudadanos.
+Pedir por id un reporte de otra jurisdicción devuelve `404`, igual que en el
+panel. Quien además quiera usar UrbanCheck como vecino se crea una cuenta
+personal.
+
+La regla vive en `User.sees_only_own_municipality` —los roles de
+`MUNICIPALITY_BOUND_ROLES`— y se aplica en `ReportViewSet.get_queryset()`, así
+que alcanza a todas las acciones del viewset —detalle, comentarios, likes— y no
+solo al listado.
+
+El administrador de la plataforma queda afuera a propósito: también es cuenta de
+trabajo, pero no está acotado a ningún municipio, así que ve todo.
 
 **Esto cambia lo que dicen dos historias del Sprint 3**, y conviene actualizar
 sus documentos:
@@ -138,9 +232,55 @@ sus documentos:
 - El escenario 6 de US-036 —ver un reporte de otra municipalidad como ciudadano
   común, sin opción de validar— dejó de ser alcanzable navegando la app.
 
-Consecuencia asumida: un reporte creado por el propio validador fuera de su
-jurisdicción tampoco le aparece, ni en «mis reportes». Es el precio de que la
-regla sea una sola y no admita excepciones.
+### Solo el vecino participa: reportar, comentar y dar me gusta
+
+Las cuentas de trabajo operan el circuito en vez de usarlo: el validador
+verifica en terreno lo que reportan los vecinos, el agente lo gestiona desde el
+panel y el administrador opera la plataforma. Un aporte propio las pondría de
+los dos lados del mismo caso, y sobre un reporte que además van a resolver, un
+comentario del municipio no se distingue del de un vecino: el municipio responde
+por el estado del reporte, no comentando.
+
+**Leer no está alcanzado**, y es la mitad importante del contrato: el personal
+municipal sigue viendo el feed, el mapa, el detalle y los comentarios de los
+vecinos de su jurisdicción.
+
+La regla vive en `User.participates_as_citizen` (`role not in User.WORK_ROLES`)
+y se aplica con el permiso `ParticipatesAsCitizen` en
+`ReportViewSet.get_permissions()`. Las tres acciones comparten una sola
+verificación a propósito: son la misma pregunta, y separarlas era garantizar que
+se fueran divergiendo. Es una regla **del rol, no del estado de la cuenta**: a
+diferencia de `can_validate`, la baja lógica (`is_validator_active`) no la
+habilita de vuelta, porque la cuenta sigue siendo de trabajo.
+
+`like` y `comments` atienden más de un método bajo la misma acción, así que no
+alcanza con mirar `self.action`; lo resuelve `_is_citizen_participation()`. Solo
+se restringe el alta:
+
+- `GET /comments/` es lectura.
+- `DELETE /like/` deshace: bloquearlo dejaría trabado un me gusta anterior a
+  esta regla, sin forma de sacarlo.
+
+**Esto cambia un código de respuesta.** Antes, una cuenta de trabajo que
+intentaba comentar un reporte de otra jurisdicción recibía `404` por la capa de
+ocultación. Ahora el permiso corta antes de que la vista busque el reporte, así
+que recibe `403`. No se filtra nada: la respuesta es idéntica exista o no el
+reporte, y hay un test que lo verifica. El `404` de jurisdicción sigue valiendo
+para todo lo que sí puede pedir.
+
+`WORK_ROLES` se declara por extensión y no como «todo lo que no sea ciudadano»
+a propósito: un rol nuevo obliga a decidir de qué lado cae, en vez de heredar un
+default silencioso. Hay un test que verifica que hoy son complementarios.
+
+Esto vuelve a corregir US-035 en el mismo sentido que la sección anterior: el
+validador no usa la app «en las mismas condiciones que un ciudadano común», ni
+mirando ni reportando. También deja sin efecto la consecuencia que estaba
+anotada acá antes —qué pasaba con un reporte creado por el validador fuera de su
+jurisdicción—: ya no puede crear ninguno.
+
+El test vive en `urbancheck/reports/tests/test_citizen_participation.py`, e
+incluye el contorno de la regla: que el vecino siga aportando y que al personal
+municipal no se le haya sacado nada de lo que sí tiene que poder leer.
 
 ## Decisiones del Sprint 3
 

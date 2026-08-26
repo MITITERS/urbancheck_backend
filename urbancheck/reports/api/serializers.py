@@ -50,6 +50,8 @@ class ReportListSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "description",
             "category",
@@ -117,6 +119,8 @@ class ReportMapSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "category",
             "status",
@@ -137,6 +141,8 @@ class ReportCreateSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "description",
             "category",
@@ -144,7 +150,8 @@ class ReportCreateSerializer(serializers.ModelSerializer):
             "longitude",
             "address",
         ]
-        read_only_fields = ["id"]
+        # ``number`` lo asigna el modelo al guardar; el cliente no lo propone.
+        read_only_fields = ["id", "number"]
 
     def validate(self, attrs):
         if not attrs.get("photo"):
