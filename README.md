@@ -17,6 +17,18 @@ Moved to [settings](https://cookiecutter-django.readthedocs.io/en/latest/1-getti
 docker compose -f docker-compose.local.yml up
 ```
 
+| Servicio | URL local |
+| --- | --- |
+| Django | http://localhost:8000 |
+| Mailpit (mails de prueba) | http://localhost:8025 |
+| Flower (cola de Celery) | http://localhost:8555 |
+
+Flower se publica en **8555** a propósito. En 5555 —su puerto de siempre, que
+sigue siendo el de adentro del contenedor— rompe el desarrollo de la app móvil:
+`adb` escanea los puertos 5555-5585 buscando emuladores de Android, encuentra a
+flower escuchando y registra un `emulator-5554` fantasma que nunca responde.
+`expo start` intenta hablarle y aborta con `could not connect to TCP port 5554`.
+
 ### Setting Up Your Users
 
 - To create a **normal user account**, just go to Sign Up and fill out the form. Once you submit it, you'll see a "Verify Your E-mail Address" page. Go to your console to see a simulated email verification message. Copy the link into your browser. Now the user's email should be verified and ready to go.
@@ -310,6 +322,43 @@ decide la jurisdicción de un reporte:
 El campo de texto de la municipalidad es `city` + `province`; los nombres
 `name`/`locality` de la primera versión se renombraron en la migración
 `municipalities/0002`.
+
+#### La cobertura también acota la lectura
+
+El feed y el mapa del vecino usan la misma resolución: `GET /api/reports/` y
+`GET /api/reports/map/` aceptan `latitude` y `longitude` y devuelven
+**únicamente los reportes del municipio que cubre ese punto**. Leer y escribir
+tienen que coincidir sobre qué municipio cubre un lugar, o el vecino reportaría
+un bache que después no ve.
+
+Son **dos condiciones**, y las dos hacen falta (`ReportQuerySet.covered_by()`):
+el reporte pertenece a ese municipio **y** cae dentro de su radio. Pertenecer
+solo no alcanza, porque hay reportes que apuntan a un municipio y están a
+decenas de kilómetros: los cargados antes de que existiera la cobertura y los
+que cayeron en el respaldo de `ACTIVE_MUNICIPALITY_ID` por no tener coordenadas
+al crearse. Un reporte creado hoy cumple las dos por construcción —la creación
+rechaza lo que queda fuera—, así que la segunda solo saca lo que nunca debió
+estar ahí. Los reportes **sin coordenadas** se quedan: no hay dónde ubicarlos, y
+su único vínculo con un municipio es el que ya tienen.
+
+Esto acota **lo que ve el vecino**, no a quién le pertenece el reporte: el panel
+municipal los sigue viendo por jurisdicción, que es la FK y nada más.
+
+Las dos respuestas suman entonces una clave `coverage`:
+
+```json
+{"in_coverage": true, "municipality": {"id": 4, "city": "Villa María", ...}}
+```
+
+Existe para que el cliente distinga dos respuestas igual de vacías: que no haya
+reportes todavía en su municipio (`in_coverage: true`) o que esté fuera del área
+de todas (`false`, y `municipality` nula). Son dos pantallas distintas en la app.
+La arma un solo lugar, `ReportViewSet._coverage_payload()`, para que el feed y
+el mapa no expliquen lo mismo de dos formas.
+
+Lo que **no** se acota: `?mine=true` —los reportes propios son del autor, no del
+lugar donde abre la app— y el detalle de un reporte. Sin coordenadas no se acota
+nada, así que un cliente viejo sigue viendo lo de siempre.
 
 ### Coordenadas: se redondean, no se rechazan
 

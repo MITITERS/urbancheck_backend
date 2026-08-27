@@ -4,6 +4,9 @@ from django.conf import settings
 from django.db import models
 from django.db import transaction
 
+from urbancheck.reports.geo import METERS_PER_KM
+from urbancheck.reports.geo import distance_expression
+
 
 class ReportQuerySet(models.QuerySet):
     """Consultas de reportes acotadas por jurisdicción (US-034).
@@ -26,6 +29,35 @@ class ReportQuerySet(models.QuerySet):
         if not municipality_id:
             return self.none()
         return self.filter(municipality_id=municipality_id)
+
+    def covered_by(self, municipality) -> ReportQuerySet:
+        """Reportes del municipio que además caen dentro de su área de cobertura.
+
+        Pertenecer no alcanza para responder "lo que pasa a mi alrededor". Hay
+        reportes que apuntan a un municipio y están a decenas de kilómetros: los
+        cargados antes de que existiera la cobertura, y los que cayeron en el
+        respaldo de ``ACTIVE_MUNICIPALITY_ID`` por no tener coordenadas al
+        crearse. Un reporte creado hoy cumple las dos condiciones por
+        construcción —la creación rechaza lo que queda fuera de cobertura—, así
+        que esta segunda condición solo saca lo que nunca debió estar ahí.
+
+        Los reportes **sin coordenadas** se quedan: no hay dónde ubicarlos, y su
+        único vínculo con un municipio es el que ya tienen.
+        """
+        queryset = self.filter(municipality=municipality)
+        if not municipality.has_coverage:
+            return queryset
+        radius_meters = float(municipality.coverage_radius_km) * METERS_PER_KM
+        return queryset.annotate(
+            coverage_distance=distance_expression(
+                municipality.latitude,
+                municipality.longitude,
+            ),
+        ).filter(
+            models.Q(latitude__isnull=True)
+            | models.Q(longitude__isnull=True)
+            | models.Q(coverage_distance__lte=radius_meters),
+        )
 
 
 class Report(models.Model):

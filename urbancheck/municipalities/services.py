@@ -11,6 +11,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
+from urbancheck.reports.geo import METERS_PER_KM
 from urbancheck.reports.geo import haversine_meters
 
 from .models import Municipality
@@ -20,12 +21,14 @@ AMBIGUOUS_MESSAGE = (
     "Definí DJANGO_ACTIVE_MUNICIPALITY_ID."
 )
 MISSING_MESSAGE = "No hay ninguna municipalidad registrada en la plataforma."
+# Le habla a quien está cargando el reporte y ya sabe de qué reporte se trata:
+# lo que necesita saber es que ese lugar no le corresponde a ningún municipio
+# adherido, y que la salida es elegir otro punto.
 OUT_OF_COVERAGE_MESSAGE = (
-    "La ubicación del reporte está fuera del área de cobertura de las "
-    "municipalidades registradas."
+    "El lugar que marcaste no está dentro del área de cobertura de ninguna "
+    "municipalidad adherida a UrbanCheck. Probá con una ubicación dentro de tu "
+    "municipio."
 )
-
-METERS_PER_KM = 1000
 
 
 class OutOfCoverageError(Exception):

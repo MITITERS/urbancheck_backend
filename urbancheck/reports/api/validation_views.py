@@ -16,6 +16,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.reports.geo import distance_expression
 from urbancheck.reports.geo import haversine_meters
+from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.models import Report
 from urbancheck.reports.services import TransitionError
 from urbancheck.reports.services import apply_transition
@@ -30,14 +31,6 @@ MISSING_COORDINATES_MESSAGE = (
     "Necesitamos tu ubicación para validar un reporte en terreno."
 )
 TOO_FAR_CODE = "too_far"
-
-
-def _parse_coordinates(data) -> tuple[float, float] | None:
-    """Lee ``latitude``/``longitude`` de un dict de request. ``None`` si faltan."""
-    try:
-        return float(data["latitude"]), float(data["longitude"])
-    except (KeyError, TypeError, ValueError):
-        return None
 
 
 class ValidationReportViewSet(
@@ -65,7 +58,7 @@ class ValidationReportViewSet(
         fecha y la distancia viaja nula. Es el caso de un validador que no
         concedió el permiso de ubicación.
         """
-        origin = _parse_coordinates(self.request.query_params)
+        origin = parse_coordinates(self.request.query_params)
         if origin is None:
             return queryset.order_by("-created_at")
         latitude, longitude = origin
@@ -89,7 +82,7 @@ class ValidationReportViewSet(
     def _validate_in_place(self, request, *, operation: str) -> Response:
         report = self.get_object()
 
-        origin = _parse_coordinates(request.data)
+        origin = parse_coordinates(request.data)
         if origin is None:
             return Response(
                 {"detail": MISSING_COORDINATES_MESSAGE},

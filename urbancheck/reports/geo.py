@@ -25,6 +25,20 @@ from django.db.models.functions import Radians
 from django.db.models.functions import Sin
 
 EARTH_RADIUS_METERS = 6_371_000
+METERS_PER_KM = 1000
+
+
+def parse_coordinates(data) -> tuple[float, float] | None:
+    """Lee ``latitude``/``longitude`` de un dict de request. ``None`` si faltan.
+
+    Sirve tanto para un cuerpo JSON como para ``query_params``. Un valor
+    ilegible se trata como ausente y nunca como un 400: la pantalla que manda
+    la ubicación tiene que seguir funcionando sin ella.
+    """
+    try:
+        return float(data["latitude"]), float(data["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def haversine_meters(
