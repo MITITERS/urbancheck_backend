@@ -67,7 +67,7 @@ class TestCreateValidator:
 
         validator = User.objects.get(email="validador@muni.gob.ar")
         assert validator.must_change_password is True
-        assert validator.is_validator_active is True
+        assert validator.is_work_account_active is True
         # Todavía no puede validar: primero tiene que cambiar la contraseña.
         assert validator.can_validate is False
 
@@ -162,7 +162,7 @@ class TestDeactivation:
         validator = ValidatorFactory.create(
             municipality=agent.municipality,
             must_change_password=False,
-            is_validator_active=False,
+            is_work_account_active=False,
         )
 
         response = agent_client.post(f"{URL}{validator.id}/activate/")
@@ -179,7 +179,7 @@ class TestDeactivation:
 
         assert response.status_code == 404
         foreign.refresh_from_db()
-        assert foreign.is_validator_active is True
+        assert foreign.is_work_account_active is True
 
 
 class TestCanValidate:
@@ -195,7 +195,7 @@ class TestCanValidate:
     def test_a_deactivated_validator_cannot(self):
         validator = ValidatorFactory.create(
             must_change_password=False,
-            is_validator_active=False,
+            is_work_account_active=False,
         )
         assert validator.can_validate is False
 
@@ -312,7 +312,7 @@ class TestPlatformAdminManagesValidators:
 
         assert response.status_code == 200
         validator.refresh_from_db()
-        assert validator.is_validator_active is False
+        assert validator.is_work_account_active is False
 
 
 class TestTheAgentIsUnaffected:
@@ -352,3 +352,127 @@ class TestTheAgentIsUnaffected:
         response = agent_client.post(f"{URL}{theirs.id}/deactivate/")
 
         assert response.status_code == 404
+
+
+class TestArchivedListing:
+    """Las dos pestañas del panel: habilitados y archivados.
+
+    Vale para los dos roles que gestionan validadores, cada uno dentro de su
+    alcance: el filtro por estado se aplica después del de jurisdicción, no en
+    lugar de él.
+    """
+
+    @pytest.fixture
+    def two_validators(self, agent):
+        active = ValidatorFactory.create(
+            municipality=agent.municipality,
+            name="Validador Activo",
+        )
+        archived = ValidatorFactory.create(
+            municipality=agent.municipality,
+            name="Validador Archivado",
+            is_work_account_active=False,
+        )
+        return {"active": active, "archived": archived}
+
+    def test_active_listing_leaves_out_the_archived(self, agent_client, two_validators):
+        response = agent_client.get(URL, {"state": "active"})
+
+        returned = {row["id"] for row in response.data["results"]}
+        assert returned == {two_validators["active"].id}
+
+    def test_archived_listing_has_only_the_deactivated(
+        self,
+        agent_client,
+        two_validators,
+    ):
+        response = agent_client.get(URL, {"state": "inactive"})
+
+        returned = {row["id"] for row in response.data["results"]}
+        assert returned == {two_validators["archived"].id}
+
+    def test_the_archive_is_still_scoped_by_jurisdiction(
+        self,
+        agent_client,
+        two_validators,
+    ):
+        """Archivar no es una puerta trasera al personal de otro municipio."""
+        foreign = ValidatorFactory.create(
+            municipality=MunicipalityFactory.create(),
+            is_work_account_active=False,
+        )
+
+        response = agent_client.get(URL, {"state": "inactive"})
+
+        assert foreign.id not in {row["id"] for row in response.data["results"]}
+
+    def test_deactivating_moves_the_row_between_listings(
+        self,
+        agent_client,
+        two_validators,
+    ):
+        validator = two_validators["active"]
+
+        agent_client.post(f"{URL}{validator.id}/deactivate/")
+
+        active = agent_client.get(URL, {"state": "active"}).data["results"]
+        archived = agent_client.get(URL, {"state": "inactive"}).data["results"]
+        assert validator.id not in {row["id"] for row in active}
+        assert validator.id in {row["id"] for row in archived}
+
+    def test_reactivating_from_the_archive_brings_it_back(
+        self,
+        agent_client,
+        two_validators,
+    ):
+        validator = two_validators["archived"]
+
+        response = agent_client.post(f"{URL}{validator.id}/activate/")
+
+        assert response.status_code == 200
+        active = agent_client.get(URL, {"state": "active"}).data["results"]
+        assert validator.id in {row["id"] for row in active}
+
+class TestMunicipalityFilterIsForgiving:
+    def test_a_municipality_that_is_not_an_id_is_ignored(self):
+        """El filtro mal escrito se ignora; antes era un 500.
+
+        Va con el admin y no con el agente: el agente ni siquiera llega a ese
+        filtro, porque su listado lo acota la jurisdicción.
+        """
+        client = APIClient()
+        client.force_authenticate(PlatformAdminFactory.create())
+
+        response = client.get(URL, {"municipality": "villa maria"})
+
+        assert response.status_code == 200
+
+
+class TestValidatorReactivationNeedsAnActiveMunicipality:
+    """Misma regla que para el agente: la cuenta trabaja para una municipalidad."""
+
+    def test_reactivating_is_rejected(self, agent_client, agent):
+        validator = ValidatorFactory.create(
+            municipality=agent.municipality,
+            is_work_account_active=False,
+        )
+        agent.municipality.is_active = False
+        agent.municipality.save(update_fields=["is_active"])
+
+        response = agent_client.post(f"{URL}{validator.id}/activate/")
+
+        assert response.status_code == 400
+        validator.refresh_from_db()
+        assert validator.is_work_account_active is False
+
+    def test_it_works_again_once_the_municipality_is_back(self, agent_client, agent):
+        validator = ValidatorFactory.create(
+            municipality=agent.municipality,
+            is_work_account_active=False,
+        )
+
+        response = agent_client.post(f"{URL}{validator.id}/activate/")
+
+        assert response.status_code == 200
+        validator.refresh_from_db()
+        assert validator.is_work_account_active is True

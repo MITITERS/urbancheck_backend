@@ -225,7 +225,7 @@ class TestWhoCanValidate:
         validator = ValidatorFactory.create(
             municipality=municipality,
             must_change_password=False,
-            is_validator_active=False,
+            is_work_account_active=False,
         )
         client = APIClient()
         client.force_authenticate(validator)

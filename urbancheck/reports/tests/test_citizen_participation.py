@@ -75,7 +75,7 @@ class TestParticipatesAsCitizenRule:
 
     def test_a_deactivated_validator_still_cannot(self):
         """La baja lógica quita validar, no devuelve reportar."""
-        validator = ValidatorFactory.create(is_validator_active=False)
+        validator = ValidatorFactory.create(is_work_account_active=False)
         assert validator.can_validate is False
         assert validator.participates_as_citizen is False
 
@@ -102,7 +102,7 @@ class TestWorkAccountsCannotCreateReports:
         assert Report.objects.count() == 0
 
     def test_a_deactivated_validator_is_rejected_too(self):
-        validator = ValidatorFactory.create(is_validator_active=False)
+        validator = ValidatorFactory.create(is_work_account_active=False)
 
         assert post_report(client_for(validator)).status_code == 403
 

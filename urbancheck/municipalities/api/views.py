@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from urbancheck.municipalities.models import Municipality
+from urbancheck.municipalities.services import deactivate_municipality
 from urbancheck.reports.api.panel_filters import PanelReportFilterSet
 from urbancheck.reports.api.panel_serializers import PanelReportListSerializer
 from urbancheck.reports.models import Report
@@ -42,12 +43,22 @@ class MunicipalityViewSet(ModelViewSet):
         return queryset
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active", "updated_at"])
+        # La baja arrastra al personal del municipio: ver
+        # ``municipalities.services.deactivate_municipality``.
+        self._deactivated_users = deactivate_municipality(instance)
 
     def destroy(self, request, *args, **kwargs):
         super().destroy(request, *args, **kwargs)
-        return Response({"detail": DEACTIVATED_MESSAGE}, status=status.HTTP_200_OK)
+        # Cuántas cuentas cayeron con el municipio: es una consecuencia que no
+        # se ve desde la pantalla donde se ejecuta la baja, así que viaja en la
+        # respuesta para que el panel pueda decirla.
+        return Response(
+            {
+                "detail": DEACTIVATED_MESSAGE,
+                "deactivated_users": self._deactivated_users,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def _reports_queryset(self, municipality):
         """Reportes del municipio, con el mismo shape que usa el panel."""

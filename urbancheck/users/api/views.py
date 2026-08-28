@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
@@ -24,6 +25,61 @@ from .serializers import ValidatorSerializer
 
 # Acciones que escriben sobre el usuario: siempre acotadas al propio.
 WRITE_ACTIONS = frozenset({"update", "partial_update"})
+
+# Filtro por estado de la cuenta de trabajo: ``?state=active|inactive``. El
+# panel lo usa para separar en dos pestañas las cuentas habilitadas de las
+# archivadas, de modo que las dadas de baja no viajen siquiera en la respuesta
+# del listado principal.
+STATE_PARAM = "state"
+STATE_ACTIVE = "active"
+STATE_INACTIVE = "inactive"
+
+
+INACTIVE_MUNICIPALITY_MESSAGE = (
+    "No se puede reactivar esta cuenta: su municipalidad está dada de baja. "
+    "Volvé a darla de alta primero."
+)
+
+MUNICIPALITY_PARAM = "municipality"
+
+
+def ensure_can_be_reactivated(user) -> None:
+    """Frena la reactivación de una cuenta sin municipalidad activa.
+
+    Vale para las dos pantallas: la regla es de la cuenta de trabajo, no de un
+    endpoint. Responde ``400`` y no ``403`` porque a quien la ejecuta no le
+    falta permiso —es el admin, o el agente de esa jurisdicción—; lo que falta
+    es una condición del dato.
+    """
+    if not user.can_be_reactivated:
+        raise ValidationError({"detail": INACTIVE_MUNICIPALITY_MESSAGE})
+
+
+def filter_by_municipality(queryset, query_params):
+    """Acota por ``?municipality=<id>``. Solo tiene sentido para el admin.
+
+    Un valor que no sea un id se ignora, igual que el estado: un parámetro mal
+    escrito en la URL no tiene por qué tumbar el listado. Sin esta guarda,
+    ``filter(municipality_id="abc")`` es un ``500``.
+    """
+    municipality = query_params.get(MUNICIPALITY_PARAM)
+    if not municipality or not municipality.isdigit():
+        return queryset
+    return queryset.filter(municipality_id=municipality)
+
+
+def filter_by_state(queryset, query_params):
+    """Acota por ``?state=``. Un valor desconocido no filtra ni rompe.
+
+    Sin el parámetro devuelve las dos, que es lo que hacía antes de existir: un
+    cliente que no lo manda sigue viendo el listado completo.
+    """
+    state = query_params.get(STATE_PARAM)
+    if state == STATE_ACTIVE:
+        return queryset.filter(is_work_account_active=True)
+    if state == STATE_INACTIVE:
+        return queryset.filter(is_work_account_active=False)
+    return queryset
 
 
 class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
@@ -73,18 +129,33 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
 
 
 class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
-    """Alta y listado de agentes municipales (US-017).
+    """Alta, listado y baja lógica de agentes municipales (US-017).
 
     Restringido al administrador de la plataforma: es quien habilita a cada
-    municipio a operar el panel.
+    municipio a operar el panel, y el único que puede dejar de habilitarlo.
+
+    Es el mismo tablero que el de validadores, con una diferencia de alcance:
+    al validador lo gestionan los dos roles del panel, cada uno en su
+    jurisdicción; al agente solo el admin, que no está acotado a ninguna.
     """
 
     permission_classes = [IsAuthenticated, IsPlatformAdmin]
-    queryset = (
-        User.objects.filter(role=User.Role.AGENTE_MUNICIPAL)
-        .select_related("municipality")
-        .order_by("name", "email")
-    )
+
+    def get_queryset(self):
+        queryset = (
+            User.objects.filter(role=User.Role.AGENTE_MUNICIPAL)
+            .select_related("municipality")
+            .with_management_count()
+            .order_by("name", "email")
+        )
+        # Solo en el listado: activar y desactivar tienen que poder alcanzar a
+        # la cuenta esté del lado que esté, o reactivar desde el archivado
+        # respondería 404.
+        if self.action == "list":
+            params = self.request.query_params
+            queryset = filter_by_municipality(queryset, params)
+            queryset = filter_by_state(queryset, params)
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -100,10 +171,41 @@ class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         agent = serializer.save()
+        # Se relee por el queryset anotado, como en el alta de validadores:
+        # ``management_count`` es una anotación, y un campo read_only sin
+        # atributo lo omite DRF en silencio en vez de fallar.
+        agent = self.get_queryset().get(pk=agent.pk)
         return Response(
-            MunicipalAgentSerializer(agent, context={"request": request}).data,
+            self._read_serializer(agent, request).data,
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        """Baja lógica: el agente deja de operar el panel, y nada más.
+
+        No se borra el registro ni se le cierra la cuenta: puede iniciar sesión
+        —el panel se lo dice y lo deja salir— y todo lo que gestionó sigue en el
+        historial de cada reporte, con su nombre.
+        """
+        return self._set_agent_active(request, active=False)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        """Reactiva al agente, si su municipalidad sigue en pie."""
+        return self._set_agent_active(request, active=True)
+
+    def _set_agent_active(self, request, *, active: bool) -> Response:
+        agent = self.get_object()
+        if active:
+            ensure_can_be_reactivated(agent)
+        agent.is_work_account_active = active
+        agent.save(update_fields=["is_work_account_active"])
+        agent = self.get_queryset().get(pk=agent.pk)
+        return Response(self._read_serializer(agent, request).data)
+
+    def _read_serializer(self, agent, request) -> MunicipalAgentSerializer:
+        return MunicipalAgentSerializer(agent, context={"request": request})
 
 
 class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
@@ -128,16 +230,17 @@ class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
         user = self.request.user
         qs = User.objects.filter(role=User.Role.VALIDADOR)
         if user.is_platform_admin:
-            municipality = self.request.query_params.get("municipality")
-            if municipality:
-                qs = qs.filter(municipality_id=municipality)
+            qs = filter_by_municipality(qs, self.request.query_params)
         else:
             qs = qs.for_user(user)
-        return (
+        qs = (
             qs.select_related("municipality")
             .with_validation_count()
             .order_by("name", "email")
         )
+        if self.action == "list":
+            qs = filter_by_state(qs, self.request.query_params)
+        return qs
 
     def get_serializer_class(self):
         if self.action != "create":
@@ -173,12 +276,15 @@ class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
+        """Reactiva al validador, si su municipalidad sigue en pie."""
         return self._set_validator_active(request, active=True)
 
     def _set_validator_active(self, request, *, active: bool) -> Response:
         validator = self.get_object()
-        validator.is_validator_active = active
-        validator.save(update_fields=["is_validator_active"])
+        if active:
+            ensure_can_be_reactivated(validator)
+        validator.is_work_account_active = active
+        validator.save(update_fields=["is_work_account_active"])
         validator = self.get_queryset().get(pk=validator.pk)
         return Response(self._read_serializer(validator, request).data)
 

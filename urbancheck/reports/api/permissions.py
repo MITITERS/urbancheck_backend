@@ -19,6 +19,24 @@ class IsAuthorOrReadOnly(BasePermission):
         return author_id == request.user.id
 
 
+class CanDeleteComment(BasePermission):
+    """Borra un comentario su autor, o el autor del reporte comentado.
+
+    Son dos derechos distintos y los dos son razonables: uno se puede arrepentir
+    de lo que escribió, y quien publicó el reporte modera lo que aparece colgado
+    de él. El municipio no entra: no participa como vecino, y darle la tijera
+    sobre lo que dicen los vecinos en un reclamo que va a resolver mezcla los
+    dos lados del caso.
+    """
+
+    message = "Solo podés borrar tus comentarios o los de tu propio reporte."
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return request.user.id in {obj.author_id, obj.report.author_id}
+
+
 class ParticipatesAsCitizen(BasePermission):
     """Reportar, comentar y dar me gusta: solo las cuentas de vecino.
 

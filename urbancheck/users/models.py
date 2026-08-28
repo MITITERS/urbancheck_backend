@@ -72,15 +72,21 @@ class User(AbstractUser):
         related_name="users",
         verbose_name=_("municipality"),
     )
-    # Baja lógica del validador (US-035). Es independiente de ``is_active`` de
-    # Django a propósito: el validador dado de baja sigue entrando a la app y
-    # consultando reportes, solo pierde la capacidad de validar. Lo que no
-    # recupera es reportar: eso lo decide el rol, no esta bandera (ver
-    # ``can_create_reports``).
-    is_validator_active = BooleanField(
-        _("validator active"),
+    # Baja lógica de una cuenta de trabajo. Es independiente de ``is_active`` de
+    # Django a propósito: la cuenta sigue existiendo y pudiendo iniciar sesión,
+    # y lo que pierde es la capacidad de trabajar —validar en terreno, u operar
+    # el panel—, no el acceso. Lo que un validador dado de baja no recupera es
+    # reportar: eso lo decide el rol, no esta bandera.
+    #
+    # Es una sola bandera para los dos roles a propósito: la pregunta que
+    # responde es la misma —"¿esta cuenta de trabajo sigue habilitada?"— y dos
+    # campos habrían divergido. Quién puede darla de baja sí cambia: al
+    # validador lo dan de baja los dos roles del panel (US-035), y al agente
+    # municipal solo el administrador de la plataforma (US-017).
+    is_work_account_active = BooleanField(
+        _("work account active"),
         default=True,
-        help_text=_("Solo aplica a usuarios con rol Validador."),
+        help_text=_("Solo aplica a validadores y agentes municipales."),
     )
     # Contraseña temporal entregada en el alta: mientras esté en True el usuario
     # solo puede cambiar su contraseña.
@@ -154,7 +160,7 @@ class User(AbstractUser):
         """
         return (
             self.role == self.Role.VALIDADOR
-            and self.is_validator_active
+            and self.is_work_account_active
             and not self.must_change_password
         )
 
@@ -180,6 +186,19 @@ class User(AbstractUser):
         baja tampoco participa, porque la cuenta sigue siendo de trabajo.
         """
         return self.role not in self.WORK_ROLES
+
+    @property
+    def can_be_reactivated(self) -> bool:
+        """Si su cuenta de trabajo se puede volver a habilitar.
+
+        No alcanza con que alguien apriete el botón: la cuenta trabaja **para**
+        una municipalidad, así que mientras esa municipalidad esté dada de baja
+        no hay nada que habilitar. Es el complemento de la baja en cascada de
+        ``deactivate_municipality()``: si la baja del municipio archiva a su
+        personal, reactivar a una persona sin reactivar el municipio dejaría
+        justo el estado que esa cascada existe para evitar.
+        """
+        return self.municipality is not None and self.municipality.is_active
 
     @property
     def sees_only_own_municipality(self) -> bool:
@@ -212,8 +231,26 @@ class User(AbstractUser):
 
     @property
     def is_panel_user(self) -> bool:
-        """Puede acceder al panel web municipal."""
+        """Su rol es de panel.
+
+        **No** alcanza para operarlo: eso lo decide ``can_operate_panel``, que
+        además mira la baja lógica.
+        """
         return self.role in self.PANEL_ROLES or self.is_superuser
+
+    @property
+    def can_operate_panel(self) -> bool:
+        """Única verificación de acceso al panel municipal (US-017).
+
+        Espejo exacto de ``can_validate``: primero el rol, después la baja
+        lógica. Un agente dado de baja conserva la cuenta y puede iniciar
+        sesión, pero el panel no le responde nada.
+
+        La contraseña temporal **no** entra acá, a diferencia de la validación:
+        el agente tiene que poder entrar justamente para cambiarla. Ese redirect
+        lo resuelve el panel con ``must_change_password``.
+        """
+        return self.is_panel_user and self.is_work_account_active
 
     def get_absolute_url(self) -> str:
         """Get URL for user's detail view.

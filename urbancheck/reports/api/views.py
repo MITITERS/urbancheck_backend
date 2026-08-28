@@ -34,6 +34,7 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 
 from .filters import apply_report_filters
+from .permissions import CanDeleteComment
 from .permissions import IsAuthorOrReadOnly
 from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
@@ -342,12 +343,15 @@ class ReportViewSet(
 
 
 class CommentViewSet(DestroyModelMixin, GenericViewSet):
-    """Borrado de comentarios propios (US-009).
+    """Borrado de comentarios (US-009).
+
+    Lo puede borrar su autor —uno se arrepiente de lo que escribió— o el autor
+    del reporte, que modera lo que queda colgado de su publicación.
 
     Vive aparte del ReportViewSet porque el recurso se identifica por su propio id
     (``DELETE /api/comments/{id}/``) y no depende del reporte contenedor.
     """
 
-    permission_classes = [IsAuthenticated, IsAuthorOrReadOnly]
+    permission_classes = [IsAuthenticated, CanDeleteComment]
     serializer_class = CommentSerializer
     queryset = Comment.objects.select_related("author", "report")

@@ -25,6 +25,11 @@ class CharInFilter(filters.BaseInFilter, filters.CharFilter):
 
 class PanelReportFilterSet(filters.FilterSet):
     municipality = filters.NumberFilter(field_name="municipality_id")
+    # Todo lo que reportó una persona, para el perfil que abre el panel desde
+    # su nombre. Como el resto, se aplica sobre el queryset ya acotado por
+    # jurisdicción: un agente ve lo que esa persona reportó **en su municipio**,
+    # nunca su actividad en otro.
+    author = filters.NumberFilter(field_name="author_id")
     status = CharInFilter(field_name="status", lookup_expr="in")
     category = CharInFilter(field_name="category", lookup_expr="in")
     created_from = filters.DateFilter(field_name="created_at", lookup_expr="date__gte")
@@ -45,6 +50,7 @@ class PanelReportFilterSet(filters.FilterSet):
         model = Report
         fields = [
             "municipality",
+            "author",
             "status",
             "category",
             "created_from",

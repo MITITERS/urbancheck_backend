@@ -11,6 +11,7 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import LikeFactory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
+from urbancheck.users.tests.factories import UserFactory
 
 URL = "/api/panel/reports/"
 
@@ -279,3 +280,34 @@ class TestFiltersNeverCrossJurisdiction:
 
         returned = set(ids_in(response))
         assert returned.isdisjoint({r.id for r in foreign})
+
+
+class TestFilterByAuthor:
+    """`?author=<id>`: lo que reportó una persona, para el perfil del panel."""
+
+    def test_only_that_persons_reports(self, agent_client, municipality):
+        vecina = UserFactory.create()
+        suyos = ReportFactory.create_batch(2, author=vecina, municipality=municipality)
+        ReportFactory.create(municipality=municipality)
+
+        response = agent_client.get(URL, {"author": vecina.pk})
+
+        assert set(ids_in(response)) == {report.id for report in suyos}
+
+    def test_it_does_not_cross_jurisdictions(self, agent_client, municipality):
+        """Se aplica sobre el queryset ya acotado, nunca en lugar de él.
+
+        Un agente ve lo que esa persona reportó **en su municipio**, no su
+        actividad en otro: el perfil no puede ser una puerta lateral.
+        """
+        vecina = UserFactory.create()
+        propio = ReportFactory.create(author=vecina, municipality=municipality)
+        ajeno = ReportFactory.create(
+            author=vecina,
+            municipality=MunicipalityFactory.create(),
+        )
+
+        response = agent_client.get(URL, {"author": vecina.pk})
+
+        assert ids_in(response) == [propio.id]
+        assert ajeno.id not in ids_in(response)

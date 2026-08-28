@@ -51,8 +51,13 @@ class MunicipalitySerializer(serializers.ModelSerializer[Municipality]):
 
         La constraint de unicidad vale también para los dados de baja, así que
         sin esto la ciudad quedaría bloqueada para siempre. Reactivarlo además
-        es lo correcto en términos de datos: recupera sus reportes y usuarios en
-        lugar de dejarlos colgando de un municipio invisible.
+        es lo correcto en términos de datos: recupera sus reportes y sus
+        usuarios en lugar de dejarlos colgando de un municipio invisible.
+
+        Lo que **no** hace es volver a habilitar a su personal: las cuentas que
+        cayeron con la baja siguen archivadas y se reactivan de a una desde su
+        pantalla. Reactivar en bloque le devolvería el acceso a gente que quizás
+        ya no trabaja ahí.
         """
         revived = Municipality.objects.filter(
             city__iexact=validated_data["city"],

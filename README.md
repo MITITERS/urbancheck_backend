@@ -148,6 +148,52 @@ municipalidad:
 El permiso pasó de `IsMunicipalAgent` a `IsPanelUser`. Un ciudadano o un
 validador autenticado sigue recibiendo `403`.
 
+### La baja lógica es de la cuenta de trabajo, no del validador
+
+`User.is_work_account_active` es **una sola bandera para los dos roles de
+trabajo**: la pregunta que responde —"¿esta cuenta sigue habilitada?"— es la
+misma para un validador y para un agente municipal, y dos campos habrían
+divergido. Se llamaba `is_validator_active` hasta que el agente también pudo
+darse de baja; la migración `users/0007` la renombra sin perder las bajas ya
+registradas.
+
+Lo que cambia por rol es **quién puede darla de baja y qué se pierde**:
+
+| | Lo gestiona | Al desactivarse pierde |
+| --- | --- | --- |
+| Validador (US-035) | Los dos roles del panel, cada uno en su jurisdicción | Validar en terreno |
+| Agente municipal (US-017) | Solo el administrador de la plataforma | Operar el panel |
+
+Cada rol tiene su verificación centralizada, y son espejo una de la otra:
+`can_validate` y `can_operate_panel`. La segunda la consumen los tres permisos
+de `users/api/permissions.py` a través de `_operates_panel()`, así que la baja
+corta el acceso a **todo** el panel y no endpoint por endpoint.
+
+Una diferencia deliberada entre las dos: `can_operate_panel` **no** mira
+`must_change_password`. El agente recién dado de alta tiene que poder entrar
+justamente para cambiar la contraseña temporal; ese redirect lo resuelve el
+panel.
+
+Los dos listados aceptan **`?municipality=<id>`** y **`?state=active|inactive`**.
+El primero es para el admin, que no está acotado a ninguna jurisdicción y elige
+mirar de a un municipio; un valor que no sea un id se ignora, en lugar de
+reventar con un `500` como hacía el de validadores. El segundo es lo que sostiene
+las dos pestañas del panel. El corte vive en el servidor y no en la pantalla: si
+las cuentas archivadas viajaran igual, con veinte filas por página terminarían
+ocupando el lugar de las que sí trabajan. Sin el parámetro se devuelven las dos
+—es lo que hacía antes de existir—, y un valor desconocido no filtra ni rompe.
+
+El filtro se aplica **solo en `list`**. `activate` y `deactivate` alcanzan a la
+cuenta esté del lado que esté, o reactivar desde el archivado respondería `404`.
+En validadores se aplica después de la jurisdicción, nunca en lugar de ella: el
+archivado no es una puerta trasera al personal de otro municipio.
+
+La baja no toca `is_active` de Django: la cuenta existe, puede iniciar sesión y
+el panel le explica qué pasó. Todo lo que gestionó sigue en el historial de cada
+reporte con su nombre, y por eso la tabla del panel muestra `management_count`
+—los cambios de estado que hizo—, el equivalente de `validation_count` del
+validador.
+
 De dónde sale la municipalidad se resuelve eligiendo serializer por rol en
 `get_serializer_class()`, no con ramas dentro de un serializer. La parte «el
 admin elige el municipio» vive en `AdminCreatesPanelUserSerializer`, que
@@ -158,6 +204,14 @@ campo.
 `ValidatorSerializer` devuelve `municipality` siempre, aunque para el agente sea
 constante: es lo que el admin necesita para distinguir filas de municipios
 distintos, y una sola forma de respuesta es más fácil de sostener que dos.
+
+### `?author=` en el listado del panel
+
+Existe para el perfil que el panel abre desde el nombre de un vecino. Como el
+resto de los filtros del panel, se aplica **sobre** el queryset que ya devolvió
+`JurisdictionScopedMixin`, nunca en lugar de él: un agente ve lo que esa persona
+reportó en su municipio, y pedir su actividad en otro devuelve vacío. El test de
+esa garantía vive en `test_panel_list.py::TestFilterByAuthor`.
 
 ### El reporte se numera por municipio
 
@@ -243,6 +297,18 @@ sus documentos:
   mismas condiciones que un ciudadano común». Ya no: su vista está acotada.
 - El escenario 6 de US-036 —ver un reporte de otra municipalidad como ciudadano
   común, sin opción de validar— dejó de ser alcanzable navegando la app.
+
+### Un comentario lo borra su autor, o el dueño del reporte
+
+`CanDeleteComment` cubre los dos, porque son dos derechos distintos y los dos
+son razonables: uno se arrepiente de lo que escribió, y quien publicó el reporte
+modera lo que queda colgado de él. `CommentSerializer.can_delete` es su espejo,
+para que el cliente muestre el botón sin replicar la regla —igual que `can_edit`
+con la edición del reporte—.
+
+El personal municipal queda afuera a propósito: no participa como vecino (ver la
+sección siguiente), y darle la tijera sobre lo que dicen los vecinos en un
+reclamo que va a resolver lo pone de los dos lados del mismo caso.
 
 ### Solo el vecino participa: reportar, comentar y dar me gusta
 
@@ -373,6 +439,30 @@ app móvil**.
 redondean: más precisión de la que guardamos es un dato de sobra, no una entrada
 inválida. Lo que sí se rechaza es una coordenada fuera del rango terrestre, que
 es un error de verdad.
+
+### La baja de una municipalidad arrastra a su personal
+
+`deactivate_municipality()` (`municipalities/services.py`) es el único lugar que
+da de baja un municipio, y hace las dos cosas en una transacción: lo desactiva y
+desactiva sus agentes y validadores. Un municipio dado de baja no opera, así que
+dejar habilitadas sus cuentas sería dejar gente trabajando sobre una
+jurisdicción que la plataforma considera cerrada.
+
+**No tiene inverso automático.** Volver a dar de alta el municipio recupera sus
+reportes y sus usuarios, pero no rehabilita a nadie: quién vuelve a trabajar se
+decide cuenta por cuenta, desde el archivado de cada pantalla. Reactivar en
+bloque le devolvería el acceso a personal que quizás ya no está.
+
+La cascada tiene un complemento sin el cual no serviría de nada:
+`User.can_be_reactivated` —municipalidad asignada **y** activa—, que verifican
+las dos acciones `activate`. Poder reactivar de a uno al personal de un
+municipio dado de baja dejaría exactamente el estado que la cascada existe para
+evitar. Responde `400` y no `403`: a quien la ejecuta no le falta permiso, falta
+una condición del dato. Desactivar nunca queda trabado.
+
+La respuesta del `DELETE` incluye `deactivated_users`, cuántas cuentas cayeron.
+No es decorativo: la consecuencia ocurre en otras dos pantallas, y sin ese dato
+el panel no podría decirla.
 
 ### Baja de municipalidades: lógica, y reversible
 

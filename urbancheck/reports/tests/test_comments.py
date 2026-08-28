@@ -1,4 +1,4 @@
-"""US-009: borrado de comentario propio y aviso al autor del reporte."""
+"""US-009: borrado de comentarios y aviso al autor del reporte."""
 
 from __future__ import annotations
 
@@ -53,6 +53,62 @@ class TestCommentDelete:
         by_id = {c["id"]: c for c in res.data}
         assert by_id[mine.id]["is_mine"] is True
         assert by_id[theirs.id]["is_mine"] is False
+
+
+@pytest.mark.django_db
+class TestReportAuthorModeratesItsComments:
+    """El dueño de la publicación borra lo que le cuelgan.
+
+    Es un derecho distinto del de borrar lo propio, y los dos son razonables:
+    uno se arrepiente de lo que escribió, y el otro modera su publicación.
+    """
+
+    def test_the_report_author_can_delete_a_comment_of_someone_else(self, auth_client):
+        client, user = auth_client
+        report = ReportFactory.create(author=user)
+        comment = CommentFactory.create(report=report)
+
+        res = client.delete(f"/api/comments/{comment.id}/")
+
+        assert res.status_code == 204
+        assert not Comment.objects.filter(id=comment.id).exists()
+
+    def test_a_stranger_still_cannot(self, auth_client):
+        """No es una puerta abierta: sigue haciendo falta ser uno de los dos."""
+        client, _ = auth_client
+        comment = CommentFactory.create(report=ReportFactory.create())
+
+        res = client.delete(f"/api/comments/{comment.id}/")
+
+        assert res.status_code == 403
+        assert Comment.objects.filter(id=comment.id).exists()
+
+    def test_can_delete_tells_the_client_which_ones(self, auth_client):
+        """El cliente muestra el botón por esto, no replicando la regla."""
+        client, user = auth_client
+        own_report = ReportFactory.create(author=user)
+        mine = CommentFactory.create(report=own_report, author=user)
+        on_my_report = CommentFactory.create(report=own_report)
+        elsewhere = CommentFactory.create(report=ReportFactory.create())
+
+        res = client.get(f"/api/reports/{own_report.id}/comments/")
+        rows = {c["id"]: c for c in res.data}
+        assert rows[mine.id]["can_delete"] is True
+        assert rows[on_my_report.id]["can_delete"] is True
+
+        foreign = client.get(f"/api/reports/{elsewhere.report_id}/comments/")
+        assert {c["id"]: c for c in foreign.data}[elsewhere.id]["can_delete"] is False
+
+    def test_my_comment_on_someone_elses_report_is_still_mine_to_delete(
+        self,
+        auth_client,
+    ):
+        client, user = auth_client
+        comment = CommentFactory.create(author=user, report=ReportFactory.create())
+
+        res = client.delete(f"/api/comments/{comment.id}/")
+
+        assert res.status_code == 204
 
 
 @pytest.mark.django_db

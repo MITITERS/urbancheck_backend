@@ -24,12 +24,22 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "role",
             "municipality",
             "must_change_password",
+            # Lo mira el panel para frenar en la puerta a una cuenta de trabajo
+            # dada de baja, en vez de dejarla entrar a una pantalla en la que
+            # cada request va a devolver 403.
+            "is_work_account_active",
             "is_public",
             "url",
         ]
         # La municipalidad es inmodificable una vez asignada (US-017): no se
         # expone como editable en ningún serializer de update.
-        read_only_fields = ["email", "role", "municipality", "must_change_password"]
+        read_only_fields = [
+            "email",
+            "role",
+            "municipality",
+            "must_change_password",
+            "is_work_account_active",
+        ]
 
         extra_kwargs = {
             "url": {"view_name": "api:user-detail", "lookup_field": "pk"},
@@ -118,13 +128,31 @@ class MunicipalAgentCreateSerializer(AdminCreatesPanelUserSerializer):
 
 
 class MunicipalAgentSerializer(serializers.ModelSerializer[User]):
-    """Lectura de un agente municipal en el panel de administración."""
+    """Fila de la tabla de agentes municipales del panel de administración.
+
+    Misma forma que ``ValidatorSerializer`` —estado, cifra de actividad y
+    contraseña pendiente—, porque es el mismo tablero: alta, listado y baja
+    lógica de una cuenta de trabajo.
+    """
 
     municipality = MunicipalitySerializer(read_only=True)
+    is_active_agent = serializers.BooleanField(
+        source="is_work_account_active",
+        read_only=True,
+    )
+    management_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "name", "email", "municipality", "must_change_password"]
+        fields = [
+            "id",
+            "name",
+            "email",
+            "municipality",
+            "is_active_agent",
+            "management_count",
+            "must_change_password",
+        ]
         read_only_fields = fields
 
 
@@ -189,7 +217,7 @@ class ValidatorSerializer(serializers.ModelSerializer[User]):
 
     validation_count = serializers.IntegerField(read_only=True)
     is_active_validator = serializers.BooleanField(
-        source="is_validator_active",
+        source="is_work_account_active",
         read_only=True,
     )
     municipality = MunicipalitySerializer(read_only=True)

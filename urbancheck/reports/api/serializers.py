@@ -28,16 +28,29 @@ class StatusHistorySerializer(serializers.ModelSerializer):
 class CommentSerializer(serializers.ModelSerializer):
     author = AuthorSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
 
     class Meta:
         model = Comment
-        fields = ["id", "author", "text", "created_at", "is_mine"]
+        fields = ["id", "author", "text", "created_at", "is_mine", "can_delete"]
         read_only_fields = ["id", "author", "created_at"]
 
     def get_is_mine(self, obj) -> bool:
-        """Permite al cliente mostrar la opción Eliminar solo en los propios."""
+        """Si lo escribió quien está mirando: sirve para distinguirlo a la vista."""
         request = self.context.get("request")
         return bool(request and obj.author_id == request.user.id)
+
+    def get_can_delete(self, obj) -> bool:
+        """Si quien mira puede borrarlo: lo escribió, o es su reporte.
+
+        Es el espejo de ``CanDeleteComment``, igual que ``can_edit`` lo es del
+        permiso de edición del reporte: el cliente muestra el botón según esto
+        en vez de replicar la regla.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return request.user.id in {obj.author_id, obj.report.author_id}
 
 
 class ReportListSerializer(serializers.ModelSerializer):

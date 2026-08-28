@@ -1,4 +1,4 @@
-"""Resolución de la municipalidad de un reporte (US-034, revisada).
+"""Municipalidades: resolución de jurisdicción y baja en cascada.
 
 Cada municipio declara un área de cobertura circular —centro y radio— y un
 reporte nuevo se asocia al que lo cubre. Es el único punto del código que decide
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 
 from urbancheck.reports.geo import METERS_PER_KM
 from urbancheck.reports.geo import haversine_meters
@@ -108,3 +109,33 @@ def resolve_municipality_for(
     if municipality is None:
         raise OutOfCoverageError
     return municipality
+
+
+@transaction.atomic
+def deactivate_municipality(municipality: Municipality) -> int:
+    """Da de baja el municipio y, con él, a todo su personal.
+
+    Un municipio dado de baja deja de recibir reportes y de operar, así que sus
+    agentes y validadores no tienen nada que hacer: dejarlos habilitados sería
+    dejar cuentas trabajando sobre una jurisdicción que la plataforma considera
+    cerrada. La cascada vive acá y no en la vista para que valga desde cualquier
+    lugar que dé de baja un municipio.
+
+    Devuelve cuántas cuentas quedaron desactivadas, para poder decírselo a quien
+    ejecutó la baja: es una consecuencia que no se ve en la pantalla desde la
+    que se hace.
+
+    **No tiene inverso automático.** Volver a dar de alta el municipio no
+    reactiva a nadie: quién vuelve a trabajar es una decisión de la plataforma,
+    y se toma cuenta por cuenta desde el archivado. Reactivar en bloque
+    devolvería el acceso a personal que quizás ya no está.
+    """
+    from urbancheck.users.models import User  # noqa: PLC0415
+
+    municipality.is_active = False
+    municipality.save(update_fields=["is_active", "updated_at"])
+    return User.objects.filter(
+        municipality=municipality,
+        role__in=User.MUNICIPALITY_BOUND_ROLES,
+        is_work_account_active=True,
+    ).update(is_work_account_active=False)

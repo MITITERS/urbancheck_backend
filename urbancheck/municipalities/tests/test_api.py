@@ -8,6 +8,7 @@ from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import PlatformAdminFactory
 from urbancheck.users.tests.factories import UserFactory
+from urbancheck.users.tests.factories import ValidatorFactory
 
 URL = "/api/municipalities/"
 
@@ -219,6 +220,95 @@ class TestDeleteMunicipality:
 
         agent.refresh_from_db()
         assert agent.municipality == municipality
+
+
+class TestDeactivationCascadesToStaff:
+    """La baja del municipio arrastra a su personal, y no tiene inverso.
+
+    Un municipio dado de baja no opera: dejar habilitados a sus agentes y
+    validadores sería dejar cuentas trabajando sobre una jurisdicción que la
+    plataforma considera cerrada.
+    """
+
+    @pytest.fixture
+    def staffed(self):
+        municipality = MunicipalityFactory.create()
+        return {
+            "municipality": municipality,
+            "agent": MunicipalAgentFactory.create(municipality=municipality),
+            "validator": ValidatorFactory.create(
+                municipality=municipality,
+                must_change_password=False,
+            ),
+        }
+
+    def test_the_agent_is_deactivated(self, admin_client, staffed):
+        admin_client.delete(f"{URL}{staffed['municipality'].pk}/")
+
+        agent = staffed["agent"]
+        agent.refresh_from_db()
+        assert agent.is_work_account_active is False
+        assert agent.can_operate_panel is False
+
+    def test_the_validator_is_deactivated(self, admin_client, staffed):
+        admin_client.delete(f"{URL}{staffed['municipality'].pk}/")
+
+        validator = staffed["validator"]
+        validator.refresh_from_db()
+        assert validator.is_work_account_active is False
+        assert validator.can_validate is False
+
+    def test_the_response_says_how_many_fell(self, admin_client, staffed):
+        """Es una consecuencia que no se ve desde la pantalla de municipios."""
+        response = admin_client.delete(f"{URL}{staffed['municipality'].pk}/")
+
+        assert response.data["deactivated_users"] == 2  # noqa: PLR2004
+
+    def test_staff_of_other_municipalities_is_untouched(self, admin_client, staffed):
+        foreign = MunicipalAgentFactory.create(
+            municipality=MunicipalityFactory.create(),
+        )
+
+        admin_client.delete(f"{URL}{staffed['municipality'].pk}/")
+
+        foreign.refresh_from_db()
+        assert foreign.is_work_account_active is True
+
+    def test_reviving_the_municipality_does_not_reactivate_anyone(
+        self,
+        admin_client,
+        staffed,
+    ):
+        """La reactivación es manual, cuenta por cuenta.
+
+        Volver a habilitar en bloque le devolvería el acceso a gente que quizás
+        ya no trabaja ahí.
+        """
+        municipality = staffed["municipality"]
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        admin_client.post(
+            URL,
+            payload(city=municipality.city, province=municipality.province),
+            format="json",
+        )
+
+        municipality.refresh_from_db()
+        assert municipality.is_active is True
+        for user in (staffed["agent"], staffed["validator"]):
+            user.refresh_from_db()
+            assert user.is_work_account_active is False
+
+    def test_they_land_in_the_archived_listing(self, admin_client, staffed):
+        """Es donde el admin los va a buscar para reactivarlos de a uno."""
+        admin_client.delete(f"{URL}{staffed['municipality'].pk}/")
+
+        archived = admin_client.get(
+            "/api/municipal-agents/",
+            {"state": "inactive"},
+        ).data["results"]
+
+        assert staffed["agent"].id in {row["id"] for row in archived}
 
 
 class TestListing:

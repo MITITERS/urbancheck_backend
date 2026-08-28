@@ -50,6 +50,29 @@ class UserQuerySet(QuerySet):
             ),
         )
 
+    def with_management_count(self) -> UserQuerySet:
+        """Anota cuántos cambios de estado gestionó cada usuario desde el panel.
+
+        Es el equivalente de ``with_validation_count`` para el agente municipal:
+        la tabla del panel necesita una cifra de actividad, y la del agente es
+        cuánto movió la bandeja. Se excluyen las salidas de «Pendiente de
+        validación» porque esas son validaciones de terreno, que ya tienen su
+        propia columna y su propio rol.
+        """
+        from urbancheck.reports.models import Report  # noqa: PLC0415
+
+        return self.annotate(
+            management_count=Count(
+                "reportstatushistory",
+                filter=~Q(
+                    reportstatushistory__previous_status=(
+                        Report.Status.PENDIENTE_VALIDACION
+                    ),
+                ),
+                distinct=True,
+            ),
+        )
+
 
 class UserManager(DjangoUserManager["User"].from_queryset(UserQuerySet)):
     """Custom manager for the User model."""
