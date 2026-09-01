@@ -197,6 +197,16 @@ class TestDeactivateMunicipalAgent:
         assert row["is_active_agent"] is True
         assert row["management_count"] == 0
 
+    def test_the_listing_carries_the_avatar(self, admin_client, agent):
+        """El panel dibuja la foto en la tabla; sin este campo no la tiene.
+
+        Va como ``None`` cuando la cuenta no subió ninguna, que es lo que el
+        panel necesita para caer en las iniciales sin adivinar.
+        """
+        response = admin_client.get(URL)
+
+        assert response.data["results"][0]["avatar"] is None
+
     @pytest.mark.parametrize(
         "factory",
         [UserFactory, MunicipalAgentFactory],

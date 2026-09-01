@@ -83,6 +83,18 @@ class TestListValidators:
         assert mine.id in returned
         assert theirs.id not in returned
 
+    def test_the_listing_carries_the_avatar(self, agent_client, agent):
+        """El panel dibuja la foto en la tabla; sin este campo no la tiene.
+
+        Va como ``None`` cuando la cuenta no subió ninguna, que es lo que el
+        panel necesita para caer en las iniciales sin adivinar.
+        """
+        ValidatorFactory.create(municipality=agent.municipality)
+
+        response = agent_client.get(URL)
+
+        assert response.data["results"][0]["avatar"] is None
+
     def test_the_listing_carries_state_and_validation_count(self, agent_client, agent):
         validator = ValidatorFactory.create(municipality=agent.municipality)
         report = ReportFactory.create(
