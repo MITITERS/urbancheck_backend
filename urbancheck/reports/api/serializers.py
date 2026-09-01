@@ -8,8 +8,6 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.users.models import User
 
-EMPTY_DESCRIPTION_MESSAGE = "La descripción no puede quedar vacía."
-
 
 class AuthorSerializer(serializers.ModelSerializer):
     class Meta:
@@ -167,8 +165,8 @@ class ReportCreateSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "number"]
 
     def validate(self, attrs):
-        if not attrs.get("photo"):
-            raise serializers.ValidationError({"photo": "La foto es obligatoria."})
+        # La foto no se comprueba acá: es ``required=True``, así que DRF ya la
+        # rechazó a nivel de campo antes de llegar a este método.
         has_coords = attrs.get("latitude") is not None and attrs.get("longitude") is not None
         has_address = bool(attrs.get("address", "").strip())
         if not has_coords and not has_address:
@@ -196,7 +194,6 @@ class ReportUpdateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "edited_at"]
 
-    def validate_description(self, value):
-        if not value.strip():
-            raise serializers.ValidationError(EMPTY_DESCRIPTION_MESSAGE)
-        return value
+    # Una descripción en blanco —vacía o de solo espacios— la rechaza DRF: el
+    # ``CharField`` recorta los espacios antes de validar y ``allow_blank`` es
+    # False, así que "   " llega como "" y salta el error estándar.

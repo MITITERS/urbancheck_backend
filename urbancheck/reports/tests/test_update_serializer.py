@@ -49,12 +49,12 @@ class TestReportUpdateSerializer:
         assert "description" in serializer.errors
 
     def test_rejects_a_whitespace_only_description(self):
-        """Se rechaza, aunque el mensaje lo pone DRF y no ``validate_description``.
+        """Se rechaza, y el mensaje lo pone DRF.
 
         ``CharField`` recorta los espacios antes de validar, así que "   " llega
-        como "" y salta el error ``blank`` estándar. ``EMPTY_DESCRIPTION_MESSAGE``
-        queda por eso sin usarse (ver OBS-02 del informe): no afecta al usuario,
-        que igual recibe un 400, pero el texto propio nunca se muestra.
+        como "" y salta el error ``blank`` estándar. El serializer tuvo un
+        ``validate_description`` propio para esto: era inalcanzable por la misma
+        razón y se retiró en el Sprint 3.
         """
         report = ReportFactory.create()
         serializer = ReportUpdateSerializer(
