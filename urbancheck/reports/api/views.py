@@ -50,12 +50,10 @@ from .serializers import ReportUpdateSerializer
 INACTIVE_PUBLIC_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
 INACTIVE_MAP_STATUSES = INACTIVE_PUBLIC_STATUSES
 
-EDIT_BLOCKED_MESSAGE = (
-    "Este reporte ya está siendo gestionado por el municipio y no puede modificarse."
-)
-DELETE_BLOCKED_MESSAGE = (
-    "Este reporte ya está siendo gestionado por el municipio y no puede eliminarse."
-)
+# Todo estado distinto de PENDIENTE_VALIDACION se alcanza pasando por un
+# validador —validando o rechazando—, así que el texto vale para todos.
+EDIT_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede modificarse."
+DELETE_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede eliminarse."
 
 
 class ReportViewSet(

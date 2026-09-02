@@ -244,7 +244,12 @@ class TestForUserQueryset:
 
 class TestImmutability:
     def test_report_municipality_cannot_be_changed_through_the_api(self, two_municipalities):
+        # Pendiente de validación: es el único estado en el que el autor todavía
+        # puede editar, y sin eso el PATCH rebota por la regla y no por la
+        # inmutabilidad, que es lo que este test quiere probar.
         report = two_municipalities["own_reports"][0]
+        report.status = Report.Status.PENDIENTE_VALIDACION
+        report.save(update_fields=["status"])
         client = APIClient()
         client.force_authenticate(report.author)
 

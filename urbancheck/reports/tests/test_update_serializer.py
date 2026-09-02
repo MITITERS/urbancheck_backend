@@ -108,13 +108,15 @@ class TestReportUpdateSerializer:
 class TestCanEdit:
     def test_true_for_the_author_of_an_editable_report(self):
         author = UserFactory.create()
-        report = ReportFactory.create(author=author, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=author, status=Report.Status.PENDIENTE_VALIDACION
+        )
         data = ReportDetailSerializer(
             report, context={"request": _request(author)},
         ).data
         assert data["can_edit"] is True
 
-    def test_false_for_the_author_once_it_is_in_management(self):
+    def test_false_for_the_author_once_it_is_validated(self):
         author = UserFactory.create()
         report = ReportFactory.create(author=author, status=Report.Status.EN_PROCESO)
         data = ReportDetailSerializer(

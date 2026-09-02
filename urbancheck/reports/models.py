@@ -128,11 +128,14 @@ class Report(models.Model):
     # poder mostrar "editado el ..." solo cuando el ciudadano tocó el contenido.
     edited_at = models.DateTimeField(null=True, blank=True)
 
-    # El autor solo puede modificar o borrar su reporte mientras el municipio no
-    # empezó a gestionarlo.
-    EDITABLE_STATUSES = frozenset(
-        {Status.PENDIENTE_VALIDACION, Status.REPORTADO},
-    )
+    # El autor solo puede modificar o borrar su reporte mientras nadie más lo
+    # miró: es decir, hasta que un validador lo confirma en terreno.
+    #
+    # ``REPORTADO`` salió de esta lista a propósito. Un reporte validado ya pasó
+    # por el trabajo de otra persona y entró en la cola del municipio: dejar que
+    # el autor le cambie la categoría o la dirección después de eso invalida esa
+    # validación sin que nadie se entere.
+    EDITABLE_STATUSES = frozenset({Status.PENDIENTE_VALIDACION})
 
     objects = ReportQuerySet.as_manager()
 
