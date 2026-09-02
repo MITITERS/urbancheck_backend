@@ -364,20 +364,34 @@ municipal no se le haya sacado nada de lo que sí tiene que poder leer.
 
 ### Área de cobertura: qué reportes le llegan a cada municipio
 
-Cada municipalidad declara un **centro geográfico y un radio en kilómetros**, y
-un reporte nuevo se asocia al municipio que lo cubre. Es lo que evita que la
-capital de Córdoba reciba los reportes de Villa María.
+Cada municipalidad declara el **polígono de su límite** —una lista de pares
+`[latitud, longitud]` en `Municipality.boundary`— y un reporte nuevo se asocia
+al municipio que lo contiene. Es lo que evita que la capital de Córdoba reciba
+los reportes de Villa María.
 
 Esto **reemplaza la decisión original de US-034**, que asociaba todo reporte a
-"la municipalidad activa del sistema" y difería la resolución geográfica. Sigue
-siendo una aproximación circular: los polígonos de límites reales continúan
-fuera de alcance.
+"la municipalidad activa del sistema" y difería la resolución geográfica.
+
+También reemplaza al círculo —centro y radio— con el que se resolvió primero.
+El círculo no sobrevivió al caso de Villa María y Villa Nueva: están pegadas y
+las separa el río Ctalamochita, así que cualquier radio lo bastante grande para
+cubrir una entera se comía parte de la otra. Un círculo no puede representar un
+límite; un polígono sí. La migración `municipalities/0003` convierte cada
+círculo existente en el polígono de 32 lados que lo aproxima, para que ningún
+municipio se quede sin cobertura al aplicarla.
+
+**Sin PostGIS.** La pertenencia se calcula en Python con lanzamiento de rayo
+(`reports/geo.py::point_in_polygon`). A la escala de este sistema —decenas de
+municipios por reporte creado— el costo es despreciable, y adoptar GeoDjango
+por esto habría sido un cambio de infraestructura mucho mayor que el problema.
 
 Reglas, todas en `urbancheck/municipalities/services.py`, el único lugar que
 decide la jurisdicción de un reporte:
 
-- Con coordenadas manda la cobertura. Si varias áreas se superponen, gana la de
-  centro más cercano.
+- Con coordenadas manda la cobertura. Con límites bien trazados no puede haber
+  más de un municipio conteniendo un punto; si los hay, alguien trazó mal un
+  polígono y se desempata por centro más cercano para que el resultado sea
+  determinista.
 - **Si ninguna cubre el punto, el reporte se rechaza** con `400` y un mensaje de
   fuera de cobertura, en lugar de asignarlo a cualquiera.
 - Sin coordenadas —el vecino escribió una dirección y la geocodificación
@@ -398,7 +412,7 @@ tienen que coincidir sobre qué municipio cubre un lugar, o el vecino reportarí
 un bache que después no ve.
 
 Son **dos condiciones**, y las dos hacen falta (`ReportQuerySet.covered_by()`):
-el reporte pertenece a ese municipio **y** cae dentro de su radio. Pertenecer
+el reporte pertenece a ese municipio **y** cae dentro de su área. Pertenecer
 solo no alcanza, porque hay reportes que apuntan a un municipio y están a
 decenas de kilómetros: los cargados antes de que existiera la cobertura y los
 que cayeron en el respaldo de `ACTIVE_MUNICIPALITY_ID` por no tener coordenadas
@@ -406,6 +420,12 @@ al crearse. Un reporte creado hoy cumple las dos por construcción —la creaci�
 rechaza lo que queda fuera—, así que la segunda solo saca lo que nunca debió
 estar ahí. Los reportes **sin coordenadas** se quedan: no hay dónde ubicarlos, y
 su único vínculo con un municipio es el que ya tienen.
+
+Ese filtro usa el **recuadro** del polígono y no el polígono exacto: sin PostGIS
+no hay forma de expresar punto-en-polígono en SQL, y traerlo a Python rompería
+la pereza del queryset, que después se pagina. Alcanza de sobra para lo que
+hace —descartar reportes a decenas de kilómetros—, y el único caso que se cuela
+es un dato viejo dentro del recuadro pero fuera del límite.
 
 Esto acota **lo que ve el vecino**, no a quién le pertenece el reporte: el panel
 municipal los sigue viendo por jurisdicción, que es la FK y nada más.

@@ -1,9 +1,8 @@
 """Municipalidades: resolución de jurisdicción y baja en cascada.
 
-Cada municipio declara un área de cobertura circular —centro y radio— y un
-reporte nuevo se asocia al que lo cubre. Es el único punto del código que decide
-la jurisdicción de un reporte: cuando llegue la resolución por polígonos reales,
-se reemplaza el cuerpo de estas funciones y nada más.
+Cada municipio declara el polígono de su límite y un reporte nuevo se asocia al
+que lo contiene. Es el único punto del código que decide la jurisdicción de un
+reporte.
 """
 
 from __future__ import annotations
@@ -12,8 +11,8 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 
-from urbancheck.reports.geo import METERS_PER_KM
 from urbancheck.reports.geo import haversine_meters
+from urbancheck.reports.geo import polygon_bounds
 
 from .models import Municipality
 
@@ -33,7 +32,7 @@ OUT_OF_COVERAGE_MESSAGE = (
 
 
 class OutOfCoverageError(Exception):
-    """El punto no cae dentro del radio de ninguna municipalidad activa."""
+    """El punto no cae dentro del área de ninguna municipalidad activa."""
 
     def __init__(self, message: str = OUT_OF_COVERAGE_MESSAGE):
         super().__init__(message)
@@ -44,32 +43,47 @@ def find_covering_municipality(
     latitude: float,
     longitude: float,
 ) -> Municipality | None:
-    """Municipalidad activa cuya área de cobertura contiene el punto.
+    """Municipalidad activa cuyo límite contiene el punto.
 
-    Si varias lo cubren —áreas superpuestas—, gana la de centro más cercano: es
-    la que con más probabilidad tiene competencia real sobre ese lugar.
+    Con límites bien trazados no puede haber más de una: dos municipios no
+    comparten territorio. Si aun así varias lo contienen, es que alguien trazó
+    mal un polígono; se desempata por centro más cercano para que el resultado
+    sea determinista y no dependa del orden en que salieron de la base.
+
+    El centro **no** decide la cobertura, solo el desempate: un municipio con
+    forma de L puede tener su centroide fuera de su propio límite.
     """
-    candidates = [
-        (
-            haversine_meters(
-                latitude,
-                longitude,
-                municipality.latitude,
-                municipality.longitude,
-            ),
-            municipality,
-        )
-        for municipality in Municipality.objects.active()
-        if municipality.has_coverage
-    ]
     covering = [
-        (distance, municipality)
-        for distance, municipality in candidates
-        if distance <= float(municipality.coverage_radius_km) * METERS_PER_KM
+        municipality
+        for municipality in Municipality.objects.active()
+        if municipality.contains(latitude, longitude)
     ]
     if not covering:
         return None
-    return min(covering, key=lambda item: item[0])[1]
+    if len(covering) == 1:
+        return covering[0]
+    return min(
+        covering,
+        key=lambda municipality: haversine_meters(
+            latitude,
+            longitude,
+            *_reference_point(municipality),
+        ),
+    )
+
+
+def _reference_point(municipality: Municipality) -> tuple[float, float]:
+    """Punto con el que se mide la cercanía al desempatar.
+
+    El centro guardado, que es el centroide oficial de la ciudad. Un municipio
+    puede tener límite y no tenerlo —lo cargó el admin de Django, o un seed—, y
+    ahí se usa el centro del recuadro del polígono: peor referencia, pero
+    evita que un desempate reviente por un campo vacío.
+    """
+    if municipality.latitude is not None and municipality.longitude is not None:
+        return float(municipality.latitude), float(municipality.longitude)
+    min_lat, min_lng, max_lat, max_lng = polygon_bounds(municipality.boundary)
+    return (min_lat + max_lat) / 2, (min_lng + max_lng) / 2
 
 
 def get_active_municipality() -> Municipality:

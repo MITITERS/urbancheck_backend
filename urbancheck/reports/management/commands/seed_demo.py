@@ -25,21 +25,40 @@ from urbancheck.users.models import User
 
 DEFAULT_PASSWORD = "Urbancheck2026!"  # noqa: S105
 
-# Centros reales y radios que no se pisan: son los que deciden a qué municipio
-# le llega cada reporte.
+# Villa María y Villa Nueva son el caso que motivó pasar de círculos a
+# polígonos: están pegadas y las separa el río Ctalamochita. Con círculos, uno
+# lo bastante grande para cubrir Villa María entera se comía media Villa Nueva.
+#
+# Estos dos polígonos son rectángulos aproximados que comparten el borde del
+# río —no son los límites catastrales reales, alcanza para poblar una demo— y
+# lo importante es que **no se superponen**: cada reporte cae en uno solo.
+RIVER_LATITUDE = -32.4250
+
 MUNICIPALITY = {
     "city": "Villa María",
     "province": "Córdoba",
     "latitude": -32.4103,
     "longitude": -63.2400,
-    "coverage_radius_km": 15,
+    # Al norte del río.
+    "boundary": [
+        [-32.3800, -63.2900],
+        [-32.3800, -63.1950],
+        [RIVER_LATITUDE, -63.1950],
+        [RIVER_LATITUDE, -63.2900],
+    ],
 }
 SECOND_MUNICIPALITY = {
     "city": "Villa Nueva",
     "province": "Córdoba",
-    "latitude": -32.4333,
-    "longitude": -63.2333,
-    "coverage_radius_km": 8,
+    "latitude": -32.4400,
+    "longitude": -63.2300,
+    # Al sur del río, pegada a la anterior y sin pisarla.
+    "boundary": [
+        [RIVER_LATITUDE, -63.2700],
+        [RIVER_LATITUDE, -63.1900],
+        [-32.4620, -63.1900],
+        [-32.4620, -63.2700],
+    ],
 }
 
 CENTER = (-32.4103, -63.2400)

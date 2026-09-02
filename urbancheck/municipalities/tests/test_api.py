@@ -27,11 +27,21 @@ def admin_client() -> APIClient:
     return client
 
 
+#: Un cuadrado chico alrededor de Villa María. La forma no importa para estos
+#: tests —lo que se ejercita es el alta, no la geometría—, solo que sea válida.
+BOUNDARY = [
+    [-32.3900, -63.2600],
+    [-32.3900, -63.2200],
+    [-32.4300, -63.2200],
+    [-32.4300, -63.2600],
+]
+
+
 def payload(**overrides) -> dict:
     return {
         "city": "Villa María",
         "province": "Córdoba",
-        "coverage_radius_km": "15.00",
+        "boundary": BOUNDARY,
         **VILLA_MARIA,
         **overrides,
     }
@@ -51,12 +61,20 @@ class TestCreateMunicipality:
         response = admin_client.post(URL, payload(), format="json")
 
         municipality = Municipality.objects.get(pk=response.data["id"])
-        assert float(municipality.coverage_radius_km) == 15.00  # noqa: PLR2004
+        assert municipality.boundary == BOUNDARY
         assert municipality.has_coverage
+
+    def test_the_stored_boundary_actually_covers_its_city(self, admin_client):
+        """Guardar el polígono no alcanza: tiene que responder a un punto."""
+        response = admin_client.post(URL, payload(), format="json")
+
+        municipality = Municipality.objects.get(pk=response.data["id"])
+        assert municipality.contains(-32.4103, -63.2400) is True
+        assert municipality.contains(-32.4400, -63.2300) is False
 
     @pytest.mark.parametrize(
         "missing",
-        ["latitude", "longitude", "coverage_radius_km"],
+        ["latitude", "longitude", "boundary"],
     )
     def test_the_coverage_area_is_mandatory(self, admin_client, missing):
         """Sin cobertura no se sabe qué reportes le tocan: no se puede dar de alta."""
@@ -68,16 +86,31 @@ class TestCreateMunicipality:
         assert response.status_code == 400
         assert missing in response.data
 
-    @pytest.mark.parametrize("radius", ["0", "-5"])
-    def test_a_non_positive_radius_is_rejected(self, admin_client, radius):
-        response = admin_client.post(
-            URL,
-            payload(coverage_radius_km=radius),
-            format="json",
-        )
+    @pytest.mark.parametrize(
+        "invalid",
+        [
+            pytest.param([], id="empty"),
+            pytest.param([[-32.4, -63.2], [-32.5, -63.3]], id="only_two_points"),
+            pytest.param("no soy un polígono", id="not_a_list"),
+            pytest.param([[-32.4, -63.2], [-32.5], [-32.6, -63.4]], id="short_point"),
+            pytest.param([[-32.4, -63.2], ["x", "y"], [-32.6, -63.4]], id="not_numbers"),
+            pytest.param([[-95, -63.2], [-32.5, -63.3], [-32.6, -63.4]], id="off_globe"),
+        ],
+    )
+    def test_an_invalid_boundary_is_rejected(self, admin_client, invalid):
+        response = admin_client.post(URL, payload(boundary=invalid), format="json")
 
         assert response.status_code == 400
-        assert "coverage_radius_km" in response.data
+        assert "boundary" in response.data
+
+    def test_a_boundary_with_too_many_points_is_rejected(self, admin_client):
+        """Tope de vértices: el endpoint no es para volcar un GeoJSON entero."""
+        huge = [[-32.4 + index / 100000, -63.2] for index in range(501)]
+
+        response = admin_client.post(URL, payload(boundary=huge), format="json")
+
+        assert response.status_code == 400
+        assert "boundary" in response.data
 
     def test_duplicate_is_rejected_as_a_field_error(self, admin_client):
         MunicipalityFactory.create(city="Villa María", province="Córdoba")
@@ -133,18 +166,24 @@ class TestCoordinatePrecision:
 
 
 class TestEditMunicipality:
-    def test_the_admin_can_move_the_coverage_area(self, admin_client):
+    def test_the_admin_can_redraw_the_coverage_area(self, admin_client):
+        """Reajustar el límite es la operación central de esta pantalla.
+
+        Es lo que se hace cuando dos ciudades pegadas se pisan: se retoca el
+        trazado de una hasta que respeta el límite real.
+        """
         municipality = MunicipalityFactory.create()
 
         response = admin_client.patch(
             f"{URL}{municipality.pk}/",
-            {"coverage_radius_km": "42.50"},
+            {"boundary": BOUNDARY},
             format="json",
         )
 
         assert response.status_code == 200
         municipality.refresh_from_db()
-        assert float(municipality.coverage_radius_km) == 42.50  # noqa: PLR2004
+        assert municipality.boundary == BOUNDARY
+        assert municipality.contains(-32.4103, -63.2400) is True
 
     def test_renaming_to_an_existing_pair_is_rejected(self, admin_client):
         MunicipalityFactory.create(city="Villa María", province="Córdoba")
@@ -165,7 +204,7 @@ class TestEditMunicipality:
 
         response = admin_client.patch(
             f"{URL}{municipality.pk}/",
-            {"city": "Villa María", "coverage_radius_km": "20"},
+            {"city": "Villa María", "boundary": BOUNDARY},
             format="json",
         )
 
@@ -202,13 +241,13 @@ class TestDeleteMunicipality:
         ReportFactory.create(municipality=municipality)
         admin_client.delete(f"{URL}{municipality.pk}/")
 
-        response = admin_client.post(URL, payload(coverage_radius_km="30"), format="json")
+        response = admin_client.post(URL, payload(), format="json")
 
         assert response.status_code == 201
         assert response.data["id"] == municipality.pk
         municipality.refresh_from_db()
         assert municipality.is_active is True
-        assert float(municipality.coverage_radius_km) == 30.00  # noqa: PLR2004
+        assert municipality.boundary == BOUNDARY
         # Sus reportes siguen colgando de él.
         assert municipality.reports.count() == 1
 

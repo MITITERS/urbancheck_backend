@@ -9,6 +9,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import square_boundary
 from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
@@ -282,10 +283,12 @@ class TestImmutability:
         cayó el reporte, no lo que diga el cliente.
         """
         own = two_municipalities["own"]
-        own.latitude, own.longitude, own.coverage_radius_km = -32.41, -63.24, 15
+        own.latitude, own.longitude = -32.41, -63.24
+        own.boundary = square_boundary(-32.41, -63.24, 0.15)
         own.save()
         other = two_municipalities["other"]
-        other.latitude, other.longitude, other.coverage_radius_km = -31.42, -64.19, 20
+        other.latitude, other.longitude = -31.42, -64.19
+        other.boundary = square_boundary(-31.42, -64.19, 0.2)
         other.save()
         citizen = UserFactory.create()
         client = APIClient()

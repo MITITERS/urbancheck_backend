@@ -11,6 +11,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import square_boundary
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import UserFactory
 
@@ -31,7 +32,7 @@ pytestmark = pytest.mark.django_db
 def two_cities(active_municipality):
     """Dos municipios con cobertura chica, y sus reportes.
 
-    El municipio autouse queda dado de baja a propósito: su radio es enorme
+    El municipio autouse queda dado de baja a propósito: su límite es enorme
     —pensado para los tests que no miran cobertura— y cubriría cualquier punto
     del planeta, incluido el que estos tests necesitan que quede afuera.
     """
@@ -43,14 +44,14 @@ def two_cities(active_municipality):
         province="Córdoba",
         latitude=VILLA_MARIA[0],
         longitude=VILLA_MARIA[1],
-        coverage_radius_km=10,
+        boundary=square_boundary(*VILLA_MARIA, 0.1),
     )
     cordoba = MunicipalityFactory.create(
         city="Córdoba",
         province="Córdoba",
         latitude=CORDOBA[0],
         longitude=CORDOBA[1],
-        coverage_radius_km=10,
+        boundary=square_boundary(*CORDOBA, 0.1),
     )
     return {
         "villa_maria": villa_maria,

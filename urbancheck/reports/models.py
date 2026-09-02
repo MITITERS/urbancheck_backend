@@ -4,8 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.db import transaction
 
-from urbancheck.reports.geo import METERS_PER_KM
-from urbancheck.reports.geo import distance_expression
+from urbancheck.reports.geo import polygon_bounds
 
 
 class ReportQuerySet(models.QuerySet):
@@ -43,20 +42,29 @@ class ReportQuerySet(models.QuerySet):
 
         Los reportes **sin coordenadas** se quedan: no hay dónde ubicarlos, y su
         único vínculo con un municipio es el que ya tienen.
+
+        Filtra por el **recuadro** del polígono, no por el polígono exacto. Sin
+        PostGIS no hay forma de expresar punto-en-polígono en SQL, y traer todo
+        a Python para filtrarlo rompería la pereza del queryset, que después se
+        pagina. El recuadro alcanza de sobra para lo que esto hace: sacar de
+        encima reportes que están a decenas de kilómetros. Un reporte dentro del
+        recuadro pero fuera del límite se cuela, y es un caso que solo puede
+        existir entre los datos viejos —la creación de hoy rechaza cualquier
+        punto fuera del polígono—.
         """
         queryset = self.filter(municipality=municipality)
         if not municipality.has_coverage:
             return queryset
-        radius_meters = float(municipality.coverage_radius_km) * METERS_PER_KM
-        return queryset.annotate(
-            coverage_distance=distance_expression(
-                municipality.latitude,
-                municipality.longitude,
-            ),
-        ).filter(
+        min_lat, min_lng, max_lat, max_lng = polygon_bounds(municipality.boundary)
+        return queryset.filter(
             models.Q(latitude__isnull=True)
             | models.Q(longitude__isnull=True)
-            | models.Q(coverage_distance__lte=radius_meters),
+            | models.Q(
+                latitude__gte=min_lat,
+                latitude__lte=max_lat,
+                longitude__gte=min_lng,
+                longitude__lte=max_lng,
+            ),
         )
 
 

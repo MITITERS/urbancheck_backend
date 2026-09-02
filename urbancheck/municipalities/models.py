@@ -3,6 +3,9 @@ from __future__ import annotations
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+from urbancheck.reports.geo import MIN_BOUNDARY_POINTS
+from urbancheck.reports.geo import point_in_polygon
+
 
 class MunicipalityQuerySet(models.QuerySet):
     def active(self) -> MunicipalityQuerySet:
@@ -16,18 +19,24 @@ class Municipality(models.Model):
     Es la unidad de jurisdicción: usuarios municipales y reportes cuelgan de
     acá, y la restricción de acceso de US-034 se apoya en este vínculo.
 
-    Cada municipio declara un **área de cobertura**: un centro geográfico y un
-    radio en kilómetros. Un reporte nuevo se asocia al municipio que lo cubre,
-    de modo que la localidad de Córdoba no recibe los reportes de Villa María.
-    Es una aproximación circular deliberada: la resolución por polígono de
-    límites reales sigue diferida a una iteración futura.
+    Cada municipio declara un **área de cobertura**: el polígono de su límite,
+    trazado sobre el mapa. Un reporte nuevo se asocia al municipio que lo
+    contiene, de modo que la localidad de Córdoba no recibe los reportes de
+    Villa María.
+
+    Antes esto era un círculo —centro y radio—, y no alcanzaba. Dos ciudades
+    pegadas como Villa María y Villa Nueva están separadas por un río: cualquier
+    círculo lo bastante grande para cubrir una entera se come parte de la otra,
+    porque un círculo no puede saber que hay un límite en el medio. El polígono
+    sí sigue ese límite.
     """
 
     city = models.CharField(_("city"), max_length=120)
     province = models.CharField(_("province"), max_length=120)
 
-    # Centro del área de cobertura. Nulos solo en municipios cargados antes de
-    # que existiera la cobertura: sin centro no pueden recibir reportes nuevos.
+    # Centro geográfico de la ciudad, tomado del centroide oficial de Georef.
+    # Ya no delimita nada —de eso se encarga ``boundary``—: es dónde se abre el
+    # mapa al editar el municipio y al mirar sus reportes.
     latitude = models.DecimalField(
         _("latitude"),
         max_digits=9,
@@ -42,13 +51,14 @@ class Municipality(models.Model):
         null=True,
         blank=True,
     )
-    coverage_radius_km = models.DecimalField(
-        _("coverage radius (km)"),
-        max_digits=6,
-        decimal_places=2,
+    boundary = models.JSONField(
+        _("coverage boundary"),
         null=True,
         blank=True,
-        help_text=_("Distancia desde el centro dentro de la cual llegan los reportes."),
+        help_text=_(
+            "Polígono del límite del municipio, como lista de pares "
+            "[latitud, longitud]. Los reportes que caen adentro le llegan.",
+        ),
     )
 
     # Baja lógica: un municipio con reportes o usuarios no se puede borrar de la
@@ -77,9 +87,18 @@ class Municipality(models.Model):
 
     @property
     def has_coverage(self) -> bool:
-        """Si puede resolver reportes por cercanía."""
+        """Si tiene un área trazada contra la cual evaluar reportes.
+
+        Un municipio sin área no recibe reportes nuevos: es preferible eso a
+        adivinar un límite y quedarse con reclamos que no le corresponden.
+        """
         return (
-            self.latitude is not None
-            and self.longitude is not None
-            and self.coverage_radius_km is not None
+            isinstance(self.boundary, list)
+            and len(self.boundary) >= MIN_BOUNDARY_POINTS
         )
+
+    def contains(self, latitude: float, longitude: float) -> bool:
+        """Si el punto cae dentro del área de cobertura del municipio."""
+        if not self.has_coverage:
+            return False
+        return point_in_polygon(float(latitude), float(longitude), self.boundary)

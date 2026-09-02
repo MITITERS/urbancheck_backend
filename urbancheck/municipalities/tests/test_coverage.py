@@ -14,6 +14,7 @@ from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import square_boundary
 from urbancheck.reports.models import Report
 from urbancheck.users.tests.factories import UserFactory
 
@@ -24,7 +25,7 @@ pytestmark = pytest.mark.django_db
 def active_municipality(db):
     """Anula la municipalidad de fondo del conftest.
 
-    Ese fixture crea una con un radio enorme para que el resto de la suite no
+    Ese fixture crea una con un límite enorme para que el resto de la suite no
     tenga que pensar en coordenadas — justo lo contrario de lo que este módulo
     necesita, que es controlar el mapa de cobertura entero.
     """
@@ -40,20 +41,20 @@ IN_CORDOBA = (-31.4180, -64.1850)
 
 @pytest.fixture
 def two_cities():
-    """Dos municipios reales con radios que no se pisan."""
+    """Dos municipios lejanos, con límites que no se pisan."""
     villa_maria = MunicipalityFactory.create(
         city="Villa María",
         province="Córdoba",
         latitude=VILLA_MARIA[0],
         longitude=VILLA_MARIA[1],
-        coverage_radius_km=15,
+        boundary=square_boundary(*VILLA_MARIA, 0.15),
     )
     cordoba = MunicipalityFactory.create(
         city="Córdoba",
         province="Córdoba",
         latitude=CORDOBA_CAPITAL[0],
         longitude=CORDOBA_CAPITAL[1],
-        coverage_radius_km=20,
+        boundary=square_boundary(*CORDOBA_CAPITAL, 0.2),
     )
     return villa_maria, cordoba
 
@@ -66,7 +67,7 @@ class TestFindCovering:
         assert find_covering_municipality(*IN_CORDOBA) == cordoba
 
     def test_a_point_between_both_belongs_to_neither(self, two_cities):
-        """A mitad de camino no hay cobertura: 60 km de cada centro."""
+        """A mitad de camino no hay cobertura: fuera de los dos polígonos."""
         midpoint = (
             (VILLA_MARIA[0] + CORDOBA_CAPITAL[0]) / 2,
             (VILLA_MARIA[1] + CORDOBA_CAPITAL[1]) / 2,
@@ -75,17 +76,24 @@ class TestFindCovering:
         assert find_covering_municipality(*midpoint) is None
 
     def test_overlapping_areas_resolve_to_the_nearest_center(self):
+        """Dos límites superpuestos son un error de trazado, pero no cuelgan.
+
+        Con polígonos bien hechos esto no puede pasar: dos municipios no
+        comparten territorio. El desempate existe para que, si alguien traza mal
+        un límite, el resultado siga siendo el mismo en cada consulta y no
+        dependa del orden en que la base devolvió las filas.
+        """
         near = MunicipalityFactory.create(
             city="Cercana",
             latitude=VILLA_MARIA[0],
             longitude=VILLA_MARIA[1],
-            coverage_radius_km=50,
+            boundary=square_boundary(*VILLA_MARIA, 0.5),
         )
         MunicipalityFactory.create(
             city="Lejana",
             latitude=CORDOBA_CAPITAL[0],
             longitude=CORDOBA_CAPITAL[1],
-            coverage_radius_km=500,
+            boundary=square_boundary(*CORDOBA_CAPITAL, 5),
         )
 
         assert find_covering_municipality(*IN_VILLA_MARIA) == near
@@ -102,10 +110,78 @@ class TestFindCovering:
             city="Sin cobertura",
             latitude=None,
             longitude=None,
-            coverage_radius_km=None,
+            boundary=None,
         )
 
         assert find_covering_municipality(*IN_VILLA_MARIA) is None
+
+    def test_a_boundary_with_too_few_points_never_matches(self):
+        """Dos puntos son una línea: no encierran nada."""
+        MunicipalityFactory.create(
+            city="Línea",
+            boundary=[[-32.40, -63.25], [-32.42, -63.23]],
+        )
+
+        assert find_covering_municipality(*IN_VILLA_MARIA) is None
+
+
+# El río Ctalamochita separa Villa María de Villa Nueva. Los dos polígonos
+# comparten ese borde y no se superponen.
+RIVER_LATITUDE = -32.4250
+NORTH_OF_THE_RIVER = [
+    [-32.3800, -63.2900],
+    [-32.3800, -63.1950],
+    [RIVER_LATITUDE, -63.1950],
+    [RIVER_LATITUDE, -63.2900],
+]
+SOUTH_OF_THE_RIVER = [
+    [RIVER_LATITUDE, -63.2700],
+    [RIVER_LATITUDE, -63.1900],
+    [-32.4620, -63.1900],
+    [-32.4620, -63.2700],
+]
+
+
+class TestAdjacentCitiesSplitByARiver:
+    """El caso que obligó a pasar de círculos a polígonos.
+
+    Villa María y Villa Nueva están pegadas. Cualquier círculo lo bastante
+    grande para cubrir una entera se comía parte de la otra, porque un círculo
+    no puede saber que hay un río en el medio. Estos dos puntos están a poco más
+    de medio kilómetro y caen en municipios distintos: con radios no había forma
+    de expresarlo.
+    """
+
+    @pytest.fixture
+    def river_cities(self):
+        villa_maria = MunicipalityFactory.create(
+            city="Villa María",
+            province="Córdoba",
+            latitude=-32.4103,
+            longitude=-63.2400,
+            boundary=NORTH_OF_THE_RIVER,
+        )
+        villa_nueva = MunicipalityFactory.create(
+            city="Villa Nueva",
+            province="Córdoba",
+            latitude=-32.4400,
+            longitude=-63.2300,
+            boundary=SOUTH_OF_THE_RIVER,
+        )
+        return villa_maria, villa_nueva
+
+    def test_each_side_of_the_river_resolves_to_its_own_city(self, river_cities):
+        villa_maria, villa_nueva = river_cities
+
+        assert find_covering_municipality(-32.4230, -63.2400) == villa_maria
+        assert find_covering_municipality(-32.4280, -63.2400) == villa_nueva
+
+    def test_the_centre_of_the_neighbour_is_not_covered(self, river_cities):
+        """Lo que rompía con círculos: el centro del vecino quedaba adentro."""
+        villa_maria, villa_nueva = river_cities
+
+        assert villa_maria.contains(-32.4400, -63.2300) is False
+        assert villa_nueva.contains(-32.4103, -63.2400) is False
 
 
 class TestResolve:

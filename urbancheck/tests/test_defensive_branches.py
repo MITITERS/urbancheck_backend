@@ -124,12 +124,12 @@ class TestCoveredBy:
     """El filtro por cobertura con un municipio que todavía no la definió."""
 
     def test_without_coverage_every_report_of_the_municipality_is_kept(self):
-        # Un municipio sin centro ni radio no puede descartar nada por
-        # distancia: filtrar ahí dejaría su bandeja vacía.
+        # Un municipio sin límite trazado no puede descartar nada por
+        # ubicación: filtrar ahí dejaría su bandeja vacía.
         municipality = MunicipalityFactory.create(
             latitude=None,
             longitude=None,
-            coverage_radius_km=None,
+            boundary=None,
         )
         report = ReportFactory.create(municipality=municipality)
 
