@@ -18,6 +18,7 @@ from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.users.api.permissions import IsPanelUser
 
 from .mixins import JurisdictionScopedMixin
+from .pagination import PanelPagination
 from .panel_actions import ReportTransitionActionsMixin
 from .panel_filters import PanelReportFilterSet
 from .panel_serializers import PanelReportDetailSerializer
@@ -43,6 +44,7 @@ class PanelReportViewSet(
     """
 
     permission_classes = [IsAuthenticated, IsPanelUser]
+    pagination_class = PanelPagination
     filter_backends = [DjangoFilterBackend]
     filterset_class = PanelReportFilterSet
     # El conteo de likes viaja anotado, nunca calculado por fila, y es también
