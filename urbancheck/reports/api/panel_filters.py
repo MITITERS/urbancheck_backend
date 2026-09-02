@@ -14,9 +14,13 @@ el filtro se aplica sobre el queryset que ya devolvió
 ajeno recibe una lista vacía, no la del otro municipio.
 """
 
+from django.db.models import OuterRef
+from django.db.models import Subquery
 from django_filters import rest_framework as filters
 
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
 
 
 class CharInFilter(filters.BaseInFilter, filters.CharFilter):
@@ -30,6 +34,10 @@ class PanelReportFilterSet(filters.FilterSet):
     # jurisdicción: un agente ve lo que esa persona reportó **en su municipio**,
     # nunca su actividad en otro.
     author = filters.NumberFilter(field_name="author_id")
+    # Lo que decidió un validador, para el perfil que abre el panel desde su
+    # nombre en el detalle. Mismo criterio que ``author``: se aplica sobre el
+    # queryset ya acotado por jurisdicción.
+    validated_by = filters.NumberFilter(method="filter_validated_by")
     status = CharInFilter(field_name="status", lookup_expr="in")
     category = CharInFilter(field_name="category", lookup_expr="in")
     created_from = filters.DateFilter(field_name="created_at", lookup_expr="date__gte")
@@ -46,11 +54,36 @@ class PanelReportFilterSet(filters.FilterSet):
         ),
     )
 
+    def filter_validated_by(self, queryset, name, value):
+        """Reportes en los que esa persona salió a decidir en terreno.
+
+        Anota además **qué** decidió y cuándo, porque el estado actual del
+        reporte no lo dice: uno validado y cancelado después por el municipio
+        figura como *Cancelado*, igual que uno que el validador rechazó. Sin la
+        anotación, la lista del perfil mostraría lo segundo donde pasó lo
+        primero.
+
+        Se toma la decisión más vieja, por lo mismo que en el detalle: un
+        reporte reactivado vuelve a pasar por *Reportado*.
+        """
+        decisions = ReportStatusHistory.objects.filter(
+            report=OuterRef("pk"),
+            changed_by_id=value,
+            previous_status=Report.Status.PENDIENTE_VALIDACION,
+            status__in=list(VALIDATOR_DECISIONS),
+        ).order_by("created_at")
+
+        return queryset.annotate(
+            validation_status=Subquery(decisions.values("status")[:1]),
+            validation_decided_at=Subquery(decisions.values("created_at")[:1]),
+        ).filter(validation_status__isnull=False)
+
     class Meta:
         model = Report
         fields = [
             "municipality",
             "author",
+            "validated_by",
             "status",
             "category",
             "created_from",

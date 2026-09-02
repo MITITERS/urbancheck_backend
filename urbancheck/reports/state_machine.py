@@ -84,6 +84,20 @@ TRANSITIONS: tuple[Transition, ...] = (
     ),
 )
 
+#: Qué decidió el validador, según a dónde mandó el reporte desde
+#: *Pendiente de validación*. Son las dos únicas transiciones que ejecuta un
+#: validador, y las dos salen del mismo estado: por eso alcanza con el destino
+#: para nombrar la decisión.
+#:
+#: Se identifica por la transición completa y no por el estado de llegada.
+#: ``reactivar`` también deja el reporte en *Reportado* y ``cancelar`` también
+#: lo deja en *Cancelado*, pero las dos las ejecuta un agente desde el panel:
+#: mirar solo el destino haría pasar a ese agente por validador.
+VALIDATOR_DECISIONS: dict[str, str] = {
+    Report.Status.REPORTADO: "validado",
+    Report.Status.CANCELADO: "rechazado",
+}
+
 #: Estados sin transiciones de salida.
 FINAL_STATUSES = frozenset({Report.Status.RESUELTO, Report.Status.CANCELADO})
 
