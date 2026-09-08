@@ -16,3 +16,7 @@ DJANGO_ALLOWED_HOSTS=*
 # Link de recuperación de contraseña (dev): apunta a la página web de reset
 # en la IP/LAN del backend para que abra en el navegador del celular.
 DJANGO_ACCOUNT_RESET_PASSWORD_URL=http://192.168.0.116:8000/accounts/password/reset/key/{key}/
+# Municipalidad a la que se asocian los reportes nuevos (US-034).
+# El seed de demo carga dos municipios para que una fuga de jurisdicción
+# se vea en desarrollo; con más de uno, esta variable deja de ser opcional.
+DJANGO_ACTIVE_MUNICIPALITY_ID=1

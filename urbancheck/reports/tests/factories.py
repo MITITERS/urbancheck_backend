@@ -4,6 +4,7 @@ import factory
 from factory.django import DjangoModelFactory
 from factory.django import ImageField
 
+from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
@@ -13,6 +14,7 @@ from urbancheck.users.tests.factories import UserFactory
 
 class ReportFactory(DjangoModelFactory[Report]):
     author = factory.SubFactory(UserFactory)
+    municipality = factory.SubFactory(MunicipalityFactory)
     photo = ImageField(filename="report.jpg")
     description = factory.Faker("sentence", nb_words=10)
     category = Report.Category.BACHE

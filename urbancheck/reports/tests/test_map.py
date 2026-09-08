@@ -41,6 +41,8 @@ class TestReportMap:
         marker = res.data["results"][0]
         assert set(marker) == {
             "id",
+            # El popup lo nombra por su número de municipio, no por el id.
+            "number",
             "photo",
             "category",
             "status",

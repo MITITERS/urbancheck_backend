@@ -17,6 +17,10 @@ class NotificationSerializer(serializers.ModelSerializer):
             "actor",
             "report_id",
             "message",
+            # Detalle del cambio de estado; vacío en los avisos sociales.
+            "previous_status",
+            "new_status",
+            "reason",
             "is_read",
             "created_at",
         ]

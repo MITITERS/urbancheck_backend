@@ -241,3 +241,53 @@ class TestComments:
             format="json",
         )
         assert res.status_code in (401, 403)
+
+
+@pytest.mark.django_db
+class TestGpsPrecision:
+    """El GPS del teléfono manda más decimales de los que guardamos.
+
+    Antes esto rechazaba el reporte con «no puede haber más de 9 dígitos en
+    total», un error incomprensible sobre un dato que el vecino no escribió.
+    """
+
+    def test_a_real_gps_reading_is_accepted_and_rounded(self):
+        author = UserFactory.create()
+        client = APIClient()
+        client.force_authenticate(author)
+
+        response = client.post(
+            "/api/reports/",
+            {
+                "description": "Bache con GPS de alta precisión",
+                "category": Report.Category.BACHE,
+                "latitude": "-32.4103142822017",
+                "longitude": "-63.2400933841481",
+                "photo": make_image_file(),
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 201
+        report = Report.objects.get(pk=response.data["id"])
+        assert str(report.latitude) == "-32.410314"
+        assert str(report.longitude) == "-63.240093"
+
+    def test_a_coordinate_off_the_planet_is_still_rejected(self):
+        client = APIClient()
+        client.force_authenticate(UserFactory.create())
+
+        response = client.post(
+            "/api/reports/",
+            {
+                "description": "Bache en Marte",
+                "category": Report.Category.BACHE,
+                "latitude": "120.0",
+                "longitude": "-63.24",
+                "photo": make_image_file(),
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 400
+        assert "latitude" in response.data

@@ -12,6 +12,9 @@ from rest_framework.authtoken.views import obtain_auth_token
 from config.deeplink import android_assetlinks
 from config.deeplink import apple_app_site_association
 from config.deeplink import reset_password_web_fallback
+from urbancheck.municipalities.api.geo_views import LocalityListView
+from urbancheck.municipalities.api.geo_views import ProvinceListView
+from urbancheck.notifications.api.preferences import NotificationPreferenceView
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -45,6 +48,17 @@ urlpatterns += [
     path("api/", include("config.api_router")),
     # DRF auth token
     path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
+    path(
+        "api/notification-preferences/",
+        NotificationPreferenceView.as_view(),
+        name="notification-preferences",
+    ),
+    path("api/geo/provinces/", ProvinceListView.as_view(), name="geo-provinces"),
+    path(
+        "api/geo/provinces/<str:province_id>/localities/",
+        LocalityListView.as_view(),
+        name="geo-localities",
+    ),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path(
         "api/docs/",

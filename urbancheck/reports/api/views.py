@@ -1,3 +1,5 @@
+from functools import cached_property
+
 from django.db.models import Count
 from django.db.models import Exists
 from django.db.models import OuterRef
@@ -5,6 +7,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ValidationError
 from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import DestroyModelMixin
 from rest_framework.mixins import ListModelMixin
@@ -16,7 +19,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.municipalities.api.serializers import MunicipalitySerializer
+from urbancheck.municipalities.services import OutOfCoverageError
+from urbancheck.municipalities.services import find_covering_municipality
+from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
+from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.geocoding import geocode_one
 from urbancheck.reports.geocoding import reverse_geocode
 from urbancheck.reports.geocoding import search_addresses
@@ -26,7 +34,9 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 
 from .filters import apply_report_filters
+from .permissions import CanDeleteComment
 from .permissions import IsAuthorOrReadOnly
+from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
 from .serializers import ReportCreateSerializer
 from .serializers import ReportDetailSerializer
@@ -34,15 +44,16 @@ from .serializers import ReportListSerializer
 from .serializers import ReportMapSerializer
 from .serializers import ReportUpdateSerializer
 
-# Estados que no se dibujan en el mapa: el reporte ya no es un problema activo.
-INACTIVE_MAP_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
+# Estados que dejan de ser visibles en el feed y en el mapa público: el reporte
+# ya no es un problema activo (US-013). El autor sigue viéndolos en "mis
+# reportes" y en el detalle, que es a donde lo lleva la notificación del cambio.
+INACTIVE_PUBLIC_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
+INACTIVE_MAP_STATUSES = INACTIVE_PUBLIC_STATUSES
 
-EDIT_BLOCKED_MESSAGE = (
-    "Este reporte ya está siendo gestionado por el municipio y no puede modificarse."
-)
-DELETE_BLOCKED_MESSAGE = (
-    "Este reporte ya está siendo gestionado por el municipio y no puede eliminarse."
-)
+# Todo estado distinto de PENDIENTE_VALIDACION se alcanza pasando por un
+# validador —validando o rechazando—, así que el texto vale para todos.
+EDIT_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede modificarse."
+DELETE_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede eliminarse."
 
 
 class ReportViewSet(
@@ -57,15 +68,68 @@ class ReportViewSet(
     parser_classes = [MultiPartParser, JSONParser]
 
     def get_permissions(self):
-        """La restricción de autoría aplica solo a editar y borrar.
+        """Permisos por acción: autoría para editar/borrar, rol para participar.
 
-        No puede vivir en ``permission_classes`` de la clase: ``like`` y
-        ``comments`` también usan ``get_object()`` con métodos no seguros sobre
-        reportes ajenos, que es exactamente lo que deben poder hacer.
+        La restricción de autoría no puede vivir en ``permission_classes`` de
+        la clase: ``like`` y ``comments`` también usan ``get_object()`` con
+        métodos no seguros sobre reportes ajenos, que es exactamente lo que
+        debe poder hacer un vecino.
         """
         if self.action in {"update", "partial_update", "destroy"}:
             return [IsAuthenticated(), IsAuthorOrReadOnly()]
+        if self._is_citizen_participation():
+            return [IsAuthenticated(), ParticipatesAsCitizen()]
         return [IsAuthenticated()]
+
+    def _is_citizen_participation(self) -> bool:
+        """Si la petición es un aporte de vecino: reportar, comentar o gustar.
+
+        ``like`` y ``comments`` atienden más de un método bajo la misma acción,
+        así que no alcanza con mirar ``self.action``. Solo se restringe el alta:
+
+        - ``GET /comments/`` es lectura, y el personal municipal tiene que poder
+          leer lo que comentan los vecinos sobre lo que va a resolver.
+        - ``DELETE /like/`` deshace. Bloquearlo dejaría trabado un me gusta
+          anterior a esta regla, sin forma de sacarlo.
+        """
+        if self.action == "create":
+            return True
+        return self.action in {"like", "comments"} and self.request.method == "POST"
+
+    def _scoping_origin(self) -> tuple[float, float] | None:
+        """Ubicación desde la que el cliente pide ver los reportes.
+
+        La app móvil manda la posición del vecino para que el feed y el mapa
+        muestren únicamente lo que pasa en el municipio donde está parado. Solo
+        acota la lectura pública: "mis reportes" es del autor y lo sigue viendo
+        esté donde esté, y el detalle de un reporte tampoco depende de dónde se
+        abra.
+
+        Sin coordenadas no se acota nada, que es el comportamiento anterior: un
+        cliente viejo sigue funcionando igual.
+        """
+        if self.action not in {"list", "map"} or self._is_own_listing():
+            return None
+        return parse_coordinates(self.request.query_params)
+
+    @cached_property
+    def covering_municipality(self):
+        """Municipalidad cuyo radio contiene al vecino; ``None`` si ninguna.
+
+        Es la misma resolución que decide la jurisdicción de un reporte nuevo,
+        a propósito: leer y escribir tienen que coincidir sobre qué municipio
+        cubre un lugar, o el vecino reportaría un bache que después no ve.
+
+        Memoizada porque la miran el queryset y la respuesta, y la vista dura lo
+        que dura la petición.
+        """
+        origin = self._scoping_origin()
+        if origin is None:
+            return None
+        return find_covering_municipality(*origin)
+
+    def _is_own_listing(self) -> bool:
+        return self.request.query_params.get("mine") == "true"
 
     def get_queryset(self):
         user = self.request.user
@@ -78,9 +142,57 @@ class ReportViewSet(
             )
             .order_by("-created_at")
         )
-        if self.request.query_params.get("mine") == "true":
+        # El validador solo ve su jurisdicción, en todas las acciones: pedir por
+        # id un reporte de otro municipio devuelve 404 porque no existe para él.
+        if user.sees_only_own_municipality:
+            qs = qs.for_user(user)
+
+        if self._is_own_listing():
             qs = qs.filter(author=user)
+        elif self.action in {"list", "map"}:
+            qs = qs.exclude(status__in=INACTIVE_PUBLIC_STATUSES)
+            if self._scoping_origin() is not None:
+                # Fuera de toda cobertura no hay municipio al que mirar, y el
+                # feed queda vacío. Se dice explícito y no con
+                # ``filter(municipality=None)``: eso significaría "los reportes
+                # sin municipio", que es otra cosa.
+                municipality = self.covering_municipality
+                qs = qs.covered_by(municipality) if municipality else qs.none()
         return apply_report_filters(qs, self.request.query_params, requesting_user=user)
+
+    def _coverage_payload(self) -> dict | None:
+        """Cobertura resuelta, o ``None`` si el cliente no mandó ubicación.
+
+        Sin este dato el cliente no puede distinguir dos situaciones que se
+        parecen —ambas llegan con cero reportes— y que se le explican al vecino
+        de forma muy distinta: que todavía no haya reportes en su municipio, o
+        que esté fuera del área de toda municipalidad adherida.
+
+        La usan el feed y el mapa: las dos pantallas se acotan igual, así que
+        tienen que poder explicar igual por qué vienen vacías.
+        """
+        if self._scoping_origin() is None:
+            return None
+        municipality = self.covering_municipality
+        return {
+            "in_coverage": municipality is not None,
+            "municipality": (
+                MunicipalitySerializer(
+                    municipality,
+                    context=self.get_serializer_context(),
+                ).data
+                if municipality is not None
+                else None
+            ),
+        }
+
+    def list(self, request, *args, **kwargs):
+        """Suma al feed la cobertura resuelta, cuando el cliente mandó ubicación."""
+        response = super().list(request, *args, **kwargs)
+        coverage = self._coverage_payload()
+        if coverage is not None:
+            response.data["coverage"] = coverage
+        return response
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -117,7 +229,20 @@ class ReportViewSet(
                 serializer.validated_data["longitude"],
             )
 
-        report = serializer.save(author=self.request.user, **extra)
+        # US-034: la jurisdicción se resuelve en el servidor por área de
+        # cobertura. Si el cliente mandó una municipalidad, se ignora.
+        latitude = extra.get("latitude", serializer.validated_data.get("latitude"))
+        longitude = extra.get("longitude", serializer.validated_data.get("longitude"))
+        try:
+            municipality = resolve_municipality_for(latitude, longitude)
+        except OutOfCoverageError as error:
+            raise ValidationError({"location": error.message}) from error
+
+        report = serializer.save(
+            author=self.request.user,
+            municipality=municipality,
+            **extra,
+        )
         ReportStatusHistory.objects.create(
             report=report,
             status=Report.Status.PENDIENTE_VALIDACION,
@@ -149,7 +274,8 @@ class ReportViewSet(
 
         Sin paginar y con payload mínimo: el mapa necesita todos los marcadores de
         una, no una página. Acepta los mismos filtros que el feed (``category``,
-        ``status``, ``search``).
+        ``status``, ``search``) y, como él, se acota al municipio que cubre la
+        ubicación del vecino cuando esta viaja en ``latitude``/``longitude``.
         """
         qs = (
             self.get_queryset()
@@ -157,7 +283,11 @@ class ReportViewSet(
             .exclude(status__in=INACTIVE_MAP_STATUSES)
         )
         serializer = ReportMapSerializer(qs, many=True, context={"request": request})
-        return Response({"results": serializer.data})
+        payload = {"results": serializer.data}
+        coverage = self._coverage_payload()
+        if coverage is not None:
+            payload["coverage"] = coverage
+        return Response(payload)
 
     @action(detail=False, methods=["get"])
     def geocode(self, request):
@@ -211,12 +341,15 @@ class ReportViewSet(
 
 
 class CommentViewSet(DestroyModelMixin, GenericViewSet):
-    """Borrado de comentarios propios (US-009).
+    """Borrado de comentarios (US-009).
+
+    Lo puede borrar su autor —uno se arrepiente de lo que escribió— o el autor
+    del reporte, que modera lo que queda colgado de su publicación.
 
     Vive aparte del ReportViewSet porque el recurso se identifica por su propio id
     (``DELETE /api/comments/{id}/``) y no depende del reporte contenedor.
     """
 
-    permission_classes = [IsAuthenticated, IsAuthorOrReadOnly]
+    permission_classes = [IsAuthenticated, CanDeleteComment]
     serializer_class = CommentSerializer
     queryset = Comment.objects.select_related("author", "report")

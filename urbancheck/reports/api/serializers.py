@@ -1,12 +1,12 @@
 from rest_framework import serializers
 
+from urbancheck.common.fields import LatitudeField
+from urbancheck.common.fields import LongitudeField
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.users.models import User
-
-EMPTY_DESCRIPTION_MESSAGE = "La descripción no puede quedar vacía."
 
 
 class AuthorSerializer(serializers.ModelSerializer):
@@ -26,16 +26,29 @@ class StatusHistorySerializer(serializers.ModelSerializer):
 class CommentSerializer(serializers.ModelSerializer):
     author = AuthorSerializer(read_only=True)
     is_mine = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
 
     class Meta:
         model = Comment
-        fields = ["id", "author", "text", "created_at", "is_mine"]
+        fields = ["id", "author", "text", "created_at", "is_mine", "can_delete"]
         read_only_fields = ["id", "author", "created_at"]
 
     def get_is_mine(self, obj) -> bool:
-        """Permite al cliente mostrar la opción Eliminar solo en los propios."""
+        """Si lo escribió quien está mirando: sirve para distinguirlo a la vista."""
         request = self.context.get("request")
         return bool(request and obj.author_id == request.user.id)
+
+    def get_can_delete(self, obj) -> bool:
+        """Si quien mira puede borrarlo: lo escribió, o es su reporte.
+
+        Es el espejo de ``CanDeleteComment``, igual que ``can_edit`` lo es del
+        permiso de edición del reporte: el cliente muestra el botón según esto
+        en vez de replicar la regla.
+        """
+        request = self.context.get("request")
+        if request is None:
+            return False
+        return request.user.id in {obj.author_id, obj.report.author_id}
 
 
 class ReportListSerializer(serializers.ModelSerializer):
@@ -48,6 +61,8 @@ class ReportListSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "description",
             "category",
@@ -115,6 +130,8 @@ class ReportMapSerializer(serializers.ModelSerializer):
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "category",
             "status",
@@ -126,10 +143,17 @@ class ReportMapSerializer(serializers.ModelSerializer):
 
 
 class ReportCreateSerializer(serializers.ModelSerializer):
+    # El GPS del teléfono manda trece decimales; se redondean en vez de
+    # rechazar el reporte con un error de precisión que el vecino no entiende.
+    latitude = LatitudeField(required=False, allow_null=True)
+    longitude = LongitudeField(required=False, allow_null=True)
+
     class Meta:
         model = Report
         fields = [
             "id",
+            # Número de cara al usuario, correlativo dentro del municipio.
+            "number",
             "photo",
             "description",
             "category",
@@ -137,11 +161,12 @@ class ReportCreateSerializer(serializers.ModelSerializer):
             "longitude",
             "address",
         ]
-        read_only_fields = ["id"]
+        # ``number`` lo asigna el modelo al guardar; el cliente no lo propone.
+        read_only_fields = ["id", "number"]
 
     def validate(self, attrs):
-        if not attrs.get("photo"):
-            raise serializers.ValidationError({"photo": "La foto es obligatoria."})
+        # La foto no se comprueba acá: es ``required=True``, así que DRF ya la
+        # rechazó a nivel de campo antes de llegar a este método.
         has_coords = attrs.get("latitude") is not None and attrs.get("longitude") is not None
         has_address = bool(attrs.get("address", "").strip())
         if not has_coords and not has_address:
@@ -169,7 +194,6 @@ class ReportUpdateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "edited_at"]
 
-    def validate_description(self, value):
-        if not value.strip():
-            raise serializers.ValidationError(EMPTY_DESCRIPTION_MESSAGE)
-        return value
+    # Una descripción en blanco —vacía o de solo espacios— la rechaza DRF: el
+    # ``CharField`` recorta los espacios antes de validar y ``allow_blank`` es
+    # False, así que "   " llega como "" y salta el error estándar.

@@ -13,8 +13,11 @@ from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import UserFactory
 
-# Estados en los que el municipio ya tomó el reporte: edición y borrado bloqueados.
+# Estados en los que el reporte ya pasó por un validador: edición y borrado
+# bloqueados. ``REPORTADO`` es el primero de la lista, y el que más importa: es
+# el que se alcanza apenas un validador confirma el reclamo en terreno.
 LOCKED_STATUSES = [
+    Report.Status.REPORTADO,
     Report.Status.EN_PROCESO,
     Report.Status.RESUELTO,
     Report.Status.CANCELADO,
@@ -54,7 +57,13 @@ class TestReportUpdate:
         assert report.description == "Descripción corregida"
         assert report.category == Report.Category.BASURA
 
-    def test_author_can_edit_reported_report(self, auth_client):
+    def test_author_cannot_edit_once_validated(self, auth_client):
+        """El caso que motivó la regla: validado en terreno, ya no se toca.
+
+        Está aparte de ``test_cannot_edit_when_in_management`` —que lo cubre por
+        parametrización— porque es el único estado que cambió de lado, y quedar
+        explícito lo vuelve difícil de revertir sin querer.
+        """
         client, user = auth_client
         report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
         res = client.patch(
@@ -62,11 +71,15 @@ class TestReportUpdate:
             data={"description": "Otra descripción"},
             format="json",
         )
-        assert res.status_code == 200
+        assert res.status_code == 403
+        report.refresh_from_db()
+        assert report.description != "Otra descripción"
 
     def test_edit_records_edited_at(self, auth_client):
         client, user = auth_client
-        report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         assert report.edited_at is None
         res = client.patch(
             f"/api/reports/{report.id}/",
@@ -80,7 +93,9 @@ class TestReportUpdate:
 
     def test_can_replace_photo(self, auth_client):
         client, user = auth_client
-        report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         original = report.photo.name
         res = client.patch(
             f"/api/reports/{report.id}/",
@@ -106,7 +121,7 @@ class TestReportUpdate:
 
     def test_other_user_cannot_edit(self, auth_client):
         client, _ = auth_client
-        report = ReportFactory.create(status=Report.Status.REPORTADO)
+        report = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
         res = client.patch(
             f"/api/reports/{report.id}/",
             data={"description": "No debería poder"},
@@ -116,7 +131,9 @@ class TestReportUpdate:
 
     def test_empty_description_rejected(self, auth_client):
         client, user = auth_client
-        report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         res = client.patch(
             f"/api/reports/{report.id}/",
             data={"description": "   "},
@@ -126,9 +143,11 @@ class TestReportUpdate:
 
     def test_detail_exposes_can_edit(self, auth_client):
         client, user = auth_client
-        own_editable = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        own_editable = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         own_locked = ReportFactory.create(author=user, status=Report.Status.EN_PROCESO)
-        someone_else = ReportFactory.create(status=Report.Status.REPORTADO)
+        someone_else = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
 
         assert client.get(f"/api/reports/{own_editable.id}/").data["can_edit"] is True
         assert client.get(f"/api/reports/{own_locked.id}/").data["can_edit"] is False
@@ -137,16 +156,20 @@ class TestReportUpdate:
 
 @pytest.mark.django_db
 class TestReportDelete:
-    def test_author_can_delete_reported(self, auth_client):
+    def test_author_can_delete_pending(self, auth_client):
         client, user = auth_client
-        report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         res = client.delete(f"/api/reports/{report.id}/")
         assert res.status_code == 204
         assert not Report.objects.filter(id=report.id).exists()
 
     def test_deleted_report_disappears_from_feed_and_map(self, auth_client):
         client, user = auth_client
-        report = ReportFactory.create(author=user, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=user, status=Report.Status.PENDIENTE_VALIDACION
+        )
         client.delete(f"/api/reports/{report.id}/")
 
         feed = client.get("/api/reports/")
@@ -165,7 +188,7 @@ class TestReportDelete:
 
     def test_other_user_cannot_delete(self, auth_client):
         client, _ = auth_client
-        report = ReportFactory.create(status=Report.Status.REPORTADO)
+        report = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
         res = client.delete(f"/api/reports/{report.id}/")
         assert res.status_code == 403
         assert Report.objects.filter(id=report.id).exists()

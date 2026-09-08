@@ -49,12 +49,12 @@ class TestReportUpdateSerializer:
         assert "description" in serializer.errors
 
     def test_rejects_a_whitespace_only_description(self):
-        """Se rechaza, aunque el mensaje lo pone DRF y no ``validate_description``.
+        """Se rechaza, y el mensaje lo pone DRF.
 
         ``CharField`` recorta los espacios antes de validar, así que "   " llega
-        como "" y salta el error ``blank`` estándar. ``EMPTY_DESCRIPTION_MESSAGE``
-        queda por eso sin usarse (ver OBS-02 del informe): no afecta al usuario,
-        que igual recibe un 400, pero el texto propio nunca se muestra.
+        como "" y salta el error ``blank`` estándar. El serializer tuvo un
+        ``validate_description`` propio para esto: era inalcanzable por la misma
+        razón y se retiró en el Sprint 3.
         """
         report = ReportFactory.create()
         serializer = ReportUpdateSerializer(
@@ -108,13 +108,15 @@ class TestReportUpdateSerializer:
 class TestCanEdit:
     def test_true_for_the_author_of_an_editable_report(self):
         author = UserFactory.create()
-        report = ReportFactory.create(author=author, status=Report.Status.REPORTADO)
+        report = ReportFactory.create(
+            author=author, status=Report.Status.PENDIENTE_VALIDACION
+        )
         data = ReportDetailSerializer(
             report, context={"request": _request(author)},
         ).data
         assert data["can_edit"] is True
 
-    def test_false_for_the_author_once_it_is_in_management(self):
+    def test_false_for_the_author_once_it_is_validated(self):
         author = UserFactory.create()
         report = ReportFactory.create(author=author, status=Report.Status.EN_PROCESO)
         data = ReportDetailSerializer(
@@ -149,6 +151,8 @@ class TestReportMapSerializer:
         ).data
         assert set(data) == {
             "id",
+            # El popup lo nombra por su número de municipio, no por el id.
+            "number",
             "photo",
             "category",
             "status",

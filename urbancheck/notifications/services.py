@@ -5,6 +5,8 @@ explícito y sea fácil de testear desde las vistas que lo provocan.
 """
 
 from .models import Notification
+from .push import deliver_push
+from .templates_status import message_for
 
 # Fragmento del comentario que se incluye en el aviso, para que el usuario sepa
 # de qué se trata sin abrir el reporte.
@@ -26,24 +28,45 @@ def notify_new_comment(comment) -> Notification | None:
         preview = preview[:_PREVIEW_LENGTH].rstrip() + "…"
 
     author_name = comment.author.name or comment.author.email
-    return Notification.objects.create(
+    notification = Notification.objects.create(
         recipient=report.author,
         actor=comment.author,
         kind=Notification.Kind.NUEVO_COMENTARIO,
         report=report,
         message=f"{author_name} comentó tu reporte: “{preview}”",
     )
+    deliver_push(notification)
+    return notification
 
 
-def notify_status_change(report, changed_by=None) -> Notification | None:
-    """Avisa al autor que su reporte cambió de estado."""
+def notify_status_change(
+    report,
+    *,
+    previous_status: str,
+    new_status: str,
+    changed_by=None,
+    reason: str = "",
+) -> Notification | None:
+    """Avisa al autor del reporte que su reclamo cambió de estado (US-011).
+
+    El destinatario es siempre y únicamente el autor. Si fue él mismo quien
+    provocó el cambio, no hay nada que avisarle.
+
+    El push se intenta después de persistir y sin propagar errores: un push
+    caído no puede revertir ni bloquear la transición.
+    """
     if changed_by is not None and report.author_id == changed_by.id:
         return None
-    label = report.get_status_display()
-    return Notification.objects.create(
+
+    notification = Notification.objects.create(
         recipient=report.author,
         actor=changed_by,
         kind=Notification.Kind.CAMBIO_ESTADO,
         report=report,
-        message=f"Tu reporte pasó al estado “{label}”.",
+        message=message_for(previous_status, new_status, reason),
+        previous_status=previous_status,
+        new_status=new_status,
+        reason=reason,
     )
+    deliver_push(notification)
+    return notification

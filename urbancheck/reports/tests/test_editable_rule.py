@@ -13,8 +13,10 @@ import pytest
 from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import ReportFactory
 
-EDITABLE = [Report.Status.PENDIENTE_VALIDACION, Report.Status.REPORTADO]
+EDITABLE = [Report.Status.PENDIENTE_VALIDACION]
 BLOCKED = [
+    # Validado en terreno: a partir de acá el autor ya no lo toca.
+    Report.Status.REPORTADO,
     Report.Status.EN_PROCESO,
     Report.Status.RESUELTO,
     Report.Status.CANCELADO,
@@ -25,12 +27,12 @@ BLOCKED = [
 @pytest.mark.django_db
 class TestIsEditable:
     @pytest.mark.parametrize("status", EDITABLE)
-    def test_editable_before_management(self, status):
+    def test_editable_before_validation(self, status):
         report = ReportFactory.create(status=status)
         assert report.is_editable is True
 
     @pytest.mark.parametrize("status", BLOCKED)
-    def test_not_editable_once_in_management(self, status):
+    def test_not_editable_once_validated(self, status):
         report = ReportFactory.create(status=status)
         assert report.is_editable is False
 
