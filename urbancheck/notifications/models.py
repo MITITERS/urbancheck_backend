@@ -14,6 +14,20 @@ class Notification(models.Model):
         NUEVO_COMENTARIO = "nuevo_comentario", "Nuevo comentario"
         CAMBIO_ESTADO = "cambio_estado", "Cambio de estado"
         NUEVO_LIKE = "nuevo_like", "Nuevo like"
+        # La comunicación institucional del municipio sobre un reporte
+        # (US-024). Es un tipo propio y no un cambio de estado porque no lo es:
+        # el reporte sigue donde estaba y lo que cambió es que el municipio se
+        # pronunció.
+        RESPUESTA_OFICIAL = "respuesta_oficial", "Respuesta oficial"
+        # Aviso previo al archivado automático (US-031). Va siete días antes,
+        # para que el vecino tenga margen de conseguir la interacción que falta.
+        PROXIMO_ARCHIVADO = "proximo_archivado", "Reporte por archivarse"
+        # Aviso previo al vencimiento de la ventana de objeción (US-047).
+        PROXIMA_CONFIRMACION = "proxima_confirmacion", "Cierre por confirmarse"
+        # Le llega al agente de la jurisdicción y al operario que cerró cuando
+        # el ciudadano apela (US-048). Es el único aviso que **no** va al autor
+        # del reporte: acá el autor es quien lo dispara.
+        APELACION_CIERRE = "apelacion_cierre", "Cierre apelado"
 
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -39,8 +53,9 @@ class Notification(models.Model):
     message = models.CharField(max_length=255)
     # Detalle del cambio de estado (US-011). Vacío en los avisos sociales, que
     # no tienen transición asociada.
-    previous_status = models.CharField(max_length=30, blank=True, default="")
-    new_status = models.CharField(max_length=30, blank=True, default="")
+    # 40 por lo mismo que en ``Report.status``: el estado más largo mide 31.
+    previous_status = models.CharField(max_length=40, blank=True, default="")
+    new_status = models.CharField(max_length=40, blank=True, default="")
     reason = models.TextField(blank=True, default="")
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

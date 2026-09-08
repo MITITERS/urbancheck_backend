@@ -18,6 +18,9 @@ from .permissions import IsPlatformAdmin
 from .serializers import AdminValidatorCreateSerializer
 from .serializers import MunicipalAgentCreateSerializer
 from .serializers import MunicipalAgentSerializer
+from .serializers import OperatorCreateSerializer
+from .serializers import OperatorSerializer
+from .serializers import OperatorUpdateSerializer
 from .serializers import PublicUserSerializer
 from .serializers import UserSerializer
 from .serializers import ValidatorCreateSerializer
@@ -41,6 +44,16 @@ INACTIVE_MUNICIPALITY_MESSAGE = (
 )
 
 MUNICIPALITY_PARAM = "municipality"
+
+# Filtro del listado de operarios por área: ``?operational_area=<id>``. Es lo
+# que usa la ficha del área en el panel, donde los operarios se gestionan
+# dentro de su dependencia y no como una sección aparte.
+AREA_PARAM = "operational_area"
+
+NO_HARD_DELETE_OPERATOR_MESSAGE = (
+    "Una cuenta de operario no se elimina: se desactiva. Los cierres que "
+    "registró conservan su identidad en el historial de cada reporte."
+)
 
 
 def ensure_can_be_reactivated(user) -> None:
@@ -66,6 +79,19 @@ def filter_by_municipality(queryset, query_params):
     if not municipality or not municipality.isdigit():
         return queryset
     return queryset.filter(municipality_id=municipality)
+
+
+def filter_by_area(queryset, query_params):
+    """Acota por ``?operational_area=<id>``. Mismo criterio laxo que los demás.
+
+    No es un agujero en la jurisdicción: se aplica sobre el queryset que ya
+    devolvió el filtro por municipalidad, así que pedir un área ajena devuelve
+    una lista vacía y no la del otro municipio.
+    """
+    area = query_params.get(AREA_PARAM)
+    if not area or not area.isdigit():
+        return queryset
+    return queryset.filter(operational_area_id=area)
 
 
 def filter_by_state(queryset, query_params):
@@ -290,3 +316,111 @@ class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
 
     def _read_serializer(self, validator, request) -> ValidatorSerializer:
         return ValidatorSerializer(validator, context={"request": request})
+
+
+class OperatorViewSet(
+    CreateModelMixin,
+    ListModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    GenericViewSet,
+):
+    """Gestión de operarios, por el agente municipal (US-044) o por el admin.
+
+    Espejo de ``ValidatorViewSet`` —alta, listado, edición y baja lógica de una
+    cuenta de trabajo— con una diferencia: la municipalidad no se elige nunca,
+    ni siquiera el admin la elige. Se deriva del **área operativa**, que sí se
+    elige, y por eso el alta es una sola para los dos roles.
+
+    Un ciudadano, un validador u otro operario reciben ``403`` por
+    ``IsPanelUser``. Un operario de otra municipalidad, ``404``, porque el
+    queryset ya lo dejó afuera.
+    """
+
+    permission_classes = [IsAuthenticated, IsPanelUser]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = User.objects.filter(role=User.Role.OPERARIO)
+        if user.is_platform_admin:
+            qs = filter_by_municipality(qs, self.request.query_params)
+        else:
+            qs = qs.for_user(user)
+        qs = (
+            qs.select_related("municipality", "operational_area__municipality")
+            .with_closed_count()
+            .order_by("name", "email")
+        )
+        # Solo en el listado, por lo mismo que en validadores: activar y
+        # desactivar tienen que alcanzar a la cuenta esté del lado que esté.
+        if self.action == "list":
+            params = self.request.query_params
+            qs = filter_by_area(qs, params)
+            qs = filter_by_state(qs, params)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return OperatorCreateSerializer
+        if self.action in WRITE_ACTIONS:
+            return OperatorUpdateSerializer
+        return OperatorSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        operator = serializer.save()
+        # Se relee por el queryset anotado: ``closed_count`` viene de una
+        # anotación y sobre la instancia recién creada no existiría. DRF omite
+        # en silencio un campo read_only sin atributo, así que el bug no
+        # avisaría.
+        operator = self.get_queryset().get(pk=operator.pk)
+        return Response(
+            self._read_serializer(operator, request).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        """Devuelve la fila completa tras editar, para que el panel refresque."""
+        super().update(request, *args, **kwargs)
+        operator = self.get_queryset().get(pk=self.get_object().pk)
+        return Response(self._read_serializer(operator, request).data)
+
+    def destroy(self, request, *args, **kwargs):
+        """No se borra: se desactiva.
+
+        Se responde ``405`` y no ``403``: el método no existe para nadie. El
+        objeto se busca igual antes de contestar para que un operario de otra
+        jurisdicción siga respondiendo ``404``, que es lo que dice US-034.
+        """
+        self.get_object()
+        return Response(
+            {"detail": NO_HARD_DELETE_OPERATOR_MESSAGE},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        """Baja lógica: pierde el acceso a la app de inmediato.
+
+        No se borra el registro: los cierres que ejecutó conservan su identidad
+        en el historial de cada reporte.
+        """
+        return self._set_operator_active(request, active=False)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        """Reactiva al operario, si su municipalidad sigue en pie."""
+        return self._set_operator_active(request, active=True)
+
+    def _set_operator_active(self, request, *, active: bool) -> Response:
+        operator = self.get_object()
+        if active:
+            ensure_can_be_reactivated(operator)
+        operator.is_work_account_active = active
+        operator.save(update_fields=["is_work_account_active"])
+        operator = self.get_queryset().get(pk=operator.pk)
+        return Response(self._read_serializer(operator, request).data)
+
+    def _read_serializer(self, operator, request) -> OperatorSerializer:
+        return OperatorSerializer(operator, context={"request": request})

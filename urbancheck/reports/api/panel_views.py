@@ -13,8 +13,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.reports.models import Comment
+from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportAreaAssignment
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.models import ResolutionAppeal
+from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.users.api.permissions import IsPanelUser
 
 from .mixins import JurisdictionScopedMixin
@@ -50,15 +54,54 @@ class PanelReportViewSet(
     # El conteo de likes viaja anotado, nunca calculado por fila, y es también
     # lo que permite ordenar por validación colectiva en la base.
     queryset = (
-        Report.objects.select_related("author", "municipality")
+        Report.objects.select_related(
+            "author",
+            "municipality",
+            "operational_area__municipality",
+        )
         .prefetch_related(
             Prefetch("comments", queryset=Comment.objects.select_related("author")),
             Prefetch(
                 "status_history",
                 queryset=ReportStatusHistory.objects.select_related("changed_by"),
             ),
+            Prefetch(
+                "official_responses",
+                queryset=OfficialResponse.objects.select_related(
+                    "author",
+                    "municipality",
+                ),
+            ),
+            Prefetch(
+                "area_assignments",
+                queryset=ReportAreaAssignment.objects.select_related(
+                    "area",
+                    "previous_area",
+                    "assigned_by",
+                ),
+            ),
+            Prefetch(
+                "resolution_evidences",
+                queryset=ResolutionEvidence.objects.select_related(
+                    "operator",
+                    "operational_area",
+                ),
+            ),
+            Prefetch(
+                "resolution_appeals",
+                queryset=ResolutionAppeal.objects.select_related(
+                    "author",
+                    "evidence__operator",
+                    "evidence__operational_area",
+                ),
+            ),
         )
-        .annotate(like_count=Count("likes", distinct=True))
+        .annotate(
+            like_count=Count("likes", distinct=True),
+            # Alimenta el indicador de "sin respuesta oficial" del listado
+            # (US-024, escenario 13) sin traer el hilo por fila.
+            official_response_count=Count("official_responses", distinct=True),
+        )
         .order_by("-created_at")
     )
 

@@ -562,10 +562,291 @@ docker compose -f docker-compose.local.yml exec django /entrypoint \
     python manage.py seed_demo
 ```
 
-Crea dos municipalidades, un usuario de cada rol y reportes en los seis estados.
-Es idempotente. La segunda municipalidad existe para que una fuga de
-jurisdicción se vea durante el desarrollo y no recién en los tests; con más de
-una cargada, `DJANGO_ACTIVE_MUNICIPALITY_ID` deja de ser opcional.
+Crea dos municipalidades, un área operativa por municipio, un usuario de cada
+rol y reportes en los seis estados. Es idempotente. La segunda municipalidad
+existe para que una fuga de jurisdicción se vea durante el desarrollo y no
+recién en los tests; con más de una cargada,
+`DJANGO_ACTIVE_MUNICIPALITY_ID` deja de ser opcional.
+
+El área existe por el invariante de US-028: desde ese sprint un reporte *En
+proceso* sin área responsable no puede existir, así que el seed tampoco puede
+fabricar uno.
+
+## Decisiones del Sprint 4
+
+### Asignar el área **es** procesar el reporte (US-028)
+
+`/reports/{id}/process/` pasó a exigir `area_id`. No es un camino nuevo hacia
+*En proceso*: es el mismo de US-013, con el área como parámetro obligatorio.
+
+La exigencia vive en la tabla de transiciones —`Transition.requires_area`— y no
+en la vista, y eso es lo que la vuelve una garantía: `apply_transition()` la
+verifica antes de tocar nada, así que ningún camino —ni el panel, ni el shell,
+ni un endpoint futuro— puede dejar un reporte en gestión sin responsable
+operativo. El test `test_no_declared_transition_reaches_in_progress_without_an_area`
+lo comprueba recorriendo la tabla, no un endpoint.
+
+El cambio de estado y la asignación se escriben en la misma transacción, de
+modo que el estado intermedio ni siquiera existe un instante.
+
+**La reasignación va por otro lado.** `/reports/{id}/assign-area/` cambia el
+área de un reporte que ya está *En proceso* y **no** dispara ninguna
+transición: el reporte no se mueve de estado. Por eso tampoco puede usarse para
+desasignar —el área es obligatoria— ni para hacer entrar un reporte en gestión.
+
+`ReportStatusHistory` no servía para registrar una reasignación, justamente
+porque el estado no cambia. Se agregó `ReportAreaAssignment` —reporte, área
+anterior, área nueva, responsable y fecha— y es lo que alimenta el bloque de
+asignaciones del detalle del panel.
+
+### El área operativa se desactiva, no se borra (US-039)
+
+`OperationalArea` tiene unicidad **compuesta** sobre `(Lower(name),
+municipality)`: "Obras Públicas" existe en todos los municipios del país y dos
+municipalidades distintas tienen que poder registrarla, pero cargarla dos veces
+en la misma es duplicar la dependencia.
+
+No hay endpoint de borrado físico. `DELETE` existe solo para explicar por qué
+responde `405`: borrar un área con reportes asignados perdería la constancia de
+qué dependencia se hizo cargo de cada reclamo. Lo mismo en el admin de Django,
+que declara `has_delete_permission = False` — dejarlo abierto ahí sería abrir
+por atrás lo que la API cierra.
+
+El desplegable de asignación consume `?state=active`; el listado de gestión
+muestra las dos.
+
+### El operario es un rol nuevo con acceso mínimo (US-044 y US-045)
+
+`User.Role.OPERARIO` se suma a los roles existentes: no hay un modelo de usuario
+separado. La municipalidad **se deriva del área** y nunca se acepta del cliente,
+y `User.clean()` sostiene las tres reglas —un operario tiene área, ningún otro
+rol la tiene, y el área es de su propia municipalidad— para que ningún alta por
+shell o por admin pueda saltearlas.
+
+El circuito de invitación es el de US-035 sin cambios: contraseña temporal
+definida por quien da el alta y `must_change_password` hasta el primer ingreso.
+
+`User.can_work_as_operator` es la única verificación de acceso a la bandeja, y
+es espejo de `can_operate_panel` con una condición más: el área tiene que seguir
+activa. La contraseña temporal **no** entra ahí, por lo mismo que en el panel:
+el operario tiene que poder entrar justamente para cambiarla.
+
+**El alcance del rol se cierra también en el backend.** `ExcludesOperator`
+responde `403` en toda la superficie ciudadana —feed, mapa, detalle,
+comentarios, me gusta—: esconderlo solo en la navegación de la app dejaría los
+endpoints abiertos. La bandeja vive en `/api/operator/reports/` y resuelve el
+área desde el usuario autenticado; el área y la municipalidad nunca viajan como
+parámetro.
+
+Esa vista **no** hereda de `JurisdictionScopedMixin`: el recorte por área es más
+estrecho que el recorte por municipalidad y ya lo implica, así que aplicar los
+dos sería escribir la misma restricción dos veces.
+
+### El historial del operario se recorta por autoría, no por área (US-046)
+
+`/api/operator/reports/history/` devuelve los trabajos que **esta persona**
+cerró: es el equivalente de «Mis reportes» del vecino para una cuenta de
+trabajo. Va como acción propia y no como un filtro del listado para que la
+bandeja pueda seguir siendo exactamente el trabajo pendiente, sin un parámetro
+del cliente que la convierta en otra cosa.
+
+Es la **única** acción de esa vista que no se acota por el área actual, y es
+deliberado: `ResolutionEvidence.operational_area` guarda el área del momento del
+cierre justamente para que un traslado posterior no reescriba quién se hizo
+cargo (US-044, escenario 5), así que filtrar por el área de hoy le borraría del
+historial el trabajo que sí hizo. El recorte por autoría del cierre es más
+estrecho que el del área, no más ancho.
+
+El detalle acepta además lo que el operario cerró alguna vez, para que toda fila
+del historial se pueda abrir; **el cierre no**, que sigue acotado al área actual:
+haber cerrado un reporte una vez no habilita a volver a operarlo desde otra área.
+
+La pertenencia se resuelve con una **subconsulta** y no con un `filter()` sobre
+la relación inversa: un reporte reabierto por apelación y vuelto a cerrar tiene
+dos evidencias del mismo operario, y el `JOIN` lo devolvería duplicado con el
+contador del paginado mintiendo. El estado que se serializa es el **actual**: un
+cierre objetado volvió a *En proceso* (US-048) y tiene que verse así también en
+el historial de quien lo cerró.
+
+### La respuesta oficial es un hilo inmutable (US-024)
+
+`OfficialResponse` es una relación 1-N con el reporte, en orden cronológico
+ascendente. **No hay endpoints de actualización ni de borrado**, y esa ausencia
+es la garantía: una validación que impida editar es algo que después alguien
+puede relajar. Una corrección se publica como una respuesta nueva.
+
+Qué estados la habilitan lo declara `OFFICIAL_RESPONSE_STATUSES`, junto a la
+tabla de transiciones y no dentro de la vista: es una regla sobre el estado del
+reporte, y las reglas sobre el estado viven en un solo archivo.
+
+Hay **dos serializers** y no un campo condicional. Ante el ciudadano responde la
+municipalidad —nombre del municipio y fecha—; la identidad del agente se ve
+únicamente en el panel, con el mismo criterio de protección del personal que
+US-038 aplica al validador. Cuál se usa lo decide el endpoint, no una bandera
+que alguien puede olvidar.
+
+La notificación al autor cuelga del mismo mecanismo que el resto y no nombra al
+agente: pone al municipio como emisor y deja `actor` nulo.
+
+### Archivado por inactividad: la política vive en un módulo (US-031)
+
+`reports/archival.py` declara el plazo (180 días), qué cuenta como interacción
+(el máximo entre la creación, el último comentario y el último me gusta) y
+cuándo se avisa (7 días antes). El comando `archive_stale_reports` y la tarea de
+Celery son dos formas de dispararlo, no dos copias de la regla.
+
+```bash
+docker compose -f docker-compose.local.yml exec django /entrypoint \
+    python manage.py archive_stale_reports
+```
+
+Tres decisiones que valen la pena:
+
+- **El archivado es una transición como las demás.** Se agregó
+  `Actor.SYSTEM` y la operación `archivar_por_inactividad` a la tabla, así que
+  deja asiento en el historial —con `changed_by` nulo, que es como el historial
+  dice "esto lo hizo el sistema"— y dispara el mismo evento del que cuelgan las
+  notificaciones.
+- **`Like` ganó `created_at`.** Sin fecha no hay forma de medir "sin likes ni
+  comentarios". Los me gusta anteriores se fecharon en la migración con la
+  creación de su reporte, que es la única fecha que se sabe cierta y la más
+  conservadora: nunca adelanta el reloj.
+- **Primero los avisos, después los archivados.** Si la verificación no corre
+  por unos días, un reporte que cruza las dos ventanas en la misma corrida se
+  archiva en lugar de recibir un aviso que ya no sirve. `archival_warning_sent_at`
+  hace idempotente el aviso: la corrida diaria no lo repite siete veces.
+
+`Report.archived_at` va como campo y no se deduce del historial porque el
+listado de "mis reportes" lo muestra y ese listado no trae el historial:
+deducirlo ahí costaría una consulta por fila.
+
+## Decisiones del Sprint 5
+
+### Un estado nuevo, y `resolver` deja de existir (US-046)
+
+Se agregó **Resuelto pendiente de confirmación** entre *En proceso* y
+*Resuelto*, y la transición `resolver` del agente municipal **se eliminó de la
+tabla**: todo camino hacia *Resuelto* pasa ahora por el estado intermedio.
+
+El motivo es que quien ejecuta el trabajo pasó a ser quien lo declara terminado.
+Sin contraparte, el producto reproduciría adentro el mismo circuito sin
+rendición de cuentas que existe para combatir: la parte responsable del trabajo
+certificando su propio trabajo. La contraparte son los siete días de US-047 y la
+apelación de US-048.
+
+El agente sigue pudiendo cerrar el circuito, pero **confirmando** el cierre del
+operario y no en lugar de él: `confirmar_resolucion_municipal`, desde el estado
+intermedio y con su usuario en el historial.
+
+**Cambio incompatible:** `POST /panel/reports/{id}/resolve/` ya no existe. Lo
+reemplaza `POST /panel/reports/{id}/confirm-resolution/`, que sale de *Resuelto
+pendiente de confirmación*.
+
+### El origen de la transición es un campo, no una deducción (US-038)
+
+`ReportStatusHistory.origin` guarda **de dónde salió** cada transición, más allá
+de a qué estado llegó. Lo escribe `apply_transition` desde la tabla: quien
+invoca no lo elige, así que ninguna operación puede quedar asentada con un
+origen que no le corresponde.
+
+Existe porque la forma de una transición dejó de alcanzar para saber qué
+significa. Un reporte llega a *Reportado* porque un validador fue al lugar
+(US-036) o porque diez vecinos lo confirmaron (US-040); llega a *Resuelto* por
+silencio del autor o por decisión del agente. **El panel deducía la validación
+en terreno mirando el par de estados, y con US-040 empezó a reportar como
+validador a alguien que no existía** — el test que lo destapó está en
+`test_collective_validation.py::test_it_is_not_reported_as_a_field_validation`.
+
+La migración rellena el origen de los asientos anteriores a partir de las
+transiciones que existían hasta entonces; sin eso, el panel habría perdido la
+atribución de todo lo decidido hasta acá.
+
+### Las guardas viven en la tabla, no en la vista
+
+`Transition.guard` es una condición sobre el **reporte**, más allá de su estado.
+Hoy la usa una sola transición: `apelar` la tiene para el tope de una apelación
+por reporte.
+
+Va ahí y no en el endpoint porque un segundo endpoint que llamara a la misma
+transición se la saltearía. Se evalúa sobre la fila ya bloqueada, dentro de la
+transacción: entre la lectura y la evaluación puede entrar otra apelación.
+
+`closing_operation(report)` es la contracara: decide si el cierre del operario
+abre ventana de objeción o es definitivo. El segundo cierre —el que sigue a una
+apelación— va derecho a *Resuelto*, porque el autor ya gastó la única apelación
+que tiene y no habría a quién darle una ventana nueva.
+
+### Validación colectiva: dos conteos que no son el mismo (US-040)
+
+`Report.confirmation_count()` **no** es el contador público de me gusta de
+US-008. Descuenta dos grupos, por motivos distintos: al **autor**, que ya afirmó
+que el problema existe al reportarlo, y a las **cuentas de trabajo**, cuya
+confirmación se ejecuta yendo al lugar (US-036) y no por interacción social.
+
+Está en el modelo y no en la vista que evalúa el umbral porque el filtro tiene
+que ser uno solo: repetido en dos lugares, uno de los dos se olvidaría de
+excluir a alguien y el umbral se alcanzaría antes de lo debido.
+
+La evaluación es **sincrónica al persistir el me gusta**, con `select_for_update`
+sobre la fila del reporte: dos me gusta que cruzan el umbral a la vez producen
+una sola transición. Retirar me gusta después **no** revierte nada.
+
+**Riesgo asumido y documentado.** El mecanismo es falseable con cuentas creadas
+al efecto. Los controles son de *mitigación*, no de prevención: un me gusta por
+usuario, exclusión del autor, exclusión de las cuentas de trabajo y umbral
+parametrizable (`DJANGO_COLLECTIVE_VALIDATION_THRESHOLD`, default 10). La
+detección de cuentas fraudulentas queda fuera del alcance del proyecto.
+
+### El plazo de objeción se configura en minutos (US-047)
+
+`DJANGO_RESOLUTION_OBJECTION_MINUTES` (default `10080`, o sea siete días) y
+`DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES` (default `1440`).
+
+**En minutos y no en días** a propósito: la historia pide que la demostración en
+la review pueda bajar el plazo a un par de minutos sin tocar código, y un
+parámetro expresado en días no lo permite.
+
+```bash
+docker compose -f docker-compose.local.yml exec django /entrypoint \
+    python manage.py confirm_resolved_reports
+```
+
+La tarea de Celery corre **cada quince minutos** y no una vez al día, por lo
+mismo: con una corrida diaria la confirmación automática no se puede demostrar.
+
+Primero los avisos y después las confirmaciones, para que un reporte que cruza
+las dos ventanas en la misma corrida se confirme en lugar de recibir un aviso
+que ya no sirve. Es idempotente: la segunda corrida no encuentra el reporte
+porque ya no está en el estado de partida.
+
+`Report.closed_at` es la fecha del cierre del operario, y es **la que toma el
+indicador de tiempo de resolución** de US-023: los días de espera son un
+mecanismo de control, no tiempo de trabajo municipal.
+
+### La evidencia se acumula, no se pisa (US-046 y US-048)
+
+`ResolutionEvidence` es una entidad propia y no campos sueltos sobre el reporte:
+un reporte reabierto por apelación acumula más de una, y la gracia es poder
+compararlas. El segundo cierre crea una nueva; la primera queda, junto con la
+apelación que la objetó.
+
+Guarda el área **al momento del cierre** y no la que el operario tenga hoy: un
+traslado posterior no puede reescribir quién se hizo cargo de este trabajo.
+
+`with_closed_count` pasó a contar evidencias en lugar de asientos del historial
+con estado *Resuelto*: desde US-047 ese estado lo produce la confirmación
+automática o el agente, no el operario.
+
+La reapertura por apelación **conserva el área operativa** y no vuelve a
+*Reportado*: el trabajo mal ejecutado le corresponde a quien lo ejecutó.
+
+### Pendiente conocido: la anonimización de imágenes
+
+US-046 y US-048 dicen que la foto de cierre y la de la apelación atraviesan el
+circuito de difuminado de US-041 (`SCRUM-68`). **Ese circuito no está
+implementado**: US-041 y US-042 siguen en *To do*. Las dos fotos se cargan y se
+publican directo, igual que la foto del reporte de US-004. Cuando se implemente
+la anonimización, los tres puntos de carga tienen que engancharse a ella.
 
 ## Deployment
 

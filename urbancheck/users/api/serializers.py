@@ -2,11 +2,20 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from urbancheck.municipalities.api.area_serializers import OperationalAreaSerializer
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.models import Municipality
+from urbancheck.municipalities.models import OperationalArea
 from urbancheck.users.models import User
 
 EMAIL_TAKEN_MESSAGE = "Ya existe un usuario registrado con ese correo."
+AREA_INACTIVE_MESSAGE = (
+    "El área operativa está desactivada: un operario no puede existir sin un "
+    "área activa que lo contenga."
+)
+AREA_FOREIGN_MESSAGE = "El área operativa pertenece a otra municipalidad."
+PHONE_REQUIRED_MESSAGE = "Ingresá un teléfono de contacto."
+NAME_REQUIRED_MESSAGE = "Ingresá el nombre del operario."
 
 
 class UserSerializer(serializers.ModelSerializer[User]):
@@ -236,3 +245,164 @@ class ValidatorSerializer(serializers.ModelSerializer[User]):
             "must_change_password",
         ]
         read_only_fields = fields
+
+
+class OperatorAreaFieldMixin(serializers.Serializer):
+    """Resolución y validación del área operativa de un operario (US-044).
+
+    Hereda de ``Serializer`` y no es una clase suelta: solo así el metaclass de
+    DRF recoge ``operational_area_id`` como campo declarado. Sobre una clase
+    plana, DRF lo construye desde el modelo como campo de solo lectura y el
+    área nunca llega a ``validated_data``.
+
+    Compartida por el alta y por el cambio de área: son la misma regla —el área
+    tiene que estar activa y ser de la jurisdicción de quien opera— y si cada
+    una la escribiera por su cuenta, terminarían divergiendo.
+
+    El queryset arranca sin filtrar por estado a propósito: con
+    ``OperationalArea.objects.active()`` un área desactivada respondería "no
+    existe", y el escenario 4 pide decir que está desactivada.
+    """
+
+    operational_area_id = serializers.PrimaryKeyRelatedField(
+        queryset=OperationalArea.objects.all(),
+        source="operational_area",
+        write_only=True,
+    )
+
+    def validate_operational_area_id(self, area: OperationalArea) -> OperationalArea:
+        if not area.is_active:
+            raise serializers.ValidationError(AREA_INACTIVE_MESSAGE)
+        # La jurisdicción se comprueba acá y no con un queryset acotado por lo
+        # mismo que arriba: un área de otro municipio tiene que fallar como
+        # validación de campo con un motivo legible. El admin de la plataforma
+        # no está acotado a ninguna, así que para él no hay nada que comparar.
+        user = self.context["request"].user
+        if user.municipality_id and area.municipality_id != user.municipality_id:
+            raise serializers.ValidationError(AREA_FOREIGN_MESSAGE)
+        return area
+
+
+class OperatorCreateSerializer(OperatorAreaFieldMixin, PanelUserCreateSerializer):
+    """Alta de un operario, hecha por el agente municipal (US-044).
+
+    Reutiliza entero el circuito de invitación de US-035: contraseña temporal
+    definida por quien da el alta y ``must_change_password`` hasta que el
+    operario la cambie en su primer ingreso.
+
+    La municipalidad **se deriva del área** y nunca se acepta del cliente, así
+    que este alta no necesita la variante "el admin elige municipalidad" que sí
+    tienen agentes y validadores: el admin elige el área, y el municipio viene
+    con ella.
+    """
+
+    role = User.Role.OPERARIO
+
+    # ``User.name`` es opcional a nivel de modelo —un vecino puede registrarse
+    # sin nombre—, pero el alta de un operario no: quien mira la bandeja del
+    # área tiene que saber a quién está dando de alta (US-044, escenario 2).
+    name = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        error_messages={
+            "required": NAME_REQUIRED_MESSAGE,
+            "blank": NAME_REQUIRED_MESSAGE,
+        },
+    )
+    phone = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        error_messages={
+            "required": PHONE_REQUIRED_MESSAGE,
+            "blank": PHONE_REQUIRED_MESSAGE,
+        },
+    )
+
+    class Meta(PanelUserCreateSerializer.Meta):
+        fields = [
+            *PanelUserCreateSerializer.Meta.fields,
+            "phone",
+            "operational_area_id",
+        ]
+
+    def get_municipality(self) -> Municipality:
+        return self._area.municipality
+
+    def create(self, validated_data: dict) -> User:
+        self._area = validated_data["operational_area"]
+        return super().create(validated_data)
+
+
+class OperatorSerializer(serializers.ModelSerializer[User]):
+    """Fila de la tabla de operarios de un área (US-044).
+
+    Misma forma que ``ValidatorSerializer`` —estado, cifra de actividad y
+    contraseña pendiente—, porque es el mismo tablero, con el área y el teléfono
+    de más.
+    """
+
+    municipality = MunicipalitySerializer(read_only=True)
+    operational_area = OperationalAreaSerializer(read_only=True)
+    is_active_operator = serializers.BooleanField(
+        source="is_work_account_active",
+        read_only=True,
+    )
+    closed_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "name",
+            "email",
+            "phone",
+            "avatar",
+            "municipality",
+            "operational_area",
+            "is_active_operator",
+            "closed_count",
+            "must_change_password",
+        ]
+        read_only_fields = fields
+
+
+class OperatorUpdateSerializer(
+    OperatorAreaFieldMixin,
+    serializers.ModelSerializer[User],
+):
+    """Edición de un operario: datos de contacto y traslado de área.
+
+    El email no se edita: es la identidad con la que inicia sesión. El rol y la
+    municipalidad tampoco — esta última se deriva del área, así que cambiar de
+    área dentro de la misma jurisdicción es lo único que la puede mover, y no
+    la mueve.
+    """
+
+    phone = serializers.CharField(
+        required=False,
+        allow_blank=False,
+        error_messages={"blank": PHONE_REQUIRED_MESSAGE},
+    )
+    # En la edición el área es opcional: se cambia el teléfono sin trasladar a
+    # nadie. Cuando viaja, la valida el mixin igual que en el alta.
+    operational_area_id = serializers.PrimaryKeyRelatedField(
+        queryset=OperationalArea.objects.all(),
+        source="operational_area",
+        write_only=True,
+        required=False,
+    )
+
+    class Meta:
+        model = User
+        fields = ["id", "name", "phone", "operational_area_id"]
+        read_only_fields = ["id"]
+
+    def update(self, instance: User, validated_data: dict) -> User:
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        # ``full_clean`` y no un ``save()`` pelado: es lo que vuelve a correr las
+        # reglas del modelo —área obligatoria, área de la propia municipalidad—
+        # sobre el estado resultante.
+        instance.full_clean(exclude=["password"])
+        instance.save()
+        return instance

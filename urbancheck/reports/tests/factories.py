@@ -5,10 +5,15 @@ from factory.django import DjangoModelFactory
 from factory.django import ImageField
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
+from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.models import ResolutionAppeal
+from urbancheck.reports.models import ResolutionEvidence
+from urbancheck.users.tests.factories import OperatorFactory
 from urbancheck.users.tests.factories import UserFactory
 
 
@@ -50,3 +55,53 @@ class LikeFactory(DjangoModelFactory[Like]):
 
     class Meta:
         model = Like
+
+
+def area_for(report):
+    """Área operativa activa de la municipalidad del reporte (US-028).
+
+    Existe porque ``procesar`` la exige: la asignación **es** la transición, así
+    que todo test que ponga un reporte En proceso necesita un área de su propio
+    municipio. Una de otra municipalidad se rechaza, que es justamente lo que
+    comprueban los tests que no usan este atajo.
+    """
+    return OperationalAreaFactory.create(municipality=report.municipality)
+
+
+class OfficialResponseFactory(DjangoModelFactory[OfficialResponse]):
+    """Respuesta oficial ya publicada (US-024)."""
+
+    report = factory.SubFactory(ReportFactory)
+    author = factory.SubFactory(UserFactory)
+    municipality = factory.LazyAttribute(lambda o: o.report.municipality)
+    text = factory.Faker("sentence", nb_words=12)
+
+    class Meta:
+        model = OfficialResponse
+
+
+class ResolutionEvidenceFactory(DjangoModelFactory[ResolutionEvidence]):
+    """Parte de trabajo de un cierre ya registrado (US-046)."""
+
+    report = factory.SubFactory(ReportFactory)
+    photo = ImageField(filename="resolution.jpg")
+    description = factory.Faker("sentence", nb_words=12)
+    operator = factory.SubFactory(OperatorFactory)
+    operational_area = factory.LazyAttribute(lambda o: o.operator.operational_area)
+    latitude = factory.LazyAttribute(lambda o: o.report.latitude)
+    longitude = factory.LazyAttribute(lambda o: o.report.longitude)
+
+    class Meta:
+        model = ResolutionEvidence
+
+
+class ResolutionAppealFactory(DjangoModelFactory[ResolutionAppeal]):
+    """Apelación del autor a un cierre (US-048)."""
+
+    report = factory.SubFactory(ReportFactory)
+    author = factory.LazyAttribute(lambda o: o.report.author)
+    reason = factory.Faker("sentence", nb_words=10)
+    photo = ImageField(filename="appeal.jpg")
+
+    class Meta:
+        model = ResolutionAppeal

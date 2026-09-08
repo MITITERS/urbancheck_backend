@@ -13,10 +13,22 @@ from urbancheck.notifications.models import Notification
 from urbancheck.notifications.models import NotificationPreference
 
 #: Agrupación para que la pantalla pueda separar los avisos por categoría.
+#:
+#: Un tipo sin entrada acá cae en "otros" y aparece igual —el catálogo se deriva
+#: de ``Notification.Kind``, no de este diccionario—, pero agrupado con el resto
+#: de los huérfanos y sin descripción. Al sumar un tipo, sumarlo también acá.
 GROUPS = {
     Notification.Kind.NUEVO_COMENTARIO: "social",
     Notification.Kind.NUEVO_LIKE: "social",
     Notification.Kind.CAMBIO_ESTADO: "estado",
+    # Todo lo que es el municipio hablándole al vecino sobre su reporte va con
+    # el avance: para quien lo recibe es la misma conversación.
+    Notification.Kind.RESPUESTA_OFICIAL: "estado",
+    Notification.Kind.PROXIMO_ARCHIVADO: "estado",
+    Notification.Kind.PROXIMA_CONFIRMACION: "estado",
+    # Este no le llega al vecino sino al personal municipal: es trabajo, no
+    # avance de un reclamo propio.
+    Notification.Kind.APELACION_CIERRE: "trabajo",
 }
 
 INVALID_PAYLOAD_MESSAGE = (
@@ -28,6 +40,18 @@ DESCRIPTIONS = {
     Notification.Kind.NUEVO_LIKE: "Cuando alguien apoya uno de tus reportes.",
     Notification.Kind.CAMBIO_ESTADO: (
         "Cuando tu reporte avanza: validado, en gestión, resuelto o cancelado."
+    ),
+    Notification.Kind.RESPUESTA_OFICIAL: (
+        "Cuando el municipio publica una comunicación oficial sobre tu reporte."
+    ),
+    Notification.Kind.PROXIMO_ARCHIVADO: (
+        "Cuando tu reporte está por archivarse porque no logró validarse."
+    ),
+    Notification.Kind.PROXIMA_CONFIRMACION: (
+        "Cuando está por vencer el plazo para objetar la resolución de tu reporte."
+    ),
+    Notification.Kind.APELACION_CIERRE: (
+        "Cuando un vecino objeta el cierre de un reporte de tu área."
     ),
 }
 

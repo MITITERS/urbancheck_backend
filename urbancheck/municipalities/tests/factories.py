@@ -4,6 +4,7 @@ import factory
 from factory.django import DjangoModelFactory
 
 from urbancheck.municipalities.models import Municipality
+from urbancheck.municipalities.models import OperationalArea
 
 # Centro de Villa María. El límite por defecto es deliberadamente enorme —medio
 # planeta— para que los tests ajenos a la cobertura no tengan que elegir
@@ -37,3 +38,15 @@ class MunicipalityFactory(DjangoModelFactory[Municipality]):
 
     class Meta:
         model = Municipality
+
+
+class OperationalAreaFactory(DjangoModelFactory[OperationalArea]):
+    """Área operativa de una municipalidad (US-039)."""
+
+    municipality = factory.SubFactory(MunicipalityFactory)
+    name = factory.Sequence(lambda n: f"Área {n}")
+    contact_email = factory.Sequence(lambda n: f"area{n}@municipio.gob.ar")
+    contact_phone = "3534123456"
+
+    class Meta:
+        model = OperationalArea

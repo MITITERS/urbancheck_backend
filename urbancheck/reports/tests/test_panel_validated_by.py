@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import PlatformAdminFactory
@@ -38,12 +39,19 @@ def detail(client: APIClient, report: Report):
 
 
 def decide(report: Report, validator, status=Report.Status.REPORTADO, **overrides):
-    """Deja el asiento que produce decidir en terreno: validar o rechazar."""
+    """Deja el asiento que produce decidir en terreno: validar o rechazar.
+
+    El origen va explícito porque es lo que escribe ``apply_transition`` desde
+    la tabla, y es por lo que el detalle distingue una decisión de terreno de
+    una validación colectiva (US-040): las dos salen del mismo estado y llegan
+    al mismo, así que sin el origen serían indistinguibles.
+    """
     return ReportStatusHistory.objects.create(
         report=report,
         previous_status=Report.Status.PENDIENTE_VALIDACION,
         status=status,
         changed_by=validator,
+        origin=Origin.VALIDACION_TERRENO,
         **overrides,
     )
 

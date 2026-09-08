@@ -18,6 +18,9 @@ BLOCKED = [
     # Validado en terreno: a partir de acá el autor ya no lo toca.
     Report.Status.REPORTADO,
     Report.Status.EN_PROCESO,
+    # El autor puede objetar el cierre (US-048), pero no editar el reporte: lo
+    # que se discute es si el problema sigue, no cómo estaba descrito.
+    Report.Status.RESUELTO_PENDIENTE,
     Report.Status.RESUELTO,
     Report.Status.CANCELADO,
     Report.Status.ARCHIVADO,

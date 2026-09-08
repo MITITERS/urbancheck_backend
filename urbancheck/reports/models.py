@@ -81,6 +81,15 @@ class Report(models.Model):
         PENDIENTE_VALIDACION = "pendiente_validacion", "Pendiente de validación"
         REPORTADO = "reportado", "Reportado"
         EN_PROCESO = "en_proceso", "En proceso"
+        # Estado intermedio introducido por US-046: el operario cierra el
+        # trabajo, pero el cierre no es definitivo hasta que el autor deja
+        # pasar la ventana de objeción (US-047) o la agota apelando (US-048).
+        # Existe porque quien ejecuta el trabajo no puede ser también quien
+        # certifica sin contraparte que quedó bien hecho.
+        RESUELTO_PENDIENTE = (
+            "resuelto_pendiente_confirmacion",
+            "Resuelto pendiente de confirmación",
+        )
         RESUELTO = "resuelto", "Resuelto"
         CANCELADO = "cancelado", "Cancelado"
         ARCHIVADO = "archivado", "Archivado"
@@ -116,8 +125,27 @@ class Report(models.Model):
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    # Área operativa que se hizo cargo del reporte (US-028). Se asigna en la
+    # misma transacción que el paso a *En proceso* y no se puede quitar: un
+    # reporte en gestión siempre tiene un responsable operativo.
+    #
+    # ``PROTECT`` porque las áreas no se borran, se desactivan: el vínculo
+    # histórico tiene que sobrevivir a la baja de la dependencia.
+    operational_area = models.ForeignKey(
+        "municipalities.OperationalArea",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reports",
+    )
+    # Cuándo entró el reporte a la bandeja del área. Es el orden de trabajo del
+    # operario (US-045): primero lo más demorado. Se guarda denormalizado en vez
+    # de leerlo del registro de asignaciones porque la bandeja ordena por él, y
+    # ordenar por una subconsulta en cada carga de pantalla no se paga.
+    area_assigned_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
-        max_length=30,
+        # 40 y no 30: ``resuelto_pendiente_confirmacion`` mide 31 caracteres.
+        max_length=40,
         choices=Status.choices,
         default=Status.PENDIENTE_VALIDACION,
     )
@@ -127,6 +155,28 @@ class Report(models.Model):
     # mueve con cualquier guardado, incluido un cambio de estado municipal) para
     # poder mostrar "editado el ..." solo cuando el ciudadano tocó el contenido.
     edited_at = models.DateTimeField(null=True, blank=True)
+    # Cuándo se archivó, sea por decisión del municipio o por inactividad
+    # (US-031). Va como campo y no se deduce del historial porque el listado de
+    # "mis reportes" lo muestra y ese listado no trae el historial: deducirlo
+    # ahí costaría una consulta por fila.
+    archived_at = models.DateTimeField(null=True, blank=True)
+    # Cuándo se le avisó al autor que su reporte estaba por archivarse. Existe
+    # para que la verificación periódica sea idempotente: sin esto, cada corrida
+    # dentro de la ventana de aviso mandaría la notificación de nuevo.
+    archival_warning_sent_at = models.DateTimeField(null=True, blank=True)
+    # Cuándo el operario registró la resolución (US-046). Es el instante desde
+    # el que corre la ventana de objeción de US-047 y, además, **la fecha que
+    # toma el indicador de tiempo de resolución**: los días de espera son un
+    # mecanismo de control, no tiempo de trabajo municipal, y cargarlos al
+    # indicador distorsionaría la gestión del municipio.
+    closed_at = models.DateTimeField(null=True, blank=True)
+    # Cuándo se le avisó al autor que el plazo de objeción estaba por vencer.
+    # Mismo rol que ``archival_warning_sent_at``: vuelve idempotente la corrida.
+    objection_warning_sent_at = models.DateTimeField(null=True, blank=True)
+    # Cuántas veces el autor apeló un cierre (US-048). Se persiste sobre el
+    # reporte porque el tope —una— lo verifica la máquina de estados antes de
+    # ejecutar la transición, y ahí no hay más contexto que el reporte.
+    appeal_count = models.PositiveSmallIntegerField(default=0)
 
     # El autor solo puede modificar o borrar su reporte mientras nadie más lo
     # miró: es decir, hasta que un validador lo confirma en terreno.
@@ -187,6 +237,34 @@ class Report(models.Model):
     def is_editable(self) -> bool:
         return self.status in self.EDITABLE_STATUSES
 
+    def confirmation_count(self) -> int:
+        """Me gusta que **cuentan como confirmación** de que el problema existe.
+
+        No es el contador público de US-008 y no debe confundirse con él: el
+        público cuenta todo, este descuenta a quien no puede confirmar nada.
+
+        Quedan afuera dos grupos, y por motivos distintos:
+
+        - **El autor.** Ya afirmó que el problema existe al reportarlo; contar
+          su propio me gusta sería contar dos veces la misma afirmación.
+        - **Las cuentas de trabajo.** La confirmación municipal se ejecuta por
+          la vía de US-036 —yendo al lugar—, no por interacción social. Un
+          validador que da me gusta está participando del feed, no validando.
+
+        Vive acá y no en la vista que evalúa el umbral porque el filtro tiene que
+        ser uno solo: repetido en dos lugares, uno de los dos se olvidaría de
+        excluir a alguien y el umbral se alcanzaría antes de lo debido.
+        """
+        # Import local: ``users`` importa ``reports`` a través del modelo, así
+        # que a nivel de módulo esto sería una dependencia circular.
+        from urbancheck.users.models import User  # noqa: PLC0415
+
+        return (
+            self.likes.exclude(user_id=self.author_id)
+            .exclude(user__role__in=list(User.WORK_ROLES))
+            .count()
+        )
+
 
 class ReportStatusHistory(models.Model):
     """Traza de cada cambio de estado (US-013).
@@ -202,9 +280,9 @@ class ReportStatusHistory(models.Model):
     )
     # Estado resultante. ``previous_status`` queda nulo en el alta del reporte,
     # que es el único asiento del historial sin estado anterior.
-    status = models.CharField(max_length=30, choices=Report.Status.choices)
+    status = models.CharField(max_length=40, choices=Report.Status.choices)
     previous_status = models.CharField(
-        max_length=30,
+        max_length=40,
         choices=Report.Status.choices,
         blank=True,
         default="",
@@ -217,6 +295,20 @@ class ReportStatusHistory(models.Model):
     )
     # Obligatorio en las transiciones que lo exigen (cancelar, rechazar).
     reason = models.TextField(blank=True, default="")
+    # De dónde salió la transición, más allá de a qué estado llegó. Dos caminos
+    # pueden producir el mismo estado y certificar cosas distintas —un validador
+    # que fue al lugar y diez vecinos que confirmaron dejan los dos el reporte
+    # en *Reportado*—, y el panel necesita distinguirlos (US-038).
+    #
+    # Lo escribe ``apply_transition`` desde la tabla de transiciones: quien
+    # invoca no lo elige, así que ninguna operación puede quedar asentada con un
+    # origen que no le corresponde.
+    origin = models.CharField(max_length=30, blank=True, default="")
+    # Cuántas confirmaciones tenía el reporte al validarse colectivamente
+    # (US-040, escenario 9). Nulo en toda otra transición: es un dato de esa
+    # sola, y guardarlo evita que el panel lo recalcule sobre un conteo que para
+    # entonces ya cambió.
+    confirmation_count = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -224,6 +316,211 @@ class ReportStatusHistory(models.Model):
 
     def __str__(self) -> str:
         return f"{self.report_id}: {self.previous_status or '—'} → {self.status}"
+
+
+class ReportAreaAssignment(models.Model):
+    """Traza de cada asignación de un reporte a un área operativa (US-028).
+
+    ``ReportStatusHistory`` no alcanza: la reasignación de un reporte que ya
+    está *En proceso* no cambia el estado, así que no dejaría ningún asiento y
+    el historial mostraría un área nueva sin decir quién la puso ni cuándo.
+
+    Se escribe en la misma transacción que la asignación, igual que el historial
+    de estados: no puede quedar un reporte con un área nueva y sin registro.
+    """
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="area_assignments",
+    )
+    # Nulo en la asignación inicial, que es la única sin área anterior.
+    previous_area = models.ForeignKey(
+        "municipalities.OperationalArea",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="assignments_from",
+    )
+    area = models.ForeignKey(
+        "municipalities.OperationalArea",
+        on_delete=models.PROTECT,
+        related_name="assignments_to",
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        previous = self.previous_area or "—"
+        return f"{self.report_id}: {previous} → {self.area}"
+
+
+class ResolutionEvidence(models.Model):
+    """El parte de trabajo del operario que cerró el reporte (US-046).
+
+    Es una entidad propia y no un puñado de campos sobre el reporte, por dos
+    razones: un reporte reabierto por apelación acumula **más de una** —el
+    segundo cierre no pisa al primero, los dos quedan para poder compararlos
+    (US-048, escenario 9)— y la evidencia sobrevive a la reapertura.
+
+    No hay que confundirla con la respuesta oficial de US-024: aquella es la voz
+    de la institución y compromete al municipio; esta describe qué se hizo
+    físicamente, en el lugar y en el momento.
+
+    **La identidad del operario no se muestra al ciudadano.** Ante el vecino
+    responde el área operativa; quién fue se ve únicamente en el panel, con el
+    mismo criterio de protección del personal de US-038.
+    """
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="resolution_evidences",
+    )
+    photo = models.ImageField(upload_to="resolutions/%Y/%m/")
+    description = models.TextField()
+    # Quién cerró. ``SET_NULL`` porque la cuenta puede desaparecer y el parte de
+    # trabajo tiene que sobrevivirle.
+    operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolution_evidences",
+    )
+    # El área **al momento del cierre**, no la que el operario tenga hoy: un
+    # traslado posterior no puede reescribir quién se hizo cargo de este trabajo
+    # (US-044, escenario 5).
+    operational_area = models.ForeignKey(
+        "municipalities.OperationalArea",
+        on_delete=models.PROTECT,
+        related_name="resolution_evidences",
+    )
+    # Desde dónde se registró. Se guarda para poder auditar después la
+    # verificación de proximidad que ya se hizo al cerrar.
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Cronológico ascendente: el hilo se lee del primer cierre al último.
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: cierre de {self.operational_area}"
+
+
+class ResolutionAppeal(models.Model):
+    """La objeción del autor a un cierre que no resolvió el problema (US-048).
+
+    Es el control humano sobre el cierre: el operario certifica su propio
+    trabajo, y esto es lo que impide que esa certificación sea la única palabra.
+
+    Se conserva junto con la evidencia que objeta —no la reemplaza— para que el
+    operario y el agente puedan comparar el antes y el después.
+    """
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="resolution_appeals",
+    )
+    # La evidencia objetada. Nula solo si el cierre se borró, cosa que hoy no
+    # ocurre por ninguna vía.
+    evidence = models.ForeignKey(
+        ResolutionEvidence,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="appeals",
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="resolution_appeals",
+    )
+    reason = models.TextField()
+    # Obligatoria: una apelación sin evidencia no se distingue de una objeción
+    # caprichosa y no reabre trabajo municipal.
+    photo = models.ImageField(upload_to="appeals/%Y/%m/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: apelación de {self.author}"
+
+
+class OfficialResponse(models.Model):
+    """Comunicación institucional del municipio sobre un reporte (US-024).
+
+    Es un **hilo inmutable**, no un campo editable: el reporte acumula
+    respuestas sucesivas en orden cronológico y ninguna se edita ni se elimina
+    una vez publicada. Permitir que el municipio reescriba lo que dijo
+    públicamente contradice el principio de transparencia que sostiene el
+    producto —si se publica un compromiso de plazo y después se lo reemplaza, el
+    ciudadano pierde la evidencia del original—. Una corrección se publica como
+    una respuesta nueva.
+
+    La inmutabilidad se garantiza por la **ausencia** de endpoints de
+    actualización y de borrado, no por una validación que después alguien puede
+    relajar.
+
+    No hay que confundirla con la evidencia de resolución del operario (US-046):
+    esta es la voz de la institución y compromete al municipio; aquella es un
+    parte de trabajo que describe qué se hizo en el lugar.
+    """
+
+    #: Tope de una respuesta oficial. Es una comunicación institucional, no un
+    #: expediente: si no entra acá, lo que corresponde es publicar otra.
+    MAX_LENGTH = 2000
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="official_responses",
+    )
+    # Quién la publicó. Su identidad se muestra únicamente en el panel: ante el
+    # ciudadano responde la municipalidad, con el mismo criterio de protección
+    # del personal de US-038.
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="official_responses",
+    )
+    # Se deriva del reporte al publicar y se guarda: es el emisor de cara al
+    # ciudadano, y tiene que sobrevivir aunque la cuenta del agente desaparezca.
+    municipality = models.ForeignKey(
+        "municipalities.Municipality",
+        on_delete=models.PROTECT,
+        related_name="official_responses",
+    )
+    text = models.TextField(max_length=MAX_LENGTH)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # Cronológico y ascendente: el hilo se lee de la primera comunicación a
+        # la última, que es el orden en que ocurrió la gestión.
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: respuesta oficial de {self.municipality}"
 
 
 class Comment(models.Model):
@@ -247,6 +544,11 @@ class Like(models.Model):
         on_delete=models.CASCADE,
         related_name="likes",
     )
+    # Cuándo se dio. Lo necesita el archivado por inactividad de US-031, que
+    # mide "sin likes ni comentarios" contra la interacción más reciente. Los
+    # likes anteriores a este campo quedan fechados en la migración con la
+    # creación de su reporte, que es la única fecha que se sabe cierta.
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
 
     class Meta:
         constraints = [

@@ -24,6 +24,8 @@ from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
+from urbancheck.notifications.services import notify_resolution_appealed
+from urbancheck.reports.collective_validation import evaluate as evaluate_collective_validation
 from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.geocoding import geocode_one
 from urbancheck.reports.geocoding import reverse_geocode
@@ -32,6 +34,12 @@ from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.resolution import appeal_resolution
+from urbancheck.reports.services import GuardRejectedError
+from urbancheck.reports.services import TransitionError
+from urbancheck.reports.state_machine import APPEAL_LIMIT_MESSAGE
+from urbancheck.reports.state_machine import MAX_APPEALS_PER_REPORT
+from urbancheck.users.api.operator_permissions import ExcludesOperator
 
 from .filters import apply_report_filters
 from .permissions import CanDeleteComment
@@ -43,6 +51,8 @@ from .serializers import ReportDetailSerializer
 from .serializers import ReportListSerializer
 from .serializers import ReportMapSerializer
 from .serializers import ReportUpdateSerializer
+from .serializers import ResolutionAppealCreateSerializer
+from .transition_responses import transition_error_response
 
 # Estados que dejan de ser visibles en el feed y en el mapa público: el reporte
 # ya no es un problema activo (US-013). El autor sigue viéndolos en "mis
@@ -54,6 +64,16 @@ INACTIVE_MAP_STATUSES = INACTIVE_PUBLIC_STATUSES
 # validador —validando o rechazando—, así que el texto vale para todos.
 EDIT_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede modificarse."
 DELETE_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede eliminarse."
+
+# Apelar el cierre es del **autor** y de nadie más (US-048, escenario 7).
+# Habilitar a cualquier vecino a objetar el cierre de un reporte ajeno es otra
+# funcionalidad, prevista en el documento de Alcance y fuera de esta historia.
+NOT_THE_AUTHOR_MESSAGE = (
+    "Solo el autor del reporte puede objetar el cierre de su reclamo."
+)
+APPEAL_WINDOW_CLOSED_MESSAGE = (
+    "El plazo para objetar el cierre venció y la resolución quedó confirmada."
+)
 
 
 class ReportViewSet(
@@ -74,12 +94,16 @@ class ReportViewSet(
         la clase: ``like`` y ``comments`` también usan ``get_object()`` con
         métodos no seguros sobre reportes ajenos, que es exactamente lo que
         debe poder hacer un vecino.
+
+        ``ExcludesOperator`` sí vale para todas: el alcance del operario es su
+        bandeja y nada más (US-045), así que esta superficie entera —feed, mapa,
+        detalle, comentarios— le responde ``403``.
         """
         if self.action in {"update", "partial_update", "destroy"}:
-            return [IsAuthenticated(), IsAuthorOrReadOnly()]
+            return [IsAuthenticated(), ExcludesOperator(), IsAuthorOrReadOnly()]
         if self._is_citizen_participation():
-            return [IsAuthenticated(), ParticipatesAsCitizen()]
-        return [IsAuthenticated()]
+            return [IsAuthenticated(), ExcludesOperator(), ParticipatesAsCitizen()]
+        return [IsAuthenticated(), ExcludesOperator()]
 
     def _is_citizen_participation(self) -> bool:
         """Si la petición es un aporte de vecino: reportar, comentar o gustar.
@@ -135,10 +159,14 @@ class ReportViewSet(
         user = self.request.user
         qs = (
             Report.objects.select_related("author")
+            .prefetch_related("resolution_evidences", "resolution_appeals")
             .annotate(
                 like_count=Count("likes", distinct=True),
                 comment_count=Count("comments", distinct=True),
                 is_liked=Exists(Like.objects.filter(report=OuterRef("pk"), user=user)),
+                # Alimenta el distintivo de "el municipio respondió" del feed
+                # (US-024) sin traer el hilo entero por fila.
+                official_response_count=Count("official_responses", distinct=True),
             )
             .order_by("-created_at")
         )
@@ -312,13 +340,85 @@ class ReportViewSet(
             Like.objects.get_or_create(report=report, user=request.user)
             liked = True
             code = status.HTTP_201_CREATED
+            # US-040: el umbral se evalúa **al persistir el me gusta**, no en un
+            # job periódico. Un reporte que llegó a las confirmaciones
+            # necesarias tiene que pasar a Reportado en el momento, no horas
+            # después. La función decide sola si hay algo que hacer.
+            evaluate_collective_validation(report)
         else:
             Like.objects.filter(report=report, user=request.user).delete()
             liked = False
             code = status.HTTP_200_OK
+            # Retirar un me gusta **no** revierte una validación colectiva ya
+            # ejecutada (escenario 5): por eso acá no se evalúa nada.
+        report.refresh_from_db()
         return Response(
-            {"liked": liked, "like_count": report.likes.count()},
+            {
+                "liked": liked,
+                "like_count": report.likes.count(),
+                # El cliente necesita saber si el reporte cambió de estado en
+                # esta misma operación para refrescar el detalle y el feed.
+                "status": report.status,
+            },
             status=code,
+        )
+
+    @action(detail=True, methods=["post"])
+    def appeal(self, request, pk=None):
+        """El autor objeta el cierre de su reporte (US-048).
+
+        Las tres condiciones se comprueban en tres capas distintas, a propósito:
+        la autoría acá —es un permiso—, el estado en la máquina de estados, y el
+        tope de una apelación en la guarda de la transición. Ninguna vive en dos
+        lugares.
+        """
+        report = self.get_object()
+        if report.author_id != request.user.id:
+            raise PermissionDenied(NOT_THE_AUTHOR_MESSAGE)
+
+        serializer = ResolutionAppealCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            appeal = appeal_resolution(
+                report,
+                author=request.user,
+                reason=serializer.validated_data["reason"],
+                photo=serializer.validated_data["photo"],
+            )
+        except GuardRejectedError as error:
+            # El tope, cuando el reporte está en el estado correcto: la guarda
+            # ya trae el motivo exacto.
+            return transition_error_response(error)
+        except TransitionError as error:
+            # Dos caminos distintos dejan el reporte en *Resuelto*, y el vecino
+            # merece saber por cuál se quedó afuera: o se le venció el plazo, o
+            # ya usó su única objeción y el segundo cierre fue definitivo.
+            # Decir el motivo equivocado lo manda a discutir lo que no es.
+            #
+            # La **regla** sigue viviendo en la máquina de estados —acá se lee
+            # su constante, no se reimplementa el tope—; lo que se elige es la
+            # explicación, que la guarda no llega a dar porque el estado ya
+            # falló antes.
+            if report.status == Report.Status.RESUELTO:
+                exhausted = report.appeal_count >= MAX_APPEALS_PER_REPORT
+                return Response(
+                    {
+                        "detail": (
+                            APPEAL_LIMIT_MESSAGE
+                            if exhausted
+                            else APPEAL_WINDOW_CLOSED_MESSAGE
+                        ),
+                        "current_status": report.status,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            return transition_error_response(error)
+
+        notify_resolution_appealed(appeal)
+        report.refresh_from_db()
+        return Response(
+            ReportDetailSerializer(report, context={"request": request}).data,
         )
 
     @action(

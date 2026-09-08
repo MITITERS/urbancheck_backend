@@ -156,7 +156,13 @@ class TestLike:
         res = client.post(f"/api/reports/{report.id}/like/")
         assert res.status_code == 201
         assert Like.objects.filter(report=report, user=user).exists()
-        assert res.data == {"liked": True, "like_count": 1}
+        # ``status`` viaja desde US-040: el me gusta puede haber disparado la
+        # validación colectiva, y el cliente tiene que poder refrescar.
+        assert res.data == {
+            "liked": True,
+            "like_count": 1,
+            "status": report.status,
+        }
 
     def test_unlike_report(self, auth_client):
         client, user = auth_client
@@ -165,7 +171,11 @@ class TestLike:
         res = client.delete(f"/api/reports/{report.id}/like/")
         assert res.status_code == 200
         assert not Like.objects.filter(report=report, user=user).exists()
-        assert res.data == {"liked": False, "like_count": 0}
+        assert res.data == {
+            "liked": False,
+            "like_count": 0,
+            "status": report.status,
+        }
 
     def test_like_idempotent(self, auth_client):
         client, user = auth_client

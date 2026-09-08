@@ -50,6 +50,9 @@ class TestReportMap:
             "longitude",
             "address",
             "like_count",
+            # El popup aclara "En proceso (objetado)" cuando el autor objetó el
+            # cierre y el reporte volvió a gestión (US-048).
+            "appeal_count",
         }
 
     def test_excludes_reports_without_coordinates(self, auth_client):

@@ -21,6 +21,7 @@ from django_filters import rest_framework as filters
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
+from urbancheck.reports.state_machine import Origin
 
 
 class CharInFilter(filters.BaseInFilter, filters.CharFilter):
@@ -69,7 +70,12 @@ class PanelReportFilterSet(filters.FilterSet):
         decisions = ReportStatusHistory.objects.filter(
             report=OuterRef("pk"),
             changed_by_id=value,
-            previous_status=Report.Status.PENDIENTE_VALIDACION,
+            # Por el origen y no por la forma de la transición: desde US-040 la
+            # validación colectiva sale del mismo estado y llega al mismo, sin
+            # que haya habido un validador. Acá el filtro por ``changed_by`` ya
+            # la dejaba afuera —no tiene responsable—, pero el criterio tiene
+            # que ser el mismo que el del detalle o los dos van a divergir.
+            origin=Origin.VALIDACION_TERRENO,
             status__in=list(VALIDATOR_DECISIONS),
         ).order_by("created_at")
 

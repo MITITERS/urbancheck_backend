@@ -23,8 +23,22 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     (Status.REPORTADO, Status.EN_PROCESO): (
         "El municipio comenzó a trabajar en tu reporte."
     ),
+    # US-046 cambió el camino a Resuelto: el operario cierra y el reporte queda
+    # a la espera de que el autor lo objete o deje vencer el plazo.
+    (Status.EN_PROCESO, Status.RESUELTO_PENDIENTE): (
+        "El municipio resolvió tu reporte y cargó la evidencia del trabajo. "
+        "Revisala: si el problema sigue, podés objetar el cierre."
+    ),
+    (Status.RESUELTO_PENDIENTE, Status.RESUELTO): (
+        "Tu reporte quedó confirmado como resuelto."
+    ),
+    (Status.RESUELTO_PENDIENTE, Status.EN_PROCESO): (
+        "Tu objeción se registró: el reporte volvió a gestión del área "
+        "responsable."
+    ),
+    # Segundo cierre tras una apelación: es definitivo y no abre plazo nuevo.
     (Status.EN_PROCESO, Status.RESUELTO): (
-        "El municipio dio por resuelto tu reporte."
+        "El municipio volvió a intervenir y dio por resuelto tu reporte."
     ),
     (Status.EN_PROCESO, Status.CANCELADO): (
         "El municipio canceló la intervención sobre tu reporte."
@@ -34,6 +48,13 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     ),
     (Status.ARCHIVADO, Status.REPORTADO): (
         "Tu reporte fue reactivado y vuelve a estar visible."
+    ),
+    # Archivado automático por inactividad (US-031). El texto explica el motivo
+    # sin nombrar estados internos: para el vecino lo que pasó es que su reporte
+    # no consiguió validarse ni movió a nadie en medio año.
+    (Status.PENDIENTE_VALIDACION, Status.ARCHIVADO): (
+        "Tu reporte se archivó automáticamente: pasaron 180 días sin que "
+        "lograra validarse ni recibiera interacción de la comunidad."
     ),
 }
 
