@@ -836,6 +836,34 @@ no en la práctica, porque para cambiarla hay que saber que existe. Para la demo
 conviene bajarla a 2 o 3 — juntar diez cuentas distintas en vivo no es
 demostrable.
 
+### El aviso al autor también se elegía por la forma (US-040)
+
+El mapa de `templates_status.py` estaba indexado por `(estado anterior, estado
+nuevo)`, y desde US-040 ese par tiene **dos** significados: a *Reportado* desde
+*Pendiente de validación* se llega por un validador que fue al lugar o por las
+confirmaciones de los vecinos. El aviso decía siempre «un validador confirmó tu
+reporte en el lugar», o sea le atribuía al vecino un validador que no existió.
+
+Es exactamente la misma trampa que `get_validation()` ya había resuelto en el
+panel, un nivel más abajo y descubierta después. **El discriminador es el
+origen, no la forma de la transición**, y ahora el origen viaja en
+`report_status_changed` como argumento propio en lugar de tener que sacarse del
+`history`.
+
+`ORIGIN_CHANGE_MESSAGES` tiene prioridad sobre el mapa por par y se indexa por
+`(anterior, nuevo, origen)`. El mapa por par sigue siendo el caso general: una
+transición nueva no obliga a tocar nada mientras su par sea inequívoco.
+
+El panel recibió el complemento. `validation` seguía —correctamente— en nulo
+para una validación colectiva, pero no había nada que ocupara su lugar: el
+encabezado del detalle no mostraba **nada** y un reporte validado por la
+comunidad se leía como uno que nadie validó. `collective_validation` lleva
+cuándo se validó y con cuántas confirmaciones. Va como campo aparte y no como
+una variante de `validation` porque ahí no hay persona de la que hablar, y
+meterlos juntos obligaría al panel a preguntar cuál de los dos casos es —justo
+la ambigüedad que el origen vino a resolver—. Quiénes confirmaron no se expone
+(US-038); solo cuántos.
+
 ### El plazo de objeción se configura en minutos (US-047)
 
 `DJANGO_RESOLUTION_OBJECTION_MINUTES` (default `10080`, o sea siete días) y

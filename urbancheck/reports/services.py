@@ -197,6 +197,10 @@ def apply_transition(  # noqa: PLR0913 (cada parámetro es un requisito distinto
         new_status=transition.target,
         changed_by=changed_by,
         reason=reason,
+        # Explícito y no deducido del `history`: quien escucha el evento tiene
+        # que poder distinguir dos transiciones que llegan al mismo estado sin
+        # depender de la forma del par de estados (US-040).
+        origin=transition.origin,
         history=history,
     )
 

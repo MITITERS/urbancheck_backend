@@ -48,11 +48,16 @@ def notify_status_change(
     new_status: str,
     changed_by=None,
     reason: str = "",
+    origin: str = "",
 ) -> Notification | None:
     """Avisa al autor del reporte que su reclamo cambió de estado (US-011).
 
     El destinatario es siempre y únicamente el autor. Si fue él mismo quien
     provocó el cambio, no hay nada que avisarle.
+
+    El ``origin`` desempata los pares de estados que significan más de una cosa:
+    sin él, una validación colectiva se le anunciaba al vecino como si un
+    validador hubiera ido al lugar.
 
     El push se intenta después de persistir y sin propagar errores: un push
     caído no puede revertir ni bloquear la transición.
@@ -65,7 +70,7 @@ def notify_status_change(
         actor=changed_by,
         kind=Notification.Kind.CAMBIO_ESTADO,
         report=report,
-        message=message_for(previous_status, new_status, reason),
+        message=message_for(previous_status, new_status, reason, origin),
         previous_status=previous_status,
         new_status=new_status,
         reason=reason,

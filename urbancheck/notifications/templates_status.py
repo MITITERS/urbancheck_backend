@@ -8,6 +8,7 @@ nombres internos de los estados si hay una forma más clara de decirlo.
 """
 
 from urbancheck.reports.models import Report
+from urbancheck.reports.state_machine import Origin
 
 Status = Report.Status
 
@@ -58,13 +59,45 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     ),
 }
 
+#: (estado anterior, estado nuevo, origen) -> mensaje, cuando el par de estados
+#: **no alcanza** para redactar el aviso.
+#:
+#: Tiene prioridad sobre el mapa de arriba. Existe porque un mismo par puede
+#: significar cosas distintas: desde US-040 se llega a *Reportado* desde
+#: *Pendiente de validación* por dos caminos —un validador que fue al lugar
+#: (US-036) o las confirmaciones de los vecinos—, y el aviso indexado solo por
+#: el par le atribuía al vecino un validador que nunca existió.
+#:
+#: Es la misma lección que el panel ya había aprendido en ``get_validation()``:
+#: **el discriminador es el origen, no la forma de la transición.** Se agrega
+#: una fila acá cuando aparezca otro par ambiguo, no un ``if``.
+ORIGIN_CHANGE_MESSAGES: dict[tuple[str, str, str], str] = {
+    (Status.PENDIENTE_VALIDACION, Status.REPORTADO, Origin.VALIDACION_COLECTIVA): (
+        "Varios vecinos confirmaron tu reporte: se validó automáticamente y ya "
+        "es visible para la comunidad."
+    ),
+}
+
 #: Se usa si apareciera una transición sin mensaje propio, para que el aviso
 #: salga igual en lugar de perderse.
 FALLBACK_MESSAGE = "Tu reporte cambió de estado."
 
 
-def message_for(previous_status: str, new_status: str, reason: str = "") -> str:
-    text = STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
+def message_for(
+    previous_status: str,
+    new_status: str,
+    reason: str = "",
+    origin: str = "",
+) -> str:
+    """El texto del aviso para el autor.
+
+    El origen es opcional y solo desempata: sin él se cae al mapa por par de
+    estados, que sigue siendo el caso general. Así una transición nueva no
+    obliga a tocar nada mientras su par sea inequívoco.
+    """
+    text = ORIGIN_CHANGE_MESSAGES.get(
+        (previous_status, new_status, origin),
+    ) or STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
     if reason:
         text = f"{text} Motivo: {reason}"
     return text

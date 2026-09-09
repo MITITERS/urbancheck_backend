@@ -28,4 +28,4 @@ DJANGO_ACTIVE_MUNICIPALITY_ID=1
 # Se lee en **cada** evaluación, así que cambiar el número y reiniciar el
 # contenedor alcanza: no hace falta tocar código ni redeployar. Para la demo,
 # bajarlo a 2 o 3 deja mostrar la validación colectiva sin juntar diez cuentas.
-DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=10
+DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=3

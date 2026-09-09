@@ -123,6 +123,19 @@ class ValidationSerializer(serializers.Serializer):
     )
 
 
+class CollectiveValidationSerializer(serializers.Serializer):
+    """La validación por confirmaciones de los vecinos (US-040).
+
+    Va aparte de ``ValidationSerializer`` y no como una variante suya: aquella
+    responde «quién salió a mirarlo», y acá **no hay persona** de la que hablar.
+    Meterlas en el mismo campo obligaría al panel a preguntar cuál de las dos
+    es, que es justo la ambigüedad que el origen vino a resolver.
+    """
+
+    validated_at = serializers.DateTimeField()
+    confirmation_count = serializers.IntegerField(allow_null=True)
+
+
 class ClosureSerializer(serializers.Serializer):
     """Cuándo cerró el reporte el operario por el que se está filtrando.
 
@@ -295,6 +308,7 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
     status_history = PanelStatusHistorySerializer(many=True, read_only=True)
     available_transitions = serializers.SerializerMethodField()
     validation = serializers.SerializerMethodField()
+    collective_validation = serializers.SerializerMethodField()
     # La necesita el panel para saber a dónde vuelve el administrador, que llega
     # al detalle desde la ficha de una municipalidad y no desde un listado.
     municipality = MunicipalitySerializer(read_only=True)
@@ -333,6 +347,7 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
             "status_history",
             "available_transitions",
             "validation",
+            "collective_validation",
             "operational_area",
             "area_assigned_at",
             "area_assignments",
@@ -398,6 +413,36 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
         if not decisions:
             return None
         return validation_payload(min(decisions, key=lambda entry: entry.created_at))
+
+    @extend_schema_field(CollectiveValidationSerializer(allow_null=True))
+    def get_collective_validation(self, obj) -> dict | None:
+        """Si al reporte lo validó la comunidad, cuándo y con cuántas.
+
+        Es el complemento de ``validation``: los dos caminos llegan a
+        *Reportado* desde *Pendiente de validación* y certifican cosas
+        distintas, así que el panel tiene que poder decir cuál fue. Sin esto, un
+        reporte validado colectivamente no mostraba **nada** en el encabezado
+        —el dato quedaba enterrado en el historial— y se leía como si nadie lo
+        hubiera validado.
+
+        Mismo discriminador y mismo criterio que ``get_validation()``: el origen
+        de la transición, sobre el historial ya prefetcheado, y el asiento más
+        viejo porque un reporte reactivado vuelve a pasar por *Reportado*.
+        """
+        validations = [
+            entry
+            for entry in obj.status_history.all()
+            if entry.origin == Origin.VALIDACION_COLECTIVA
+        ]
+        if not validations:
+            return None
+        entry = min(validations, key=lambda item: item.created_at)
+        return {
+            # Quiénes confirmaron no se expone, solo cuántos: la identidad de
+            # los vecinos que apoyaron no es del panel (US-038).
+            "validated_at": entry.created_at,
+            "confirmation_count": entry.confirmation_count,
+        }
 
     @extend_schema_field(AvailableTransitionSerializer(many=True))
     def get_available_transitions(self, obj) -> list[dict]:

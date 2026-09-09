@@ -9,6 +9,8 @@ from urbancheck.reports.collective_validation import evaluate
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.services import apply_transition
+from urbancheck.reports.state_machine import Actor
 from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.tests.factories import LikeFactory
 from urbancheck.reports.tests.factories import ReportFactory
@@ -265,3 +267,101 @@ class TestThroughTheApi:
 
         detail = client.get(f"/api/panel/reports/{pending.pk}/").data
         assert detail["validation"] is None
+
+    def test_the_panel_says_the_community_validated_it(self, pending):
+        """No alcanza con no mentir: el panel tiene que decir qué sí pasó.
+
+        Dejar `validation` en nulo y nada más hacía que el encabezado del
+        detalle no mostrara **nada**, y un reporte validado por la comunidad se
+        leía como uno que nadie validó.
+        """
+        confirm(pending, THRESHOLD)
+        agent = MunicipalAgentFactory.create(municipality=pending.municipality)
+        client = APIClient()
+        client.force_authenticate(agent)
+
+        collective = client.get(f"/api/panel/reports/{pending.pk}/").data[
+            "collective_validation"
+        ]
+
+        assert collective is not None
+        assert collective["confirmation_count"] == THRESHOLD
+        assert collective["validated_at"] is not None
+
+    def test_the_platform_admin_sees_it_too(self, pending):
+        confirm(pending, THRESHOLD)
+        client = APIClient()
+        client.force_authenticate(PlatformAdminFactory.create())
+
+        detail = client.get(f"/api/panel/reports/{pending.pk}/").data
+
+        assert detail["collective_validation"]["confirmation_count"] == THRESHOLD
+        assert detail["validation"] is None
+
+    def test_a_field_validated_report_carries_no_collective_validation(self):
+        """El complemento: los dos campos no pueden estar los dos llenos."""
+        report = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
+        validator = ValidatorFactory.create(municipality=report.municipality)
+        apply_transition(
+            report,
+            "validar",
+            actor=Actor.VALIDATOR,
+            changed_by=validator,
+        )
+        client = APIClient()
+        client.force_authenticate(
+            MunicipalAgentFactory.create(municipality=report.municipality),
+        )
+
+        detail = client.get(f"/api/panel/reports/{report.pk}/").data
+
+        assert detail["collective_validation"] is None
+        assert detail["validation"] is not None
+
+
+class TestAuthorNotice:
+    """El aviso al autor no puede atribuirle la validación a un validador.
+
+    Es la misma trampa que US-040 destapó en el panel, un nivel más abajo: el
+    texto se elegía por el par (estado anterior, estado nuevo), y ese par pasó a
+    significar dos cosas. El discriminador es el origen.
+    """
+
+    def test_it_does_not_say_a_validator_confirmed_it_on_site(self, pending):
+        confirm(pending, THRESHOLD)
+
+        notification = Notification.objects.get(
+            report=pending,
+            kind=Notification.Kind.CAMBIO_ESTADO,
+        )
+
+        assert "validador" not in notification.message.lower()
+        assert "en el lugar" not in notification.message.lower()
+
+    def test_it_says_the_neighbours_confirmed_it(self, pending):
+        confirm(pending, THRESHOLD)
+
+        notification = Notification.objects.get(
+            report=pending,
+            kind=Notification.Kind.CAMBIO_ESTADO,
+        )
+
+        assert "vecinos" in notification.message.lower()
+
+    def test_a_field_validation_still_names_the_validator(self):
+        """El caso general no se tocó: sin origen ambiguo, el par sigue mandando."""
+        report = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
+        validator = ValidatorFactory.create(municipality=report.municipality)
+
+        apply_transition(
+            report,
+            "validar",
+            actor=Actor.VALIDATOR,
+            changed_by=validator,
+        )
+
+        notification = Notification.objects.get(
+            report=report,
+            kind=Notification.Kind.CAMBIO_ESTADO,
+        )
+        assert "validador" in notification.message.lower()
