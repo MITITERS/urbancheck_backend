@@ -20,6 +20,7 @@ from django_filters import rest_framework as filters
 
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
 from urbancheck.reports.state_machine import Origin
 
@@ -39,6 +40,11 @@ class PanelReportFilterSet(filters.FilterSet):
     # nombre en el detalle. Mismo criterio que ``author``: se aplica sobre el
     # queryset ya acotado por jurisdicción.
     validated_by = filters.NumberFilter(method="filter_validated_by")
+    # Lo que cerró un operario, para el perfil que el panel abre desde su nombre
+    # en el hilo de resolución (US-046). Mismo criterio que ``author`` y
+    # ``validated_by``: se aplica sobre el queryset ya acotado por jurisdicción,
+    # así que un agente ve lo que ese operario cerró **en su municipio**.
+    closed_by = filters.NumberFilter(method="filter_closed_by")
     status = CharInFilter(field_name="status", lookup_expr="in")
     category = CharInFilter(field_name="category", lookup_expr="in")
     created_from = filters.DateFilter(field_name="created_at", lookup_expr="date__gte")
@@ -84,12 +90,39 @@ class PanelReportFilterSet(filters.FilterSet):
             validation_decided_at=Subquery(decisions.values("created_at")[:1]),
         ).filter(validation_status__isnull=False)
 
+    def filter_closed_by(self, queryset, name, value):
+        """Reportes que esa persona cerró en terreno.
+
+        Se filtra por la **evidencia** y no por el historial de estados: quién
+        cerró es un dato propio del parte de trabajo, y deducirlo de la forma de
+        la transición es justamente el error que US-040 destapó en la validación
+        colectiva.
+
+        Va por subconsulta y no por ``filter()`` sobre la relación inversa: un
+        reporte reabierto por apelación y vuelto a cerrar tiene dos evidencias
+        del mismo operario, y el ``JOIN`` devolvería la fila duplicada.
+
+        Se anota el cierre **más reciente**, al revés que ``validated_by``: la
+        decisión del validador es la primera —un reporte reactivado vuelve a
+        pasar por *Reportado*—, mientras que de un cierre interesa el último,
+        que es el que está vigente.
+        """
+        closures = ResolutionEvidence.objects.filter(
+            report=OuterRef("pk"),
+            operator_id=value,
+        ).order_by("-created_at")
+
+        return queryset.annotate(
+            closure_closed_at=Subquery(closures.values("created_at")[:1]),
+        ).filter(closure_closed_at__isnull=False)
+
     class Meta:
         model = Report
         fields = [
             "municipality",
             "author",
             "validated_by",
+            "closed_by",
             "status",
             "category",
             "created_from",

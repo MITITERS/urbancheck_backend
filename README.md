@@ -642,6 +642,33 @@ Esa vista **no** hereda de `JurisdictionScopedMixin`: el recorte por área es m�
 estrecho que el recorte por municipalidad y ya lo implica, así que aplicar los
 dos sería escribir la misma restricción dos veces.
 
+### El panel llega al operario por su nombre, como al vecino (US-046)
+
+`?closed_by=` en el listado del panel devuelve lo que ese operario cerró, y es
+la tercera pieza de una familia: `author` para el vecino, `validated_by` para el
+validador, `closed_by` para el operario. Los tres se aplican sobre el queryset
+que **ya** acotó `JurisdictionScopedMixin`, así que ningún perfil puede ser una
+puerta lateral a los reportes de otro municipio: preguntar por un operario de
+otra jurisdicción devuelve lista vacía, no su trabajo.
+
+Se filtra por la **evidencia** y no por el historial de estados. Quién cerró es
+un dato propio del parte de trabajo, y deducirlo de la forma de la transición es
+exactamente el error que US-040 destapó en la validación colectiva.
+
+Dos diferencias con `validated_by`, las dos deliberadas:
+
+- Va por **subconsulta** y no por `filter()` sobre la relación inversa: un
+  reporte reabierto por apelación y vuelto a cerrar tiene dos evidencias del
+  mismo operario, y el `JOIN` devolvería la fila duplicada haciendo mentir al
+  contador del paginado.
+- Anota el cierre **más reciente**, mientras que `validated_by` toma la decisión
+  más vieja. La del validador es la primera porque un reporte reactivado vuelve
+  a pasar por _Reportado_; de un cierre interesa el último, que es el vigente.
+
+El campo `closure` de la fila viaja solo cuando se pidió el filtro, con el mismo
+criterio que `validation`: sin operario por el que preguntar no hay cierre del
+que hablar, y va nulo.
+
 ### El historial del operario se recorta por autoría, no por área (US-046)
 
 `/api/operator/reports/history/` devuelve los trabajos que **esta persona**

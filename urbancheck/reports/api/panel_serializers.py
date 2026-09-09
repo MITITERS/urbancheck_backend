@@ -123,6 +123,17 @@ class ValidationSerializer(serializers.Serializer):
     )
 
 
+class ClosureSerializer(serializers.Serializer):
+    """Cuándo cerró el reporte el operario por el que se está filtrando.
+
+    Va como objeto y no como un campo suelto, igual que ``ValidationSerializer``:
+    es lo que el listado sabe sobre ese cierre, y crece por acá si mañana hace
+    falta algo más.
+    """
+
+    closed_at = serializers.DateTimeField()
+
+
 def validation_payload(entry) -> dict | None:
     """La decisión, a partir del asiento del historial que la registró."""
     if entry is None:
@@ -154,6 +165,7 @@ class PanelReportListSerializer(serializers.ModelSerializer):
     # reclamos sin respuesta. Viaja anotado desde el queryset del panel.
     has_official_response = serializers.SerializerMethodField()
     validation = serializers.SerializerMethodField()
+    closure = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -173,6 +185,7 @@ class PanelReportListSerializer(serializers.ModelSerializer):
             "municipality",
             "author",
             "validation",
+            "closure",
         ]
         read_only_fields = fields
 
@@ -213,6 +226,23 @@ class PanelReportListSerializer(serializers.ModelSerializer):
             "decided_at": getattr(obj, "validation_decided_at", None),
             "outcome": VALIDATOR_DECISIONS[status],
         }
+
+    @extend_schema_field(ClosureSerializer(allow_null=True))
+    def get_closure(self, obj) -> dict | None:
+        """Cuándo cerró este reporte el operario por el que se está filtrando.
+
+        Solo viaja cuando la lista se pidió con ``?closed_by=``, por lo mismo
+        que ``validation``: sin ese filtro no hay un operario del que hablar y
+        no hay anotación, así que el campo va nulo.
+
+        No se reemplaza por ``Report.closed_at``: ese guarda el último cierre
+        del reporte, que después de una apelación puede ser de otro operario del
+        área, y acá interesa el de esta persona.
+        """
+        closed_at = getattr(obj, "closure_closed_at", None)
+        if closed_at is None:
+            return None
+        return {"closed_at": closed_at}
 
 
 class PanelStatusHistorySerializer(serializers.ModelSerializer):
