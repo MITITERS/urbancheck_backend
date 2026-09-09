@@ -864,6 +864,41 @@ meterlos juntos obligaría al panel a preguntar cuál de los dos casos es —jus
 la ambigüedad que el origen vino a resolver—. Quiénes confirmaron no se expone
 (US-038); solo cuántos.
 
+### El mapa deja de dibujar los resueltos a los 15 días
+
+El mapa responde «¿qué pasa hoy en mi barrio?». Con los resueltos de todos los
+meses encima termina respondiendo «¿qué pasó alguna vez?»: una nube de puntos
+verdes donde ya no hay nada que mirar.
+
+**Sale del mapa y de ningún otro lado.** Sigue en el feed, en su detalle, en el
+perfil de su autor y en el listado del panel. No se archiva, no cambia de estado
+y no se borra. Por eso la política vive en `reports/map_retention.py` y no en la
+máquina de estados: es una regla de *qué se dibuja*, no de qué existe, y ahí
+está la diferencia con el archivado por inactividad de US-031, que sí mueve el
+reporte.
+
+Alcanza **solo** a *Resuelto*. *Resuelto, a confirmar* se queda: mientras corre
+la ventana de objeción el caso está abierto, y esconderlo justo cuando el vecino
+puede querer revisarlo sería esconderle lo que tiene que decidir.
+
+La fecha sale del **historial de estados**, no de `Report.closed_at`. Ese campo
+guarda cuándo el operario cerró el trabajo, que es hasta una semana antes de que
+el reporte quede efectivamente *Resuelto* —en el medio corre la ventana de
+objeción—, así que contar desde ahí adelantaría la desaparición de todos los
+reportes en esa diferencia.
+
+**El `isnull=False` de la condición no es decorativo.** SQL tiene tres valores:
+`NULL < fecha` no da falso sino `NULL`, `NOT (NULL AND verdadero)` vuelve a dar
+`NULL`, y un `WHERE` que no da verdadero descarta la fila. Sin esa cláusula, un
+reporte resuelto sin asiento en el historial —que no debería existir, pero— se
+borraba del mapa en lugar de quedarse, que es lo contrario del default seguro.
+Lo destapó el test escrito para ese caso.
+
+El plazo es `DJANGO_MAP_RESOLVED_RETENTION_MINUTES` (default `21600`, o sea 15
+días), declarado en `.envs/.local/.django`. En minutos por lo mismo que la
+ventana de objeción: una demostración necesita poder bajarlo a un par sin tocar
+código.
+
 ### El plazo de objeción se configura en minutos (US-047)
 
 `DJANGO_RESOLUTION_OBJECTION_MINUTES` (default `10080`, o sea siete días) y

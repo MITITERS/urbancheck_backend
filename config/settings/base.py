@@ -355,6 +355,21 @@ COLLECTIVE_VALIDATION_THRESHOLD = env.int(
     default=10,
 )
 
+# Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
+#
+# El mapa muestra lo que pasa hoy; los resueltos acumulados de todos los meses
+# lo convierten en un registro histórico. Pasado el plazo el reporte **solo**
+# deja de dibujarse: sigue en el feed, en el detalle y en el panel, no se
+# archiva ni cambia de estado.
+#
+# **En minutos y no en días**, por lo mismo que la ventana de objeción: el
+# default son quince días y una demostración necesita poder bajarlo a un par de
+# minutos sin tocar código.
+MAP_RESOLVED_RETENTION_MINUTES = env.int(
+    "DJANGO_MAP_RESOLVED_RETENTION_MINUTES",
+    default=15 * 24 * 60,
+)
+
 # Ventana durante la cual el autor puede objetar el cierre de un operario antes
 # de que el reporte quede confirmado como Resuelto (US-047).
 #

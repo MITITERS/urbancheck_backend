@@ -26,6 +26,7 @@ from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.notifications.services import notify_resolution_appealed
 from urbancheck.reports.collective_validation import evaluate as evaluate_collective_validation
+from urbancheck.reports.map_retention import hide_stale_resolved
 from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.geocoding import geocode_one
 from urbancheck.reports.geocoding import reverse_geocode
@@ -304,11 +305,16 @@ class ReportViewSet(
         una, no una página. Acepta los mismos filtros que el feed (``category``,
         ``status``, ``search``) y, como él, se acota al municipio que cubre la
         ubicación del vecino cuando esta viaja en ``latitude``/``longitude``.
+
+        **El mapa muestra menos que el feed, a propósito.** Además de los estados
+        inactivos, deja de dibujar los reportes resueltos hace más de la ventana
+        de ``map_retention``: siguen existiendo y siguen en el feed, pero el mapa
+        responde qué pasa hoy y una nube de puntos verdes viejos no lo responde.
         """
-        qs = (
+        qs = hide_stale_resolved(
             self.get_queryset()
             .filter(latitude__isnull=False, longitude__isnull=False)
-            .exclude(status__in=INACTIVE_MAP_STATUSES)
+            .exclude(status__in=INACTIVE_MAP_STATUSES),
         )
         serializer = ReportMapSerializer(qs, many=True, context={"request": request})
         payload = {"results": serializer.data}

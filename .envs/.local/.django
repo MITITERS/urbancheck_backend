@@ -29,3 +29,12 @@ DJANGO_ACTIVE_MUNICIPALITY_ID=1
 # contenedor alcanza: no hace falta tocar código ni redeployar. Para la demo,
 # bajarlo a 2 o 3 deja mostrar la validación colectiva sin juntar diez cuentas.
 DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=3
+
+# Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
+#
+# Pasado el plazo **solo deja de dibujarse en el mapa**: sigue en el feed, en su
+# detalle y en el panel, no se archiva ni cambia de estado.
+#
+# En minutos: el default son 15 días (21600). Para la demo, bajarlo a 1 o 2 deja
+# mostrar la desaparición sin esperar dos semanas.
+DJANGO_MAP_RESOLVED_RETENTION_MINUTES=21600
