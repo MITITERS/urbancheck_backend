@@ -20,3 +20,12 @@ DJANGO_ACCOUNT_RESET_PASSWORD_URL=http://192.168.0.116:8000/accounts/password/re
 # El seed de demo carga dos municipios para que una fuga de jurisdicción
 # se vea en desarrollo; con más de uno, esta variable deja de ser opcional.
 DJANGO_ACTIVE_MUNICIPALITY_ID=1
+
+# Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
+# validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
+# trabajo.
+#
+# Se lee en **cada** evaluación, así que cambiar el número y reiniciar el
+# contenedor alcanza: no hace falta tocar código ni redeployar. Para la demo,
+# bajarlo a 2 o 3 deja mostrar la validación colectiva sin juntar diez cuentas.
+DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=10

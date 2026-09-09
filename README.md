@@ -824,6 +824,18 @@ usuario, exclusión del autor, exclusión de las cuentas de trabajo y umbral
 parametrizable (`DJANGO_COLLECTIVE_VALIDATION_THRESHOLD`, default 10). La
 detección de cuentas fraudulentas queda fuera del alcance del proyecto.
 
+**Cómo se cambia el umbral.** La variable está declarada en
+`.envs/.local/.django`: se edita el número y se reinicia el contenedor
+(`docker compose -f docker-compose.local.yml up -d django`). No hace falta tocar
+código, porque `collective_validation.threshold()` lee la configuración en cada
+evaluación en lugar de capturarla al importar el módulo.
+
+Está declarada en el archivo **aunque su valor sea el default**, a propósito:
+una variable que solo existe en `settings/base.py` es configurable en teoría y
+no en la práctica, porque para cambiarla hay que saber que existe. Para la demo
+conviene bajarla a 2 o 3 — juntar diez cuentas distintas en vivo no es
+demostrable.
+
 ### El plazo de objeción se configura en minutos (US-047)
 
 `DJANGO_RESOLUTION_OBJECTION_MINUTES` (default `10080`, o sea siete días) y
