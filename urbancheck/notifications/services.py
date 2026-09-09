@@ -41,7 +41,7 @@ def notify_new_comment(comment) -> Notification | None:
     return notification
 
 
-def notify_status_change(
+def notify_status_change(  # noqa: PLR0913 (cada uno es un dato del aviso)
     report,
     *,
     previous_status: str,
