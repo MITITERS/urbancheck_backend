@@ -204,7 +204,10 @@ class TestWarning:
             kind=Notification.Kind.CAMBIO_ESTADO,
             new_status=Report.Status.ARCHIVADO,
         )
-        assert "180 días" in notification.message
+        # El plazo vigente, no un número escrito a mano: con la ventana
+        # configurable, fijarlo acá volvía a hacer pasar el test mientras el
+        # aviso le informaba al vecino un plazo que no se le aplicó.
+        assert f"{inactivity_days()} días" in notification.message
 
 
 class TestVisibility:
@@ -266,6 +269,40 @@ class TestConfigurableWindow:
     def test_the_default_is_ninety_days(self):
         """El default del proyecto. Si cambia, que sea a propósito."""
         assert inactivity_days() == DEFAULT_INACTIVITY_DAYS
+
+
+class TestArchivalNotice:
+    """El aviso al autor tiene que decir el plazo que se le aplicó.
+
+    Estaba escrito a mano —«pasaron 180 días»— y con el plazo configurable pasó
+    a informar un número que no era el vigente.
+    """
+
+    def test_it_names_the_configured_window(self, settings):
+        settings.ARCHIVAL_INACTIVITY_DAYS = DEFAULT_INACTIVITY_DAYS
+        report = stale(DEFAULT_INACTIVITY_DAYS + 1)
+
+        run_archival()
+
+        aviso = Notification.objects.get(
+            report=report,
+            kind=Notification.Kind.CAMBIO_ESTADO,
+        )
+        assert f"{DEFAULT_INACTIVITY_DAYS} días" in aviso.message
+
+    def test_and_follows_it_when_it_changes(self, settings):
+        settings.ARCHIVAL_INACTIVITY_DAYS = SHORT_WINDOW_DAYS
+        report = stale(SHORT_WINDOW_DAYS + 1)
+
+        run_archival()
+
+        aviso = Notification.objects.get(
+            report=report,
+            kind=Notification.Kind.CAMBIO_ESTADO,
+        )
+        assert f"{SHORT_WINDOW_DAYS} días" in aviso.message
+        # El número viejo no puede sobrevivir en ningún lado.
+        assert "180" not in aviso.message
 
 
 class TestManualArchivalAndReactivation:

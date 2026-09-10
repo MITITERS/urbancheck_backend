@@ -7,8 +7,13 @@ Los textos están en español y sin jerga: el vecino no tiene por qué leer los
 nombres internos de los estados si hay una forma más clara de decirlo.
 """
 
+from typing import TYPE_CHECKING
+
 from urbancheck.reports.models import Report
 from urbancheck.reports.state_machine import Origin
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 Status = Report.Status
 
@@ -50,14 +55,35 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     (Status.ARCHIVADO, Status.REPORTADO): (
         "Tu reporte fue reactivado y vuelve a estar visible."
     ),
+}
+
+#: Mensajes que necesitan un dato del sistema para poder redactarse.
+#:
+#: Se guardan como funciones y no como texto porque el número sale de
+#: configuración. Escrito a mano, el aviso decía «pasaron 180 días» mientras el
+#: plazo vigente era 90: le informaba al vecino un plazo que no era el que se le
+#: había aplicado.
+DYNAMIC_CHANGE_MESSAGES: dict[tuple[str, str], Callable[[], str]] = {
     # Archivado automático por inactividad (US-031). El texto explica el motivo
     # sin nombrar estados internos: para el vecino lo que pasó es que su reporte
-    # no consiguió validarse ni movió a nadie en medio año.
-    (Status.PENDIENTE_VALIDACION, Status.ARCHIVADO): (
-        "Tu reporte se archivó automáticamente: pasaron 180 días sin que "
-        "lograra validarse ni recibiera interacción de la comunidad."
+    # no consiguió validarse ni movió a nadie en todo ese tiempo.
+    (Status.PENDIENTE_VALIDACION, Status.ARCHIVADO): lambda: (
+        f"Tu reporte se archivó automáticamente: pasaron {_inactivity_days()} "
+        "días sin que lograra validarse ni recibiera interacción de la "
+        "comunidad."
     ),
 }
+
+
+def _inactivity_days() -> int:
+    """El plazo vigente, leído de la política que lo aplica.
+
+    Import local: ``reports.archival`` importa ``notifications.services``, que
+    importa este módulo. A nivel de módulo sería una dependencia circular.
+    """
+    from urbancheck.reports.archival import inactivity_days  # noqa: PLC0415
+
+    return inactivity_days()
 
 #: (estado anterior, estado nuevo, origen) -> mensaje, cuando el par de estados
 #: **no alcanza** para redactar el aviso.
@@ -95,9 +121,12 @@ def message_for(
     estados, que sigue siendo el caso general. Así una transición nueva no
     obliga a tocar nada mientras su par sea inequívoco.
     """
-    text = ORIGIN_CHANGE_MESSAGES.get(
-        (previous_status, new_status, origin),
-    ) or STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
+    dynamic = DYNAMIC_CHANGE_MESSAGES.get((previous_status, new_status))
+    text = (
+        ORIGIN_CHANGE_MESSAGES.get((previous_status, new_status, origin))
+        or (dynamic() if dynamic else None)
+        or STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
+    )
     if reason:
         text = f"{text} Motivo: {reason}"
     return text
