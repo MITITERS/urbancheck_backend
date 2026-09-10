@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import DateTimeField
 from django.db.models import Max
 from django.db.models.functions import Coalesce
@@ -27,9 +28,16 @@ from .services import TransitionError
 from .services import apply_transition
 from .state_machine import Actor
 
-#: Días sin interacción tras los cuales un reporte pendiente de validación se
-#: archiva solo.
-INACTIVITY_DAYS = 180
+
+def inactivity_days() -> int:
+    """Días sin interacción tras los cuales un reporte se archiva solo.
+
+    Se lee de configuración **en cada evaluación** y no se captura al importar:
+    cambiar el plazo tiene que alcanzar con editar el entorno y reiniciar, sin
+    tocar código. Una constante de módulo seguiría sirviendo el número viejo.
+    """
+    return settings.ARCHIVAL_INACTIVITY_DAYS
+
 
 #: Cuántos días antes del plazo se le avisa al autor. El aviso existe para que
 #: el vecino tenga margen de conseguir la interacción que le falta, no para
@@ -78,7 +86,7 @@ def _pending(queryset=None):
 def reports_due_for_archival(now=None, queryset=None):
     """Reportes que ya cumplieron el plazo completo sin interacción."""
     now = now or timezone.now()
-    deadline = now - timedelta(days=INACTIVITY_DAYS)
+    deadline = now - timedelta(days=inactivity_days())
     return _pending(queryset).filter(last_interaction_at__lte=deadline)
 
 
@@ -91,8 +99,9 @@ def reports_due_for_warning(now=None, queryset=None):
     porque ``archival_warning_sent_at`` queda por detrás de la ventana nueva.
     """
     now = now or timezone.now()
-    warning_from = now - timedelta(days=INACTIVITY_DAYS - WARNING_DAYS_BEFORE)
-    deadline = now - timedelta(days=INACTIVITY_DAYS)
+    window = inactivity_days()
+    warning_from = now - timedelta(days=window - WARNING_DAYS_BEFORE)
+    deadline = now - timedelta(days=window)
     return _pending(queryset).filter(
         last_interaction_at__lte=warning_from,
         last_interaction_at__gt=deadline,
@@ -106,7 +115,7 @@ def archives_on(report, now=None):
     fecha de creación, que es el valor correcto para un reporte sin actividad.
     """
     last = getattr(report, "last_interaction_at", None) or report.created_at
-    return last + timedelta(days=INACTIVITY_DAYS)
+    return last + timedelta(days=inactivity_days())
 
 
 def run_archival(now=None) -> dict[str, int]:

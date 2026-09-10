@@ -355,6 +355,18 @@ COLLECTIVE_VALIDATION_THRESHOLD = env.int(
     default=10,
 )
 
+# Días sin interacción tras los cuales un reporte pendiente de validación se
+# archiva solo (US-031).
+#
+# Cuenta desde la **última señal de vida** —creación, comentario o me gusta—, no
+# desde el alta: un reporte que alguien apoyó hace una semana no está
+# abandonado, por viejo que sea.
+#
+# Acá sí va en días y no en minutos, a diferencia de los otros plazos: el
+# archivado se demuestra fechando un reporte en el pasado, no esperando a que
+# venza.
+ARCHIVAL_INACTIVITY_DAYS = env.int("DJANGO_ARCHIVAL_INACTIVITY_DAYS", default=90)
+
 # Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
 #
 # El mapa muestra lo que pasa hoy; los resueltos acumulados de todos los meses

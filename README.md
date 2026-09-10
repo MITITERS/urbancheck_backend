@@ -717,10 +717,30 @@ agente: pone al municipio como emisor y deja `actor` nulo.
 
 ### Archivado por inactividad: la política vive en un módulo (US-031)
 
-`reports/archival.py` declara el plazo (180 días), qué cuenta como interacción
-(el máximo entre la creación, el último comentario y el último me gusta) y
-cuándo se avisa (7 días antes). El comando `archive_stale_reports` y la tarea de
-Celery son dos formas de dispararlo, no dos copias de la regla.
+`reports/archival.py` declara el plazo, qué cuenta como interacción (el máximo
+entre la creación, el último comentario y el último me gusta) y cuándo se avisa
+(7 días antes). El comando `archive_stale_reports` y la tarea de Celery son dos
+formas de dispararlo, no dos copias de la regla.
+
+**El plazo es configurable**: `DJANGO_ARCHIVAL_INACTIVITY_DAYS`, default **90**
+días, declarado en `.envs/.local/.django`. Se lee en cada evaluación —no es una
+constante capturada al importar—, así que cambiarlo alcanza con editar el
+entorno y reiniciar el contenedor. La ventana del aviso lo sigue: son siete días
+antes del plazo vigente, no de un número fijo.
+
+Va en **días** y no en minutos, a diferencia de la ventana de objeción (US-047)
+y de la retención del mapa: esas se demuestran esperando, y esta se demuestra
+fechando un reporte en el pasado. El plazo corto no aporta nada.
+
+**Cuenta desde la última señal de vida, no desde el alta.** Es la distinción que
+más se presta a confusión: un reporte creado hace un año pero con un me gusta de
+la semana pasada **no** se archiva, porque no está abandonado. "Antigüedad" y
+"tiempo sin interacción" coinciden solo cuando nadie lo tocó nunca.
+
+**Alcanza únicamente a los pendientes de validación.** Un reporte validado ya
+entró en la cola del municipio, y archivarlo es una decisión de gestión
+(US-013), no una consecuencia del desinterés. La tabla de transiciones lo
+sostiene: `archivar_por_inactividad` sale solo de *Pendiente de validación*.
 
 ```bash
 docker compose -f docker-compose.local.yml exec django /entrypoint \

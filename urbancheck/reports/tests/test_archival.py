@@ -1,4 +1,4 @@
-"""US-031 — archivado automático de reportes sin validar tras 180 días."""
+"""US-031 — archivado automático de reportes sin validar por inactividad."""
 
 from datetime import timedelta
 
@@ -8,8 +8,10 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from urbancheck.notifications.models import Notification
-from urbancheck.reports.archival import INACTIVITY_DAYS
 from urbancheck.reports.archival import WARNING_DAYS_BEFORE
+from urbancheck.reports.archival import inactivity_days
+from urbancheck.reports.archival import reports_due_for_archival
+from urbancheck.reports.archival import reports_due_for_warning
 from urbancheck.reports.archival import run_archival
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
@@ -23,7 +25,14 @@ pytestmark = pytest.mark.django_db
 
 HTTP_OK = 200
 
-WARNING_DAY = INACTIVITY_DAYS - WARNING_DAYS_BEFORE
+WARNING_DAY = inactivity_days() - WARNING_DAYS_BEFORE
+
+#: El plazo por default del proyecto, para fijarlo en un test.
+DEFAULT_INACTIVITY_DAYS = 90
+
+#: Un plazo corto y uno largo, para comprobar que el valor manda.
+SHORT_WINDOW_DAYS = 20
+LONG_WINDOW_DAYS = 365
 
 
 def stale(days: int, **kwargs) -> Report:
@@ -45,7 +54,7 @@ def stale(days: int, **kwargs) -> Report:
 class TestAutomaticArchival:
     def test_a_report_without_interaction_is_archived_after_the_deadline(self):
         """Escenario 1."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
 
         run_archival()
 
@@ -55,7 +64,7 @@ class TestAutomaticArchival:
 
     def test_the_system_is_recorded_as_responsible(self):
         """Escenario 1: el historial dice que no lo movió una persona."""
-        report = stale(INACTIVITY_DAYS + 1, with_history=False)
+        report = stale(inactivity_days() + 1, with_history=False)
 
         run_archival()
 
@@ -65,7 +74,7 @@ class TestAutomaticArchival:
         assert entry.changed_by is None
 
     def test_a_report_within_the_deadline_is_left_alone(self):
-        report = stale(INACTIVITY_DAYS - 1)
+        report = stale(inactivity_days() - 1)
 
         run_archival()
 
@@ -79,7 +88,7 @@ class TestAutomaticArchival:
     )
     def test_a_recent_interaction_restarts_the_clock(self, interaction):
         """"Sin likes ni comentarios": las dos cuentan como señal de vida."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
         if interaction == "like":
             LikeFactory.create(report=report)
         else:
@@ -91,10 +100,10 @@ class TestAutomaticArchival:
         assert report.status == Report.Status.PENDIENTE_VALIDACION
 
     def test_an_old_interaction_does_not_save_it(self):
-        report = stale(INACTIVITY_DAYS + 30)
+        report = stale(inactivity_days() + 30)
         like = LikeFactory.create(report=report)
         type(like).objects.filter(pk=like.pk).update(
-            created_at=timezone.now() - timedelta(days=INACTIVITY_DAYS + 5),
+            created_at=timezone.now() - timedelta(days=inactivity_days() + 5),
         )
 
         run_archival()
@@ -115,7 +124,7 @@ class TestAutomaticArchival:
         """Un reporte validado ya entró en la cola del municipio."""
         report = ReportFactory.create(status=status)
         Report.objects.filter(pk=report.pk).update(
-            created_at=timezone.now() - timedelta(days=INACTIVITY_DAYS + 30),
+            created_at=timezone.now() - timedelta(days=inactivity_days() + 30),
         )
 
         run_archival()
@@ -124,7 +133,7 @@ class TestAutomaticArchival:
         assert report.status == status
 
     def test_the_management_command_runs_the_same_policy(self):
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
 
         call_command("archive_stale_reports")
 
@@ -173,7 +182,7 @@ class TestWarning:
 
     def test_a_report_past_the_deadline_is_archived_instead_of_warned(self):
         """Si la verificación no corrió por unos días, no se avisa de más."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
 
         run_archival()
 
@@ -186,7 +195,7 @@ class TestWarning:
 
     def test_the_author_is_told_when_it_was_archived(self):
         """Escenario 1: el aviso de archivado explica el motivo."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
 
         run_archival()
 
@@ -201,7 +210,7 @@ class TestWarning:
 class TestVisibility:
     def test_an_archived_report_leaves_the_feed_and_the_map(self):
         """Escenario 3."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
         run_archival()
         client = APIClient()
         client.force_authenticate(report.author)
@@ -214,7 +223,7 @@ class TestVisibility:
 
     def test_the_author_still_sees_it_in_their_own_history_with_the_date(self):
         """Escenario 4."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
         run_archival()
         client = APIClient()
         client.force_authenticate(report.author)
@@ -224,6 +233,39 @@ class TestVisibility:
         row = next(entry for entry in rows if entry["id"] == report.pk)
         assert row["status"] == Report.Status.ARCHIVADO
         assert row["archived_at"] is not None
+
+
+class TestConfigurableWindow:
+    """El plazo se cambia por entorno, sin tocar código ni redeployar."""
+
+    def test_a_shorter_window_archives_what_used_to_survive(self, settings):
+        report = stale(DEFAULT_INACTIVITY_DAYS - 60)
+        settings.ARCHIVAL_INACTIVITY_DAYS = DEFAULT_INACTIVITY_DAYS
+        assert report not in reports_due_for_archival()
+
+        settings.ARCHIVAL_INACTIVITY_DAYS = SHORT_WINDOW_DAYS
+
+        assert report in reports_due_for_archival()
+
+    def test_a_longer_window_spares_what_used_to_be_archived(self, settings):
+        report = stale(DEFAULT_INACTIVITY_DAYS + 10)
+        settings.ARCHIVAL_INACTIVITY_DAYS = DEFAULT_INACTIVITY_DAYS
+        assert report in reports_due_for_archival()
+
+        settings.ARCHIVAL_INACTIVITY_DAYS = LONG_WINDOW_DAYS
+
+        assert report not in reports_due_for_archival()
+
+    def test_the_warning_window_follows_the_configured_one(self, settings):
+        """El aviso son siete días antes **del plazo vigente**, no de uno fijo."""
+        settings.ARCHIVAL_INACTIVITY_DAYS = DEFAULT_INACTIVITY_DAYS
+        report = stale(DEFAULT_INACTIVITY_DAYS - WARNING_DAYS_BEFORE)
+
+        assert report in reports_due_for_warning()
+
+    def test_the_default_is_ninety_days(self):
+        """El default del proyecto. Si cambia, que sea a propósito."""
+        assert inactivity_days() == DEFAULT_INACTIVITY_DAYS
 
 
 class TestManualArchivalAndReactivation:
@@ -252,7 +294,7 @@ class TestManualArchivalAndReactivation:
 
     def test_reactivating_puts_it_back_as_reported_and_visible(self):
         """Escenario 6."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
         run_archival()
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         client = APIClient()
@@ -271,7 +313,7 @@ class TestManualArchivalAndReactivation:
 
     def test_a_reactivated_report_stops_being_a_candidate(self):
         """Escenario 6: reinicia el conteo de inactividad."""
-        report = stale(INACTIVITY_DAYS + 1)
+        report = stale(inactivity_days() + 1)
         run_archival()
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         client = APIClient()

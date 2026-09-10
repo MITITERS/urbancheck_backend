@@ -38,3 +38,11 @@ DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=3
 # En minutos: el default son 15 días (21600). Para la demo, bajarlo a 1 o 2 deja
 # mostrar la desaparición sin esperar dos semanas.
 DJANGO_MAP_RESOLVED_RETENTION_MINUTES=21600
+
+# Días sin interacción tras los cuales un reporte pendiente de validación se
+# archiva solo (US-031).
+#
+# Cuenta desde la **última señal de vida** —creación, comentario o me gusta—, no
+# desde el alta: un reporte que alguien apoyó hace una semana no está
+# abandonado, por viejo que sea. El aviso al autor sale 7 días antes.
+DJANGO_ARCHIVAL_INACTIVITY_DAYS=90
