@@ -758,6 +758,15 @@ Tres decisiones que valen la pena:
   comentarios". Los me gusta anteriores se fecharon en la migración con la
   creación de su reporte, que es la única fecha que se sabe cierta y la más
   conservadora: nunca adelanta el reloj.
+- **La verificación corre cada quince minutos, no de madrugada.** Corría a las
+  3:30 para no mover reportes en horario de uso del municipio. Con el plazo ya
+  configurable, esa corrida diaria dejaba el archivado automático **sin poder
+  demostrarse**: había que fechar un reporte en el pasado y después esperar a la
+  madrugada. Es el mismo motivo por el que la confirmación de US-047 corre cada
+  quince minutos. La razón original tampoco se sostenía para esta tarea: solo
+  alcanza reportes *pendientes de validación* que nadie tocó en meses, o sea que
+  no están en la cola de trabajo de nadie, y el aviso al autor se lee mejor a
+  las diez de la mañana que a las tres.
 - **Primero los avisos, después los archivados.** Si la verificación no corre
   por unos días, un reporte que cruza las dos ventanas en la misma corrida se
   archiva en lugar de recibir un aviso que ya no sirve. `archival_warning_sent_at`

@@ -315,9 +315,18 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_BEAT_SCHEDULE = {
     "archive-stale-reports": {
         "task": "urbancheck.reports.tasks.archive_stale_reports",
-        # De madrugada: mueve reportes y manda avisos, y ninguna de las dos
-        # cosas conviene que caiga en el horario de uso del municipio.
-        "schedule": crontab(hour=3, minute=30),
+        # Cada quince minutos, por lo mismo que la confirmación de abajo: el
+        # plazo es configurable desde que existe
+        # ``DJANGO_ARCHIVAL_INACTIVITY_DAYS``, y una corrida diaria dejaba el
+        # archivado automático **sin poder demostrarse** —había que fechar un
+        # reporte en el pasado y después esperar a la madrugada—.
+        #
+        # Corría a las 3:30 para no mover reportes en horario de uso del
+        # municipio. Esa razón no se sostiene para esta tarea: solo alcanza
+        # reportes *pendientes de validación* que nadie tocó en meses, que por
+        # definición no están en la cola de trabajo de nadie. Y el aviso al
+        # autor se lee mejor a las diez de la mañana que a las tres.
+        "schedule": crontab(minute="*/15"),
     },
     "confirm-resolved-reports": {
         "task": "urbancheck.reports.tasks.confirm_resolved_reports",
