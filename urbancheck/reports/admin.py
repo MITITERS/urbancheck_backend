@@ -8,6 +8,12 @@ editables acá abriría por atrás justo lo que esos circuitos garantizan.
 
 from django.contrib import admin
 
+from .models import Comment
+from .models import Like
+from .models import OfficialResponse
+from .models import Report
+from .models import ReportAreaAssignment
+from .models import ReportStatusHistory
 from .models import ResolutionAppeal
 from .models import ResolutionEvidence
 
@@ -41,3 +47,51 @@ class ResolutionAppealAdmin(ReadOnlyAdmin):
     list_display = ["report", "author", "created_at"]
     list_filter = ["created_at"]
     search_fields = ["reason"]
+
+
+@admin.register(Report)
+class ReportAdmin(admin.ModelAdmin):
+    list_display = ["id", "number", "category", "status", "municipality", "author", "created_at"]
+    list_filter = ["status", "category", "municipality"]
+    search_fields = ["description", "address", "author__email"]
+
+    def get_deleted_objects(self, objs, request):
+        """El superusuario borra el reporte con todo lo que cuelga de él.
+
+        Historial, asignaciones, evidencias y apelaciones son de solo lectura
+        sueltos, y eso haría que Django bloquee el borrado en cascada.
+        """
+        deleted, model_count, perms_needed, protected = super().get_deleted_objects(objs, request)
+        if request.user.is_superuser:
+            perms_needed = set()
+        return deleted, model_count, perms_needed, protected
+
+
+@admin.register(ReportStatusHistory)
+class ReportStatusHistoryAdmin(ReadOnlyAdmin):
+    list_display = ["report", "previous_status", "status", "changed_by", "origin", "created_at"]
+    list_filter = ["status", "origin"]
+
+
+@admin.register(ReportAreaAssignment)
+class ReportAreaAssignmentAdmin(ReadOnlyAdmin):
+    list_display = ["report", "previous_area", "area", "assigned_by", "created_at"]
+    list_filter = ["area"]
+
+
+@admin.register(OfficialResponse)
+class OfficialResponseAdmin(admin.ModelAdmin):
+    list_display = ["report", "municipality", "author", "created_at"]
+    list_filter = ["municipality"]
+    search_fields = ["text"]
+
+
+@admin.register(Comment)
+class CommentAdmin(admin.ModelAdmin):
+    list_display = ["report", "author", "created_at"]
+    search_fields = ["text", "author__email"]
+
+
+@admin.register(Like)
+class LikeAdmin(admin.ModelAdmin):
+    list_display = ["report", "user", "created_at"]
