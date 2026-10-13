@@ -18,6 +18,8 @@ from urbancheck.reports.geo import distance_expression
 from urbancheck.reports.geo import haversine_meters
 from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import on_privacy_hold
+from urbancheck.reports.models import photo_ready
 from urbancheck.reports.services import TransitionError
 from urbancheck.reports.services import apply_transition
 from urbancheck.reports.state_machine import Actor
@@ -46,7 +48,23 @@ class ValidationReportViewSet(
     queryset = Report.objects.select_related("author", "municipality")
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        # Un reporte retenido por una denuncia de dato personal (US-043) sale
+        # también de acá, en todas las acciones. La bandeja muestra la foto, y
+        # el detalle de la app ya le respondía 404 al validador: la fila quedaba
+        # listada sin poder abrirse. Validarlo espera a que se resuelva la
+        # denuncia, que tiene plazo de horas.
+        queryset = (
+            super()
+            .get_queryset()
+            .exclude(on_privacy_hold())
+            # Retirado (US-043): sin foto no hay nada que ir a comparar al lugar.
+            .filter(photo_removed_at__isnull=True)
+            # En procesamiento o fallido (US-042, escenario 7): el reporte
+            # todavía no es público y la bandeja muestra una foto que todavía
+            # no existe. Vale lo mismo que para la retención por privacidad: la
+            # fila quedaría listada sin poder abrirse.
+            .filter(photo_ready())
+        )
         if self.action == "list":
             queryset = queryset.filter(status=Report.Status.PENDIENTE_VALIDACION)
         return self._with_distance(queryset)

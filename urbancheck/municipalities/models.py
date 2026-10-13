@@ -211,3 +211,17 @@ class OperationalArea(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.municipality})"
+
+    @property
+    def can_be_reactivated(self) -> bool:
+        """Si el área se puede volver a poner en operación.
+
+        Espejo de ``User.can_be_reactivated``: el área opera **para** una
+        municipalidad, así que mientras esa municipalidad esté dada de baja no
+        hay nada que reactivar. Es el complemento de la baja en cascada de
+        ``deactivate_municipality()``; sin esto, reactivar un área sin reactivar
+        el municipio dejaría justo el estado que esa cascada existe para evitar:
+        una dependencia ofreciéndose en el desplegable de asignación a nombre de
+        un municipio cerrado.
+        """
+        return self.municipality.is_active

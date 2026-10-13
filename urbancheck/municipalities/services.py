@@ -7,6 +7,8 @@ reporte.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
@@ -15,6 +17,7 @@ from urbancheck.reports.geo import haversine_meters
 from urbancheck.reports.geo import polygon_bounds
 
 from .models import Municipality
+from .models import OperationalArea
 
 AMBIGUOUS_MESSAGE = (
     "Hay más de una municipalidad registrada y ninguna configurada como activa. "
@@ -125,9 +128,22 @@ def resolve_municipality_for(
     return municipality
 
 
+class MunicipalityDeactivation(NamedTuple):
+    """Qué arrastró la baja del municipio, para poder decírselo a quien la hizo.
+
+    Son dos cifras y no una porque son dos consecuencias distintas: las cuentas
+    de trabajo que pierden el acceso y las dependencias que dejan de recibir
+    reportes. Ninguna de las dos se ve desde la pantalla donde se ejecuta la
+    baja.
+    """
+
+    users: int
+    areas: int
+
+
 @transaction.atomic
-def deactivate_municipality(municipality: Municipality) -> int:
-    """Da de baja el municipio y, con él, a todo su personal.
+def deactivate_municipality(municipality: Municipality) -> MunicipalityDeactivation:
+    """Da de baja el municipio y, con él, a su personal y a sus áreas.
 
     Un municipio dado de baja deja de recibir reportes y de operar, así que sus
     agentes y validadores no tienen nada que hacer: dejarlos habilitados sería
@@ -135,21 +151,32 @@ def deactivate_municipality(municipality: Municipality) -> int:
     cerrada. La cascada vive acá y no en la vista para que valga desde cualquier
     lugar que dé de baja un municipio.
 
-    Devuelve cuántas cuentas quedaron desactivadas, para poder decírselo a quien
-    ejecutó la baja: es una consecuencia que no se ve en la pantalla desde la
-    que se hace.
+    **Las áreas operativas caen por lo mismo que el personal.** Una dependencia
+    activa de un municipio cerrado seguiría ofreciéndose en el desplegable de
+    asignación de US-028, y un reporte podría entrar en gestión a nombre de un
+    municipio que ya no opera. Los reportes que el área ya tenía conservan el
+    vínculo, igual que en la baja de un área suelta: la baja es lógica y no
+    borra nada.
+
+    Devuelve cuántas cuentas y cuántas áreas quedaron desactivadas.
 
     **No tiene inverso automático.** Volver a dar de alta el municipio no
-    reactiva a nadie: quién vuelve a trabajar es una decisión de la plataforma,
-    y se toma cuenta por cuenta desde el archivado. Reactivar en bloque
-    devolvería el acceso a personal que quizás ya no está.
+    reactiva a nadie ni nada: qué vuelve a operar es una decisión de la
+    plataforma, y se toma una por una desde el archivado. Reactivar en bloque
+    devolvería el acceso a personal que quizás ya no está y pondría a recibir
+    reportes a dependencias que quizás ya no existen.
     """
     from urbancheck.users.models import User  # noqa: PLC0415
 
     municipality.is_active = False
     municipality.save(update_fields=["is_active", "updated_at"])
-    return User.objects.filter(
+    users = User.objects.filter(
         municipality=municipality,
         role__in=User.MUNICIPALITY_BOUND_ROLES,
         is_work_account_active=True,
     ).update(is_work_account_active=False)
+    areas = OperationalArea.objects.filter(
+        municipality=municipality,
+        is_active=True,
+    ).update(is_active=False)
+    return MunicipalityDeactivation(users=users, areas=areas)

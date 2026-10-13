@@ -2,13 +2,17 @@ from rest_framework import serializers
 
 from urbancheck.common.fields import LatitudeField
 from urbancheck.common.fields import LongitudeField
+from urbancheck.common.fields import PendingPhotoField
+from urbancheck.reports.models import COMPLAINT_COMMENT_MAX_LENGTH
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionEvidence
+from urbancheck.reports.privacy import deadline_for
 from urbancheck.users.models import User
 
 
@@ -40,7 +44,20 @@ class ResolutionEvidenceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResolutionEvidence
-        fields = ["id", "photo", "description", "created_at", "operational_area"]
+        fields = [
+            "id",
+            "photo",
+            # Cuándo se retiró la foto por protección de datos (US-043,
+            # escenario 11). La app muestra "imagen retirada" en su lugar.
+            "photo_removed_at",
+            # La foto del cierre pasa por el mismo circuito que la del reporte
+            # (US-042, escenario 8): hasta que termina, el hilo la muestra
+            # como en procesamiento en vez de como ausente.
+            "photo_status",
+            "description",
+            "created_at",
+            "operational_area",
+        ]
         read_only_fields = fields
 
     def get_operational_area(self, obj) -> str | None:
@@ -58,7 +75,7 @@ class ResolutionAppealSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResolutionAppeal
-        fields = ["id", "photo", "reason", "created_at"]
+        fields = ["id", "photo", "photo_status", "reason", "created_at"]
         read_only_fields = fields
 
 
@@ -73,7 +90,7 @@ class ResolutionCreateSerializer(serializers.Serializer):
     la evidencia entera: el operario, el área y el reporte los pone el servidor.
     """
 
-    photo = serializers.ImageField()
+    photo = PendingPhotoField()
     description = serializers.CharField(allow_blank=False, trim_whitespace=True)
     latitude = LatitudeField()
     longitude = LongitudeField()
@@ -86,7 +103,7 @@ class ResolutionAppealCreateSerializer(serializers.Serializer):
     de una objeción caprichosa y no reabre trabajo municipal.
     """
 
-    photo = serializers.ImageField()
+    photo = PendingPhotoField()
     reason = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
 
@@ -172,6 +189,10 @@ class ReportListSerializer(serializers.ModelSerializer):
     # Si el municipio ya se pronunció sobre el reporte (US-024). El feed lo usa
     # para destacar la tarjeta sin traerse el hilo entero por fila.
     has_official_response = serializers.SerializerMethodField()
+    # Si el reporte está retenido por una solicitud de protección de datos
+    # (US-043). Solo el autor lo ve en ``True``: para cualquier otro, un reporte
+    # retenido directamente no aparece.
+    under_privacy_review = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -180,6 +201,14 @@ class ReportListSerializer(serializers.ModelSerializer):
             # Número de cara al usuario, correlativo dentro del municipio.
             "number",
             "photo",
+            # Cuándo se retiró la foto por protección de datos (US-043). Nulo
+            # si la tiene: ``photo`` nulo con esto cargado es "imagen retirada".
+            "photo_removed_at",
+            # En qué anda el difuminado de la imagen (US-042). Solo puede
+            # verse distinto de "procesada" en el listado propio del autor y en
+            # el panel: para cualquier otro, un reporte sin procesar no aparece.
+            "photo_status",
+            "under_privacy_review",
             "description",
             "category",
             "status",
@@ -227,6 +256,9 @@ class ReportListSerializer(serializers.ModelSerializer):
         if annotated is not None:
             return annotated > 0
         return obj.official_responses.exists()
+
+    def get_under_privacy_review(self, obj) -> bool:
+        return obj.is_on_privacy_hold
 
 
 class OperatorHistorySerializer(ReportListSerializer):
@@ -347,6 +379,11 @@ class ReportMapSerializer(serializers.ModelSerializer):
 
 
 class ReportCreateSerializer(serializers.ModelSerializer):
+    # Entra a la cola de difuminado y se guarda en el storage privado; `photo`
+    # queda vacía hasta que la tarea termina (US-042). `write_only` no es
+    # decorativo: devolver el campo intentaría resolver `photo_pending.url`, que
+    # por diseño no existe.
+    photo = PendingPhotoField(source="photo_pending", write_only=True)
     # El GPS del teléfono manda trece decimales; se redondean en vez de
     # rechazar el reporte con un error de precisión que el vecino no entiende.
     latitude = LatitudeField(required=False, allow_null=True)
@@ -359,6 +396,10 @@ class ReportCreateSerializer(serializers.ModelSerializer):
             # Número de cara al usuario, correlativo dentro del municipio.
             "number",
             "photo",
+            # La respuesta del alta ya sale en "pendiente": el cliente lo usa
+            # para no decirle al ciudadano que su reporte está publicado
+            # cuando todavía no lo está.
+            "photo_status",
             "description",
             "category",
             "latitude",
@@ -366,18 +407,73 @@ class ReportCreateSerializer(serializers.ModelSerializer):
             "address",
         ]
         # ``number`` lo asigna el modelo al guardar; el cliente no lo propone.
-        read_only_fields = ["id", "number"]
+        read_only_fields = ["id", "number", "photo_status"]
 
     def validate(self, attrs):
         # La foto no se comprueba acá: es ``required=True``, así que DRF ya la
         # rechazó a nivel de campo antes de llegar a este método.
-        has_coords = attrs.get("latitude") is not None and attrs.get("longitude") is not None
-        has_address = bool(attrs.get("address", "").strip())
-        if not has_coords and not has_address:
-            raise serializers.ValidationError(
-                {"location": "Debés proporcionar coordenadas GPS o una dirección."}
-            )
-        return attrs
+        return validate_report_location(attrs)
+
+
+def validate_report_location(attrs):
+    """Un reporte tiene que poder ubicarse: con coordenadas o con dirección."""
+    has_coords = (
+        attrs.get("latitude") is not None and attrs.get("longitude") is not None
+    )
+    has_address = bool(attrs.get("address", "").strip())
+    if not has_coords and not has_address:
+        raise serializers.ValidationError(
+            {"location": "Debés proporcionar coordenadas GPS o una dirección."}
+        )
+    return attrs
+
+
+class ReportLocationSerializer(serializers.ModelSerializer):
+    """Lo que hace falta para saber si un reporte ya existe (US-032), sin la foto.
+
+    Se valida **antes** que ``ReportCreateSerializer`` porque la foto se
+    difumina dentro de su ``is_valid()``: si el reporte termina rechazado por
+    duplicado, la imagen no tiene que haber entrado al circuito de
+    anonimización (escenario 7).
+    """
+
+    latitude = LatitudeField(required=False, allow_null=True)
+    longitude = LongitudeField(required=False, allow_null=True)
+
+    class Meta:
+        model = Report
+        fields = ["category", "latitude", "longitude", "address"]
+
+    def validate(self, attrs):
+        return validate_report_location(attrs)
+
+
+class ExistingReportSerializer(ReportListSerializer):
+    """El reclamo que ya describe el problema, en la respuesta ``409`` (US-032).
+
+    Trae lo necesario para que la app ofrezca sumarse sin otra llamada:
+    ``is_liked`` para no ofrecerlo a quien ya apoya, ``is_author`` para no
+    ofrecérselo a quien lo creó, y a qué distancia está del punto reportado.
+    """
+
+    distance_meters = serializers.SerializerMethodField()
+    is_author = serializers.SerializerMethodField()
+
+    class Meta(ReportListSerializer.Meta):
+        fields = [
+            *ReportListSerializer.Meta.fields,
+            "address",
+            "distance_meters",
+            "is_author",
+        ]
+
+    def get_distance_meters(self, obj) -> int | None:
+        distance = getattr(obj, "distance_meters", None)
+        return None if distance is None else round(distance)
+
+    def get_is_author(self, obj) -> bool:
+        request = self.context.get("request")
+        return bool(request and obj.author_id == request.user.id)
 
 
 class ReportUpdateSerializer(serializers.ModelSerializer):
@@ -386,6 +482,12 @@ class ReportUpdateSerializer(serializers.ModelSerializer):
     La ubicación no se edita: cambiarla convertiría el reporte en otro distinto y
     dejaría inconsistente el historial de estados ya registrado.
     """
+
+    # La foto de reemplazo pasa por el mismo circuito que la original, con una
+    # consecuencia visible: el reporte vuelve a ocultarse hasta que se procese
+    # (US-042). Publicar la nueva sin difuminar sería la vía degradada que la
+    # historia descarta.
+    photo = PendingPhotoField(source="photo_pending", write_only=True)
 
     class Meta:
         model = Report
@@ -401,3 +503,89 @@ class ReportUpdateSerializer(serializers.ModelSerializer):
     # Una descripción en blanco —vacía o de solo espacios— la rechaza DRF: el
     # ``CharField`` recorta los espacios antes de validar y ``allow_blank`` es
     # False, así que "   " llega como "" y salta el error estándar.
+
+
+COMPLAINT_REASON_REQUIRED_MESSAGE = "El motivo es obligatorio."
+
+
+class PrivacyRequestCreateSerializer(serializers.Serializer):
+    """La solicitud de revisión por dato personal visible (US-043).
+
+    Sin ``evidence`` se denuncia la foto del reporte; con ella, la foto de ese
+    parte de trabajo del operario. El reporte lo fija la URL.
+    """
+
+    evidence = serializers.IntegerField(required=False, allow_null=True)
+
+
+class ComplaintCreateSerializer(serializers.Serializer):
+    """Denunciar un reporte (US-021): motivo obligatorio, comentario opcional.
+
+    Los motivos válidos son los del catálogo del modelo; el reporte lo fija la
+    URL y el denunciante, la sesión.
+    """
+
+    reason = serializers.ChoiceField(
+        choices=ReportComplaint.Reason.choices,
+        # Un motivo vacío tiene que decir "es obligatorio", no "no existe":
+        # se deja pasar acá y lo rechaza ``validate_reason``.
+        allow_blank=True,
+        error_messages={
+            "required": COMPLAINT_REASON_REQUIRED_MESSAGE,
+            "null": COMPLAINT_REASON_REQUIRED_MESSAGE,
+            "invalid_choice": "El motivo elegido no existe.",
+        },
+    )
+    comment = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=COMPLAINT_COMMENT_MAX_LENGTH,
+    )
+
+    def validate_reason(self, value):
+        if not value:
+            raise serializers.ValidationError(COMPLAINT_REASON_REQUIRED_MESSAGE)
+        return value
+
+
+class ComplaintReceiptSerializer(serializers.ModelSerializer):
+    """El acuse de una denuncia (US-021, escenario 1).
+
+    ``recipient`` dice a quién quedó dirigida. No lleva al denunciante: quien
+    la presentó ya sabe quién es, y este serializer no se usa para nadie más.
+    """
+
+    received_at = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = ReportComplaint
+        fields = ["id", "report", "reason", "recipient", "comment", "received_at"]
+        read_only_fields = fields
+
+
+class PrivacyRequestReceiptSerializer(serializers.ModelSerializer):
+    """El acuse que recibe quien denuncia (US-043, escenario 1).
+
+    Lleva la fecha de recepción y la fecha límite para que la app pueda decirle
+    al vecino hasta cuándo, no solo "en 24 horas".
+    """
+
+    received_at = serializers.DateTimeField(source="created_at", read_only=True)
+    deadline = serializers.SerializerMethodField()
+    evidence = serializers.IntegerField(source="resolution_evidence_id", read_only=True)
+
+    class Meta:
+        model = ReportComplaint
+        fields = [
+            "id",
+            "report",
+            "evidence",
+            "reason",
+            "status",
+            "received_at",
+            "deadline",
+        ]
+        read_only_fields = fields
+
+    def get_deadline(self, obj) -> str:
+        return deadline_for(obj).isoformat()

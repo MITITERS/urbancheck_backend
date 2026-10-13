@@ -192,3 +192,214 @@ def notify_resolution_appealed(appeal) -> list[Notification]:
         deliver_push(notification)
         notifications.append(notification)
     return notifications
+
+
+def notify_image_removed(
+    report,
+    *,
+    from_resolution_evidence: bool,
+    still_hidden: bool = False,
+) -> Notification:
+    """Avisa al autor qué se retiró por protección de datos (US-043).
+
+    Son dos consecuencias distintas y el mensaje dice cuál:
+
+    - **La foto del reporte**: se retira el reporte entero, para siempre. Un
+      reporte sin foto no se vuelve a publicar. Se le dice que puede volver a
+      reportar el problema con otra foto, para que no se quede sin reclamo.
+    - **La foto de un cierre del operario**: el reporte conserva la suya y
+      sigue como estaba, salvo que otra imagen lo mantenga en revisión.
+
+    No lleva ``actor``, aunque lo decidió un administrador: ante el vecino
+    responde la plataforma, con el mismo criterio de protección del personal
+    de US-038. Quién resolvió queda en el registro de la solicitud.
+    """
+    if not from_resolution_evidence:
+        message = (
+            "Retiramos tu reporte porque su foto mostraba un rostro o una patente "
+            "sin difuminar. Ya no está publicado; si el problema sigue, podés "
+            "reportarlo de nuevo con otra foto."
+        )
+    elif still_hidden:
+        message = (
+            "Retiramos la foto del trabajo realizado en tu reporte porque mostraba "
+            "un dato personal. El reporte sigue oculto mientras revisamos otra de "
+            "sus imágenes."
+        )
+    else:
+        message = (
+            "Retiramos la foto del trabajo realizado en tu reporte porque mostraba "
+            "un dato personal. El reporte sigue publicado como estaba."
+        )
+    notification = Notification.objects.create(
+        recipient=report.author,
+        actor=None,
+        kind=Notification.Kind.IMAGEN_RETIRADA,
+        report=report,
+        message=message,
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_report_under_review(report) -> Notification:
+    """Avisa al autor que su reporte se ocultó por una denuncia (US-043).
+
+    Sin este aviso el vecino descubría que su reclamo desapareció del feed sin
+    saber por qué. **No dice quién denunció**: la denuncia es de cualquier
+    vecino y exponerlo invitaría a la represalia. Quien decide si corresponde
+    mandarlo —no, si el que denunció es el propio autor— es el servicio.
+    """
+    notification = Notification.objects.create(
+        recipient=report.author,
+        actor=None,
+        kind=Notification.Kind.REPORTE_EN_REVISION,
+        report=report,
+        message=(
+            "Ocultamos tu reporte mientras revisamos una denuncia sobre su "
+            "imagen: puede mostrar un rostro o una patente sin difuminar."
+        ),
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_complaint_received(complaint, *, message: str) -> Notification:
+    """Le deja a quien denunció el acuse de su denuncia (US-021).
+
+    Es el mismo texto que ve al confirmar, que distingue quién la revisa: queda
+    en sus avisos para cuando cierre la pantalla.
+    """
+    notification = Notification.objects.create(
+        recipient=complaint.reporter,
+        actor=None,
+        kind=Notification.Kind.DENUNCIA_RECIBIDA,
+        report=complaint.report,
+        message=message,
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_report_reported(report) -> Notification:
+    """Avisa al autor que su reporte recibió una denuncia de contenido (US-021).
+
+    **No dice quién denunció ni por qué motivo**, y va sin ``actor``: el
+    escenario 9 reserva la identidad del denunciante para quien resuelve. Que
+    tampoco delate cuántas denuncias hay lo cuida el servicio, que lo manda una
+    sola vez mientras haya alguna pendiente.
+    """
+    notification = Notification.objects.create(
+        recipient=report.author,
+        actor=None,
+        kind=Notification.Kind.REPORTE_DENUNCIADO,
+        report=report,
+        message=(
+            "Otro vecino denunció tu reporte. Lo va a revisar el municipio; "
+            "mientras tanto sigue publicado."
+        ),
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_report_restored(report) -> Notification:
+    """Avisa al autor que la denuncia se desestimó (US-043, escenario 6)."""
+    notification = Notification.objects.create(
+        recipient=report.author,
+        actor=None,
+        kind=Notification.Kind.REPORTE_RESTITUIDO,
+        report=report,
+        message=(
+            "Revisamos la imagen de tu reporte y no muestra datos personales: "
+            "volvió a publicarse tal como estaba."
+        ),
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_photo_processing_failed(instance, *, report=None) -> Notification | None:
+    """Avisa que una imagen no se pudo difuminar y por eso no se publicó (US-042).
+
+    Un solo tipo de aviso para los tres orígenes, con el destinatario y el texto
+    que corresponden a cada uno: quien tiene que enterarse es siempre quien
+    subió la foto, y lo que necesita saber es lo mismo —no se publicó, y puede
+    volver a cargarla—.
+
+    El aviso puede no tener destinatario: la cuenta del operario que cerró pudo
+    borrarse desde entonces. En ese caso no se manda nada y el caso queda en el
+    log y en el panel, que es donde se diagnostica.
+    """
+    recipient = getattr(instance, "author", None) or getattr(instance, "operator", None)
+    if recipient is None:
+        return None
+
+    kind = type(instance).__name__
+    if kind == "ResolutionEvidence":
+        message = (
+            "No pudimos procesar la foto de tu cierre y no se publicó. El parte "
+            "de trabajo quedó registrado: volvé a cargar la foto."
+        )
+    elif kind == "ResolutionAppeal":
+        message = (
+            "No pudimos procesar la foto de tu objeción y no se publicó. "
+            "Volvé a cargarla para que el municipio pueda verla."
+        )
+    else:
+        message = (
+            "No pudimos procesar la imagen de tu reporte, así que no llegó a "
+            "publicarse. Volvé a cargarlo con otra foto."
+        )
+
+    notification = Notification.objects.create(
+        recipient=recipient,
+        actor=None,
+        kind=Notification.Kind.IMAGEN_NO_PROCESADA,
+        report=report if report is not None else getattr(instance, "report", instance),
+        message=message,
+    )
+    deliver_push(notification)
+    return notification
+
+
+def notify_complaint_resolved(
+    report,
+    *,
+    recipients,
+    image_removed: bool,
+    report_withdrawn: bool = False,
+) -> list:
+    """Le cuenta a quien denunció qué se decidió (US-043).
+
+    Cierra el circuito de quien avisó: sin esto, denunciaba y nunca sabía si
+    sirvió. Recibe los destinatarios ya filtrados —el autor del reporte no, que
+    tiene su propio aviso—.
+    """
+    if report_withdrawn:
+        message = (
+            "Retiramos el reporte que denunciaste: su foto mostraba un dato "
+            "personal. Gracias por avisar."
+        )
+    elif image_removed:
+        message = (
+            "Retiramos la imagen que denunciaste: mostraba un dato personal. "
+            "Gracias por avisar."
+        )
+    else:
+        message = (
+            "Revisamos la imagen que denunciaste y no muestra datos personales, "
+            "así que el reporte volvió a publicarse."
+        )
+    notifications = []
+    for recipient in recipients:
+        notification = Notification.objects.create(
+            recipient=recipient,
+            actor=None,
+            kind=Notification.Kind.DENUNCIA_RESUELTA,
+            report=report,
+            message=message,
+        )
+        deliver_push(notification)
+        notifications.append(notification)
+    return notifications
