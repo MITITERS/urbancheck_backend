@@ -7,15 +7,24 @@ from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.tests.factories import ReportFactory
+from urbancheck.reports.tests.factories import area_for
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import PlatformAdminFactory
 
 pytestmark = pytest.mark.django_db
 
-# Las cinco transiciones del panel, tal como las declara la historia.
+# Las transiciones que el panel ejecuta, tal como las declara la historia.
+#
+# ``resolve`` dejó de existir en US-046: el agente ya no declara resuelto un
+# trabajo que no ejecutó. Lo reemplaza ``confirm-resolution``, que confirma el
+# cierre del operario desde el estado intermedio.
 PANEL_TRANSITIONS = [
     ("process", Report.Status.REPORTADO, Report.Status.EN_PROCESO),
-    ("resolve", Report.Status.EN_PROCESO, Report.Status.RESUELTO),
+    (
+        "confirm-resolution",
+        Report.Status.RESUELTO_PENDIENTE,
+        Report.Status.RESUELTO,
+    ),
     ("cancel", Report.Status.EN_PROCESO, Report.Status.CANCELADO),
     ("archive", Report.Status.EN_PROCESO, Report.Status.ARCHIVADO),
     ("reactivate", Report.Status.ARCHIVADO, Report.Status.REPORTADO),
@@ -45,8 +54,16 @@ def agent_client(agent) -> APIClient:
     return client
 
 
-def body(operation: str) -> dict:
-    return {"reason": "Motivo de prueba"} if operation in NEEDS_REASON else {}
+def body(operation: str, report=None) -> dict:
+    """Lo que cada acción exige en el cuerpo.
+
+    ``cancel`` pide motivo desde US-013 y ``process`` pide el área operativa
+    desde US-028: asignarla **es** la transición, no un paso aparte.
+    """
+    payload = {"reason": "Motivo de prueba"} if operation in NEEDS_REASON else {}
+    if operation == "process" and report is not None:
+        payload["area_id"] = area_for(report).id
+    return payload
 
 
 class TestValidTransitions:
@@ -63,7 +80,7 @@ class TestValidTransitions:
 
         response = agent_client.post(
             url(report.id, f"{operation}/"),
-            body(operation),
+            body(operation, report),
             format="json",
         )
 
@@ -79,7 +96,7 @@ class TestValidTransitions:
             with_history=False,
         )
 
-        agent_client.post(url(report.id, "process/"), format="json")
+        agent_client.post(url(report.id, "process/"), body("process", report), format="json")
 
         entry = ReportStatusHistory.objects.get(report=report)
         assert entry.changed_by == agent
@@ -103,7 +120,7 @@ class TestInvalidTransitions:
 
         response = agent_client.post(
             url(report.id, f"{operation}/"),
-            body(operation),
+            body(operation, report),
             format="json",
         )
 
@@ -112,7 +129,10 @@ class TestInvalidTransitions:
         report.refresh_from_db()
         assert report.status == wrong
 
-    @pytest.mark.parametrize("operation", ["resolve", "cancel", "archive", "process"])
+    @pytest.mark.parametrize(
+        "operation",
+        ["confirm-resolution", "cancel", "archive", "process"],
+    )
     def test_final_states_admit_no_transition(
         self,
         agent_client,
@@ -124,7 +144,7 @@ class TestInvalidTransitions:
 
             response = agent_client.post(
                 url(report.id, f"{operation}/"),
-                body(operation),
+                body(operation, report),
                 format="json",
             )
 
@@ -139,7 +159,11 @@ class TestInvalidTransitions:
             status=Report.Status.PENDIENTE_VALIDACION,
         )
 
-        response = agent_client.post(url(report.id, "process/"), format="json")
+        response = agent_client.post(
+            url(report.id, "process/"),
+            body("process", report),
+            format="json",
+        )
 
         assert response.status_code == 409
         assert response.data["available_transitions"] == []
@@ -174,7 +198,10 @@ class TestReason:
         entry = ReportStatusHistory.objects.get(report=report)
         assert entry.reason == "Obra ya ejecutada por otra vía"
 
-    @pytest.mark.parametrize("operation", ["process", "resolve", "archive", "reactivate"])
+    @pytest.mark.parametrize(
+        "operation",
+        ["process", "confirm-resolution", "archive", "reactivate"],
+    )
     def test_the_rest_do_not_require_a_reason(
         self,
         agent_client,
@@ -183,13 +210,17 @@ class TestReason:
     ):
         source = {
             "process": Report.Status.REPORTADO,
-            "resolve": Report.Status.EN_PROCESO,
+            "confirm-resolution": Report.Status.RESUELTO_PENDIENTE,
             "archive": Report.Status.EN_PROCESO,
             "reactivate": Report.Status.ARCHIVADO,
         }[operation]
         report = ReportFactory.create(municipality=municipality, status=source)
 
-        response = agent_client.post(url(report.id, f"{operation}/"), format="json")
+        response = agent_client.post(
+            url(report.id, f"{operation}/"),
+            body(operation, report),
+            format="json",
+        )
 
         assert response.status_code == 200
 
@@ -210,7 +241,7 @@ class TestJurisdiction:
 
         response = agent_client.post(
             url(foreign.id, f"{operation}/"),
-            body(operation),
+            body(operation, foreign),
             format="json",
         )
 
@@ -233,7 +264,9 @@ class TestDetail:
         response = agent_client.get(url(report.id, ""))
 
         operations = {t["operation"] for t in response.data["available_transitions"]}
-        assert operations == {"resolver", "cancelar", "archivar"}
+        # Desde US-046 el agente ya no resuelve desde acá: el cierre lo registra
+        # el operario en terreno.
+        assert operations == {"cancelar", "archivar"}
 
     def test_a_pending_report_offers_no_action_in_the_panel(
         self,
@@ -260,7 +293,7 @@ class TestDetail:
             status=Report.Status.REPORTADO,
             with_history=False,
         )
-        agent_client.post(url(report.id, "process/"), format="json")
+        agent_client.post(url(report.id, "process/"), body("process", report), format="json")
         agent_client.post(url(report.id, "archive/"), format="json")
 
         response = agent_client.get(url(report.id, ""))
@@ -342,7 +375,10 @@ class TestThePlatformAdminCanAlsoTransition:
     ):
         report = ReportFactory.create(municipality=municipality, status=source)
 
-        response = admin_client.post(url(report.id, f"{operation}/"), body(operation))
+        response = admin_client.post(
+            url(report.id, f"{operation}/"),
+            body(operation, report),
+        )
 
         assert response.status_code == 200
         report.refresh_from_db()
@@ -355,7 +391,10 @@ class TestThePlatformAdminCanAlsoTransition:
             status=Report.Status.REPORTADO,
         )
 
-        response = admin_client.post(url(elsewhere.id, "process/"))
+        response = admin_client.post(
+            url(elsewhere.id, "process/"),
+            body("process", elsewhere),
+        )
 
         assert response.status_code == 200
         elsewhere.refresh_from_db()
@@ -367,7 +406,7 @@ class TestThePlatformAdminCanAlsoTransition:
             status=Report.Status.REPORTADO,
         )
 
-        admin_client.post(url(report.id, "process/"))
+        admin_client.post(url(report.id, "process/"), body("process", report))
 
         last = ReportStatusHistory.objects.filter(report=report).latest("id")
         assert last.changed_by == admin

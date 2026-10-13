@@ -186,3 +186,21 @@ class TestPermissions:
         )
 
         assert NotificationPreference.is_enabled(other, Notification.Kind.NUEVO_LIKE)
+
+
+class TestEveryKindIsDescribed:
+    """El catálogo se deriva de ``Notification.Kind``, pero los textos no.
+
+    Un tipo nuevo aparece solo en la pantalla —eso ya funcionaba— pero sin
+    descripción y agrupado entre los huérfanos, que es lo que pasó al sumar los
+    avisos de US-024, US-031, US-047 y US-048. Este test hace que agregar un
+    tipo obligue a decidir cómo se llama y dónde va.
+    """
+
+    def test_every_kind_has_a_description_and_a_group(self, client):
+        catalogue = client.get(URL).data
+
+        assert len(catalogue) == len(Notification.Kind.values)
+        for entry in catalogue:
+            assert entry["description"], f"{entry['kind']} no tiene descripción"
+            assert entry["group"] != "otros", f"{entry['kind']} quedó sin agrupar"

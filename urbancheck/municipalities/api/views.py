@@ -64,8 +64,11 @@ class MunicipalityViewSet(ModelViewSet):
         """Reportes del municipio, con el mismo shape que usa el panel."""
         return (
             Report.objects.filter(municipality=municipality)
-            .select_related("author", "municipality")
-            .annotate(like_count=Count("likes", distinct=True))
+            .select_related("author", "municipality", "operational_area")
+            .annotate(
+                like_count=Count("likes", distinct=True),
+                official_response_count=Count("official_responses", distinct=True),
+            )
             .order_by("-created_at")
         )
 

@@ -16,10 +16,13 @@ import io
 from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
 from PIL import Image
 
 from urbancheck.municipalities.models import Municipality
+from urbancheck.municipalities.models import OperationalArea
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.users.models import User
 
@@ -84,7 +87,35 @@ SEED_REPORTS = [
     (Report.Status.RESUELTO, Report.Category.BACHE, "Bache ya reparado"),
     (Report.Status.CANCELADO, Report.Category.OTRO, "Reclamo duplicado"),
     (Report.Status.ARCHIVADO, Report.Category.BASURA, "Contenedor retirado"),
+    # El estado que agregó US-046 va **al final** y no en su lugar lógico: el
+    # seed es idempotente por el índice de esta lista, así que insertar en el
+    # medio correría los marcadores de todo lo que viene después y una base ya
+    # sembrada terminaría con los reportes duplicados.
+    (
+        Report.Status.RESUELTO_PENDIENTE,
+        Report.Category.ALUMBRADO,
+        "Luminaria repuesta, a la espera de que el vecino confirme",
+    ),
 ]
+
+
+#: Estados que solo se alcanzan pasando por la asignación a un área (US-028).
+#: *Archivado* y *Cancelado* quedan afuera: se llega a ellos también desde
+#: estados anteriores a la gestión.
+ASSIGNED_STATUSES = frozenset(
+    {
+        Report.Status.EN_PROCESO,
+        Report.Status.RESUELTO_PENDIENTE,
+        Report.Status.RESUELTO,
+    },
+)
+
+#: Estados a los que solo se llega con un cierre de operario detrás (US-046).
+#: El seed les crea la evidencia: un reporte resuelto sin parte de trabajo es un
+#: estado que el circuito real no puede producir.
+CLOSED_STATUSES = frozenset(
+    {Report.Status.RESUELTO_PENDIENTE, Report.Status.RESUELTO},
+)
 
 
 def _placeholder_photo() -> ContentFile:
@@ -94,7 +125,10 @@ def _placeholder_photo() -> ContentFile:
 
 
 class Command(BaseCommand):
-    help = "Crea municipalidad, usuarios de cada rol y reportes en los seis estados."
+    help = (
+        "Crea municipalidad, área operativa, usuarios de cada rol y reportes en "
+        "los seis estados."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -141,14 +175,35 @@ class Command(BaseCommand):
             password,
         )
 
-        created = self._seed_reports(citizen, municipality)
-        created += self._seed_reports(citizen, other, offset=len(SEED_REPORTS))
+        # Un área por municipio: desde US-028 un reporte En proceso sin área
+        # responsable no puede existir, así que el seed tampoco puede fabricarlo.
+        area = self._upsert_area(municipality)
+        other_area = self._upsert_area(other)
+        operator = self._upsert_user(
+            "operario@urbancheck.test",
+            "Operario Villa María",
+            User.Role.OPERARIO,
+            municipality,
+            password,
+            operational_area=area,
+        )
+
+        created = self._seed_reports(citizen, municipality, area=area, operator=operator)
+        created += self._seed_reports(
+            citizen,
+            other,
+            area=other_area,
+            # El otro municipio no tiene operario propio: sus reportes cerrados
+            # quedan sin parte de trabajo, que es lo correcto — nadie los cerró.
+            operator=None,
+            offset=len(SEED_REPORTS),
+        )
 
         self.stdout.write(
             self.style.SUCCESS(
                 f"Listo. Municipalidad activa: {municipality} (id={municipality.pk}). "
                 f"Usuarios: {admin.email}, {agent.email}, {validator.email}, "
-                f"{citizen.email} (contraseña: {password}). "
+                f"{operator.email}, {citizen.email} (contraseña: {password}). "
                 f"Reportes nuevos: {created}.",
             ),
         )
@@ -165,13 +220,34 @@ class Command(BaseCommand):
         )
         return municipality
 
-    def _upsert_user(self, email, name, role, municipality, password) -> User:
+    def _upsert_area(self, municipality: Municipality) -> OperationalArea:
+        area, _ = OperationalArea.objects.update_or_create(
+            municipality=municipality,
+            name="Obras Públicas",
+            defaults={
+                "contact_email": "obras@urbancheck.test",
+                "contact_phone": "3534123456",
+                "is_active": True,
+            },
+        )
+        return area
+
+    def _upsert_user(  # noqa: PLR0913 (un parámetro por dato del alta)
+        self,
+        email,
+        name,
+        role,
+        municipality,
+        password,
+        operational_area=None,
+    ) -> User:
         user, _ = User.objects.update_or_create(
             email=email,
             defaults={
                 "name": name,
                 "role": role,
                 "municipality": municipality,
+                "operational_area": operational_area,
                 "must_change_password": False,
             },
         )
@@ -179,7 +255,15 @@ class Command(BaseCommand):
         user.save(update_fields=["password"])
         return user
 
-    def _seed_reports(self, author, municipality, offset: int = 0) -> int:
+    def _seed_reports(  # noqa: PLR0913 (un parámetro por dato del alta)
+        self,
+        author,
+        municipality,
+        *,
+        area,
+        operator=None,
+        offset: int = 0,
+    ) -> int:
         created = 0
         for index, (status, category, description) in enumerate(SEED_REPORTS):
             marker = f"[seed:{municipality.pk}:{index}]"
@@ -195,7 +279,26 @@ class Command(BaseCommand):
                 longitude=CENTER[1] + (index + offset) * 0.001,
                 address=f"Calle {index + 1}, {municipality.city}",
                 status=status,
+                # Los estados que solo se alcanzan pasando por la gestión
+                # municipal llevan área responsable: es el invariante de US-028.
+                operational_area=area if status in ASSIGNED_STATUSES else None,
+                area_assigned_at=(
+                    timezone.now() if status in ASSIGNED_STATUSES else None
+                ),
+                closed_at=timezone.now() if status in CLOSED_STATUSES else None,
             )
+            if status in CLOSED_STATUSES and operator is not None:
+                ResolutionEvidence.objects.create(
+                    report=report,
+                    photo=_placeholder_photo(),
+                    description=(
+                        "Se ejecutó el trabajo en el lugar y quedó verificado."
+                    ),
+                    operator=operator,
+                    operational_area=area,
+                    latitude=report.latitude,
+                    longitude=report.longitude,
+                )
             ReportStatusHistory.objects.create(
                 report=report,
                 status=status,

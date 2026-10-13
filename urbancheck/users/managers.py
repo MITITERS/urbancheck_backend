@@ -73,6 +73,23 @@ class UserQuerySet(QuerySet):
             ),
         )
 
+    def with_closed_count(self) -> UserQuerySet:
+        """Anota cuántos reportes cerró cada usuario.
+
+        Es la cifra de actividad del operario (US-044): lo que hace en la calle
+        es dar por resuelto el trabajo que le tocó.
+
+        Se cuenta por las **evidencias de resolución** de US-046 y no por el
+        historial de estados, que es lo que hacía antes de que ese cierre
+        existiera. Contar asientos con estado *Resuelto* ya no sirve: desde
+        US-047 ese estado lo produce la confirmación automática o el agente, no
+        el operario, y el cierre del operario deja el reporte en el estado
+        intermedio. Un parte de trabajo por cierre es exactamente la cifra.
+        """
+        return self.annotate(
+            closed_count=Count("resolution_evidences", distinct=True),
+        )
+
 
 class UserManager(DjangoUserManager["User"].from_queryset(UserQuerySet)):
     """Custom manager for the User model."""

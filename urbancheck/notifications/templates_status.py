@@ -7,7 +7,13 @@ Los textos están en español y sin jerga: el vecino no tiene por qué leer los
 nombres internos de los estados si hay una forma más clara de decirlo.
 """
 
+from typing import TYPE_CHECKING
+
 from urbancheck.reports.models import Report
+from urbancheck.reports.state_machine import Origin
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 Status = Report.Status
 
@@ -23,8 +29,22 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     (Status.REPORTADO, Status.EN_PROCESO): (
         "El municipio comenzó a trabajar en tu reporte."
     ),
+    # US-046 cambió el camino a Resuelto: el operario cierra y el reporte queda
+    # a la espera de que el autor lo objete o deje vencer el plazo.
+    (Status.EN_PROCESO, Status.RESUELTO_PENDIENTE): (
+        "El municipio resolvió tu reporte y cargó la evidencia del trabajo. "
+        "Revisala: si el problema sigue, podés objetar el cierre."
+    ),
+    (Status.RESUELTO_PENDIENTE, Status.RESUELTO): (
+        "Tu reporte quedó confirmado como resuelto."
+    ),
+    (Status.RESUELTO_PENDIENTE, Status.EN_PROCESO): (
+        "Tu objeción se registró: el reporte volvió a gestión del área "
+        "responsable."
+    ),
+    # Segundo cierre tras una apelación: es definitivo y no abre plazo nuevo.
     (Status.EN_PROCESO, Status.RESUELTO): (
-        "El municipio dio por resuelto tu reporte."
+        "El municipio volvió a intervenir y dio por resuelto tu reporte."
     ),
     (Status.EN_PROCESO, Status.CANCELADO): (
         "El municipio canceló la intervención sobre tu reporte."
@@ -37,13 +57,76 @@ STATUS_CHANGE_MESSAGES: dict[tuple[str, str], str] = {
     ),
 }
 
+#: Mensajes que necesitan un dato del sistema para poder redactarse.
+#:
+#: Se guardan como funciones y no como texto porque el número sale de
+#: configuración. Escrito a mano, el aviso decía «pasaron 180 días» mientras el
+#: plazo vigente era 90: le informaba al vecino un plazo que no era el que se le
+#: había aplicado.
+DYNAMIC_CHANGE_MESSAGES: dict[tuple[str, str], Callable[[], str]] = {
+    # Archivado automático por inactividad (US-031). El texto explica el motivo
+    # sin nombrar estados internos: para el vecino lo que pasó es que su reporte
+    # no consiguió validarse ni movió a nadie en todo ese tiempo.
+    (Status.PENDIENTE_VALIDACION, Status.ARCHIVADO): lambda: (
+        f"Tu reporte se archivó automáticamente: pasaron {_inactivity_days()} "
+        "días sin que lograra validarse ni recibiera interacción de la "
+        "comunidad."
+    ),
+}
+
+
+def _inactivity_days() -> int:
+    """El plazo vigente, leído de la política que lo aplica.
+
+    Import local: ``reports.archival`` importa ``notifications.services``, que
+    importa este módulo. A nivel de módulo sería una dependencia circular.
+    """
+    from urbancheck.reports.archival import inactivity_days  # noqa: PLC0415
+
+    return inactivity_days()
+
+#: (estado anterior, estado nuevo, origen) -> mensaje, cuando el par de estados
+#: **no alcanza** para redactar el aviso.
+#:
+#: Tiene prioridad sobre el mapa de arriba. Existe porque un mismo par puede
+#: significar cosas distintas: desde US-040 se llega a *Reportado* desde
+#: *Pendiente de validación* por dos caminos —un validador que fue al lugar
+#: (US-036) o las confirmaciones de los vecinos—, y el aviso indexado solo por
+#: el par le atribuía al vecino un validador que nunca existió.
+#:
+#: Es la misma lección que el panel ya había aprendido en ``get_validation()``:
+#: **el discriminador es el origen, no la forma de la transición.** Se agrega
+#: una fila acá cuando aparezca otro par ambiguo, no un ``if``.
+ORIGIN_CHANGE_MESSAGES: dict[tuple[str, str, str], str] = {
+    (Status.PENDIENTE_VALIDACION, Status.REPORTADO, Origin.VALIDACION_COLECTIVA): (
+        "Varios vecinos confirmaron tu reporte: se validó automáticamente y ya "
+        "es visible para la comunidad."
+    ),
+}
+
 #: Se usa si apareciera una transición sin mensaje propio, para que el aviso
 #: salga igual en lugar de perderse.
 FALLBACK_MESSAGE = "Tu reporte cambió de estado."
 
 
-def message_for(previous_status: str, new_status: str, reason: str = "") -> str:
-    text = STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
+def message_for(
+    previous_status: str,
+    new_status: str,
+    reason: str = "",
+    origin: str = "",
+) -> str:
+    """El texto del aviso para el autor.
+
+    El origen es opcional y solo desempata: sin él se cae al mapa por par de
+    estados, que sigue siendo el caso general. Así una transición nueva no
+    obliga a tocar nada mientras su par sea inequívoco.
+    """
+    dynamic = DYNAMIC_CHANGE_MESSAGES.get((previous_status, new_status))
+    text = (
+        ORIGIN_CHANGE_MESSAGES.get((previous_status, new_status, origin))
+        or (dynamic() if dynamic else None)
+        or STATUS_CHANGE_MESSAGES.get((previous_status, new_status), FALLBACK_MESSAGE)
+    )
     if reason:
         text = f"{text} Motivo: {reason}"
     return text

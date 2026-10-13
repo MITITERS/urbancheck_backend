@@ -5,6 +5,7 @@ import ssl
 from pathlib import Path
 
 import environ
+from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 # urbancheck/
@@ -306,6 +307,35 @@ CELERY_TASK_TIME_LIMIT = 5 * 60
 CELERY_TASK_SOFT_TIME_LIMIT = 60
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+# El scheduler es el de base de datos, así que esta tabla es el **default** con
+# el que arranca: django-celery-beat la sincroniza al levantar y después la
+# entrada se administra desde el admin. Se declara acá para que un despliegue
+# nuevo tenga la verificación diaria de US-041 andando sin un paso manual.
+CELERY_BEAT_SCHEDULE = {
+    "archive-stale-reports": {
+        "task": "urbancheck.reports.tasks.archive_stale_reports",
+        # Cada quince minutos, por lo mismo que la confirmación de abajo: el
+        # plazo es configurable desde que existe
+        # ``DJANGO_ARCHIVAL_INACTIVITY_DAYS``, y una corrida diaria dejaba el
+        # archivado automático **sin poder demostrarse** —había que fechar un
+        # reporte en el pasado y después esperar a la madrugada—.
+        #
+        # Corría a las 3:30 para no mover reportes en horario de uso del
+        # municipio. Esa razón no se sostiene para esta tarea: solo alcanza
+        # reportes *pendientes de validación* que nadie tocó en meses, que por
+        # definición no están en la cola de trabajo de nadie. Y el aviso al
+        # autor se lee mejor a las diez de la mañana que a las tres.
+        "schedule": crontab(minute="*/15"),
+    },
+    "confirm-resolved-reports": {
+        "task": "urbancheck.reports.tasks.confirm_resolved_reports",
+        # Cada quince minutos y no una vez al día: el plazo de objeción es
+        # configurable y la review lo baja a minutos, así que una corrida diaria
+        # dejaría la confirmación automática sin poder demostrarse.
+        "schedule": crontab(minute="*/15"),
+    },
+}
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
 CELERY_WORKER_SEND_TASK_EVENTS = True
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std-setting-task_send_sent_event
@@ -322,6 +352,61 @@ ACTIVE_MUNICIPALITY_ID = env.int("DJANGO_ACTIVE_MUNICIPALITY_ID", default=None)
 # (US-036). Es un único parámetro y no una constante repartida por el código;
 # la verificación se hace siempre en el servidor, nunca en el dispositivo.
 VALIDATION_RADIUS_METERS = env.int("DJANGO_VALIDATION_RADIUS_METERS", default=50)
+
+# Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
+# validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
+# trabajo: el conteo lo resuelve ``Report.confirmation_count()``.
+#
+# Va acá y no como constante en el código porque el escenario 7 pide poder
+# moverlo sin redeploy; el módulo lo lee en cada evaluación.
+COLLECTIVE_VALIDATION_THRESHOLD = env.int(
+    "DJANGO_COLLECTIVE_VALIDATION_THRESHOLD",
+    default=10,
+)
+
+# Días sin interacción tras los cuales un reporte pendiente de validación se
+# archiva solo (US-031).
+#
+# Cuenta desde la **última señal de vida** —creación, comentario o me gusta—, no
+# desde el alta: un reporte que alguien apoyó hace una semana no está
+# abandonado, por viejo que sea.
+#
+# Acá sí va en días y no en minutos, a diferencia de los otros plazos: el
+# archivado se demuestra fechando un reporte en el pasado, no esperando a que
+# venza.
+ARCHIVAL_INACTIVITY_DAYS = env.int("DJANGO_ARCHIVAL_INACTIVITY_DAYS", default=90)
+
+# Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
+#
+# El mapa muestra lo que pasa hoy; los resueltos acumulados de todos los meses
+# lo convierten en un registro histórico. Pasado el plazo el reporte **solo**
+# deja de dibujarse: sigue en el feed, en el detalle y en el panel, no se
+# archiva ni cambia de estado.
+#
+# **En minutos y no en días**, por lo mismo que la ventana de objeción: el
+# default son quince días y una demostración necesita poder bajarlo a un par de
+# minutos sin tocar código.
+MAP_RESOLVED_RETENTION_MINUTES = env.int(
+    "DJANGO_MAP_RESOLVED_RETENTION_MINUTES",
+    default=15 * 24 * 60,
+)
+
+# Ventana durante la cual el autor puede objetar el cierre de un operario antes
+# de que el reporte quede confirmado como Resuelto (US-047).
+#
+# **En minutos y no en días** a propósito: el default son siete días, pero la
+# demostración en la review necesita poder bajarlo a un par de minutos sin tocar
+# código, y un parámetro expresado en días no lo permite.
+RESOLUTION_OBJECTION_MINUTES = env.int(
+    "DJANGO_RESOLUTION_OBJECTION_MINUTES",
+    default=7 * 24 * 60,
+)
+
+# Con cuánta antelación se le avisa al autor que el plazo está por vencer.
+RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
+    "DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES",
+    default=24 * 60,
+)
 
 # django-allauth
 # ------------------------------------------------------------------------------

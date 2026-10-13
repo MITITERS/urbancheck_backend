@@ -9,6 +9,7 @@ from urbancheck.reports.state_machine import TRANSITIONS
 from urbancheck.reports.state_machine import Actor
 from urbancheck.reports.tests.factories import CommentFactory
 from urbancheck.reports.tests.factories import ReportFactory
+from urbancheck.reports.tests.factories import area_for
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import UserFactory
 from urbancheck.users.tests.factories import ValidatorFactory
@@ -23,19 +24,29 @@ def actor_for(transition):
     return factory
 
 
+def run(transition, report, user):
+    """Ejecuta la transición completando lo que cada una exige.
+
+    El motivo y el área son requisitos declarados en la tabla de transiciones,
+    así que se leen de ahí en vez de repetirlos test por test.
+    """
+    return apply_transition(
+        report,
+        transition.operation,
+        actor=transition.actor,
+        changed_by=user,
+        reason="motivo" if transition.requires_reason else "",
+        operational_area=area_for(report) if transition.requires_area else None,
+    )
+
+
 class TestOneNotificationPerTransition:
     @pytest.mark.parametrize("transition", TRANSITIONS, ids=lambda t: t.operation)
     def test_each_transition_notifies_the_author_exactly_once(self, transition):
         report = ReportFactory.create(status=transition.source)
         user = actor_for(transition).create(municipality=report.municipality)
 
-        apply_transition(
-            report,
-            transition.operation,
-            actor=transition.actor,
-            changed_by=user,
-            reason="motivo" if transition.requires_reason else "",
-        )
+        run(transition, report, user)
 
         notifications = Notification.objects.filter(
             report=report,
@@ -52,13 +63,7 @@ class TestOneNotificationPerTransition:
         CommentFactory.create(report=report, author=bystander)
         user = actor_for(transition).create(municipality=report.municipality)
 
-        apply_transition(
-            report,
-            transition.operation,
-            actor=transition.actor,
-            changed_by=user,
-            reason="motivo" if transition.requires_reason else "",
-        )
+        run(transition, report, user)
 
         assert not Notification.objects.filter(
             recipient=bystander,
@@ -70,7 +75,13 @@ class TestOneNotificationPerTransition:
         report = ReportFactory.create(status=Report.Status.REPORTADO)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
-        apply_transition(report, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+        apply_transition(
+            report,
+            "procesar",
+            actor=Actor.MUNICIPAL_AGENT,
+            changed_by=agent,
+            operational_area=area_for(report),
+        )
 
         notification = Notification.objects.get(report=report)
         assert notification.previous_status == Report.Status.REPORTADO
@@ -115,7 +126,13 @@ class TestPushFailureIsolation:
         report = ReportFactory.create(status=Report.Status.REPORTADO)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
-        apply_transition(report, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+        apply_transition(
+            report,
+            "procesar",
+            actor=Actor.MUNICIPAL_AGENT,
+            changed_by=agent,
+            operational_area=area_for(report),
+        )
 
         report.refresh_from_db()
         assert report.status == Report.Status.EN_PROCESO

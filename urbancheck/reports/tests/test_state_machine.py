@@ -18,6 +18,7 @@ from urbancheck.reports.state_machine import Actor
 from urbancheck.reports.state_machine import is_valid
 from urbancheck.reports.state_machine import transitions_from
 from urbancheck.reports.tests.factories import ReportFactory
+from urbancheck.reports.tests.factories import area_for
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import ValidatorFactory
 
@@ -44,12 +45,16 @@ class TestApplyTransition:
     @pytest.mark.parametrize("transition", TRANSITIONS, ids=lambda t: t.operation)
     def test_every_declared_transition_runs(self, transition):
         report = ReportFactory.create(status=transition.source)
-        actor_factory = (
-            ValidatorFactory
-            if transition.actor == Actor.VALIDATOR
-            else MunicipalAgentFactory
-        )
-        user = actor_factory.create(municipality=report.municipality)
+        # La transición del sistema (US-031) no tiene usuario detrás.
+        if transition.actor == Actor.SYSTEM:
+            user = None
+        else:
+            actor_factory = (
+                ValidatorFactory
+                if transition.actor == Actor.VALIDATOR
+                else MunicipalAgentFactory
+            )
+            user = actor_factory.create(municipality=report.municipality)
 
         apply_transition(
             report,
@@ -57,6 +62,7 @@ class TestApplyTransition:
             actor=transition.actor,
             changed_by=user,
             reason="motivo" if transition.requires_reason else "",
+            operational_area=area_for(report) if transition.requires_area else None,
         )
 
         report.refresh_from_db()
@@ -126,7 +132,13 @@ class TestHistory:
         report = ReportFactory.create(status=Report.Status.REPORTADO, with_history=False)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
-        apply_transition(report, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+        apply_transition(
+            report,
+            "procesar",
+            actor=Actor.MUNICIPAL_AGENT,
+            changed_by=agent,
+            operational_area=area_for(report),
+        )
 
         entry = ReportStatusHistory.objects.get(report=report)
         assert entry.previous_status == Report.Status.REPORTADO
@@ -155,12 +167,25 @@ class TestConcurrency:
         report = ReportFactory.create(status=Report.Status.REPORTADO)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         stale = Report.objects.get(pk=report.pk)
+        area = area_for(report)
 
-        apply_transition(report, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+        apply_transition(
+            report,
+            "procesar",
+            actor=Actor.MUNICIPAL_AGENT,
+            changed_by=agent,
+            operational_area=area,
+        )
 
         # ``stale`` todavía cree que el reporte está en Reportado.
         with pytest.raises(TransitionError):
-            apply_transition(stale, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+            apply_transition(
+                stale,
+                "procesar",
+                actor=Actor.MUNICIPAL_AGENT,
+                changed_by=agent,
+                operational_area=area,
+            )
 
         assert ReportStatusHistory.objects.filter(report=report).count() == 2
 
@@ -178,7 +203,13 @@ class TestEvent:
         try:
             report = ReportFactory.create(status=Report.Status.REPORTADO)
             agent = MunicipalAgentFactory.create(municipality=report.municipality)
-            apply_transition(report, "procesar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+            apply_transition(
+                report,
+                "procesar",
+                actor=Actor.MUNICIPAL_AGENT,
+                changed_by=agent,
+                operational_area=area_for(report),
+            )
         finally:
             report_status_changed.disconnect(listener)
 

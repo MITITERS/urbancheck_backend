@@ -3,6 +3,7 @@ from typing import ClassVar
 
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import BooleanField
 from django.db.models import CharField
@@ -12,6 +13,9 @@ from django.db.models import ImageField
 from django.db.models import TextChoices
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+
+from urbancheck.municipalities.models import PHONE_INVALID_MESSAGE
+from urbancheck.municipalities.models import PHONE_REGEX
 
 from .managers import UserManager
 
@@ -24,30 +28,39 @@ class User(AbstractUser):
     """
 
     class Role(TextChoices):
-        """Los cuatro roles de la plataforma (US-017).
+        """Los cinco roles de la plataforma (US-017, ampliado por US-044).
 
         ``ADMIN_PLATAFORMA`` y ``AGENTE_MUNICIPAL`` operan el panel web;
-        ``VALIDADOR`` y ``CIUDADANO`` usan la app móvil. El valor ``municipal``
-        de la iteración anterior se migró a ``agente_municipal``.
+        ``VALIDADOR``, ``OPERARIO`` y ``CIUDADANO`` usan la app móvil. El valor
+        ``municipal`` de la iteración anterior se migró a ``agente_municipal``.
         """
 
         CIUDADANO = "ciudadano", _("Ciudadano")
         ADMIN_PLATAFORMA = "admin_plataforma", _("Administrador de la plataforma")
         AGENTE_MUNICIPAL = "agente_municipal", _("Agente municipal")
         VALIDADOR = "validador", _("Validador")
+        OPERARIO = "operario", _("Operario")
 
     #: Roles que tienen acceso al panel web municipal.
     PANEL_ROLES = frozenset({Role.ADMIN_PLATAFORMA, Role.AGENTE_MUNICIPAL})
 
-    #: Roles que deben pertenecer sí o sí a una municipalidad.
-    MUNICIPALITY_BOUND_ROLES = frozenset({Role.AGENTE_MUNICIPAL, Role.VALIDADOR})
+    #: Roles que deben pertenecer sí o sí a una municipalidad. El operario la
+    #: hereda de su área operativa y no la elige (US-044).
+    MUNICIPALITY_BOUND_ROLES = frozenset(
+        {Role.AGENTE_MUNICIPAL, Role.VALIDADOR, Role.OPERARIO},
+    )
 
     #: Cuentas de trabajo: operan el circuito en vez de usarlo como vecinos.
     #: Quien además quiera reportar se crea una cuenta personal. Es el
     #: complemento exacto de ``CIUDADANO``, y se declara por extensión a
     #: propósito: agregar un rol nuevo obliga a decidir de qué lado cae.
     WORK_ROLES = frozenset(
-        {Role.ADMIN_PLATAFORMA, Role.AGENTE_MUNICIPAL, Role.VALIDADOR},
+        {
+            Role.ADMIN_PLATAFORMA,
+            Role.AGENTE_MUNICIPAL,
+            Role.VALIDADOR,
+            Role.OPERARIO,
+        },
     )
 
     # First and last name do not cover name patterns around the globe
@@ -86,7 +99,7 @@ class User(AbstractUser):
     is_work_account_active = BooleanField(
         _("work account active"),
         default=True,
-        help_text=_("Solo aplica a validadores y agentes municipales."),
+        help_text=_("Solo aplica a validadores, operarios y agentes municipales."),
     )
     # Contraseña temporal entregada en el alta: mientras esté en True el usuario
     # solo puede cambiar su contraseña.
@@ -94,6 +107,31 @@ class User(AbstractUser):
         _("must change password"),
         default=False,
         help_text=_("El usuario todavía usa la contraseña temporal del alta."),
+    )
+    # Teléfono de contacto. Obligatorio en el alta de un operario (US-044) y
+    # vacío para el resto: nadie más lo carga hoy, así que el campo es opcional
+    # a nivel de modelo y la obligatoriedad la impone el serializer del alta.
+    phone = CharField(
+        _("phone"),
+        max_length=30,
+        blank=True,
+        default="",
+        validators=[RegexValidator(regex=PHONE_REGEX, message=PHONE_INVALID_MESSAGE)],
+    )
+    # Área operativa del operario (US-044). Es obligatoria para ese rol y nula
+    # para todos los demás: la municipalidad se deriva del área y nunca se
+    # acepta como parámetro del cliente.
+    #
+    # ``PROTECT`` y no ``SET_NULL``: un operario sin área no puede existir, así
+    # que borrar el área tendría que dejarlo en un estado inválido. Las áreas no
+    # se borran —se desactivan—, de modo que este candado no estorba a nadie.
+    operational_area = ForeignKey(
+        "municipalities.OperationalArea",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="operators",
+        verbose_name=_("operational area"),
     )
     avatar = ImageField(upload_to="avatars/", blank=True)
     # Perfil público: si es False, otros usuarios solo ven nombre y avatar.
@@ -121,8 +159,8 @@ class User(AbstractUser):
             raise ValidationError(
                 {
                     "municipality": _(
-                        "Un agente municipal o validador debe pertenecer a una "
-                        "municipalidad.",
+                        "Un agente municipal, validador u operario debe pertenecer "
+                        "a una municipalidad.",
                     ),
                 },
             )
@@ -131,6 +169,44 @@ class User(AbstractUser):
                 {
                     "municipality": _(
                         "Este rol no puede estar asociado a una municipalidad.",
+                    ),
+                },
+            )
+        self._clean_operational_area()
+
+    def _clean_operational_area(self) -> None:
+        """El área operativa es del operario, y solo de él (US-044).
+
+        Las tres reglas van juntas porque son la misma: un operario existe
+        dentro de un área, cualquier otro rol no tiene ninguna, y el área
+        pertenece a la municipalidad del usuario. Si vivieran en el serializer
+        del alta, un cambio de área hecho desde el shell o desde el admin de
+        Django podría dejar a un operario mirando la bandeja de otro municipio.
+        """
+        if self.role == self.Role.OPERARIO and self.operational_area_id is None:
+            raise ValidationError(
+                {
+                    "operational_area": _(
+                        "Un operario debe pertenecer a un área operativa.",
+                    ),
+                },
+            )
+        if self.role != self.Role.OPERARIO and self.operational_area_id:
+            raise ValidationError(
+                {
+                    "operational_area": _(
+                        "Solo un operario puede pertenecer a un área operativa.",
+                    ),
+                },
+            )
+        if (
+            self.operational_area_id
+            and self.operational_area.municipality_id != self.municipality_id
+        ):
+            raise ValidationError(
+                {
+                    "operational_area": _(
+                        "El área operativa pertenece a otra municipalidad.",
                     ),
                 },
             )
@@ -162,6 +238,31 @@ class User(AbstractUser):
             self.role == self.Role.VALIDADOR
             and self.is_work_account_active
             and not self.must_change_password
+        )
+
+    @property
+    def is_operator(self) -> bool:
+        return self.role == self.Role.OPERARIO
+
+    @property
+    def can_work_as_operator(self) -> bool:
+        """Única verificación de acceso del operario a su bandeja (US-045).
+
+        Espejo de ``can_operate_panel``, con una condición más: además del rol y
+        de la baja lógica de la cuenta, el área tiene que seguir operativa. Un
+        operario cuya dependencia fue desactivada no tiene trabajo que mirar, y
+        el escenario 9 de US-044 pide que se lo diga en lugar de mostrarle una
+        bandeja vacía.
+
+        La contraseña temporal **no** entra acá, por lo mismo que en el panel:
+        el operario tiene que poder entrar justamente para cambiarla, y la app
+        lo manda a esa pantalla mirando ``must_change_password``.
+        """
+        return (
+            self.is_operator
+            and self.is_work_account_active
+            and self.operational_area is not None
+            and self.operational_area.is_active
         )
 
     @property
