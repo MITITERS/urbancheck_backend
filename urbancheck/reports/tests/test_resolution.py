@@ -245,9 +245,16 @@ class TestWhoSignsTheWork:
         operator_client,
         in_progress,
         area,
+        process_pending_photos,
     ):
-        """Escenario 12: mismo criterio de protección del personal de US-038."""
+        """Escenario 12: mismo criterio de protección del personal de US-038.
+
+        La foto del cierre entra al mismo circuito de difuminado que la del
+        reporte (US-042, escenario 8), así que aparece en el hilo recién
+        cuando la tarea termina.
+        """
         close(operator_client, in_progress)
+        process_pending_photos()
         client = APIClient()
         client.force_authenticate(in_progress.author)
 
@@ -596,9 +603,11 @@ class TestAppeal:
         author_client,
         closed,
         operator,
+        process_pending_photos,
     ):
         """Escenario 10."""
         self.appeal(author_client, closed)
+        process_pending_photos()
         agent = MunicipalAgentFactory.create(municipality=closed.municipality)
         client = APIClient()
         client.force_authenticate(agent)

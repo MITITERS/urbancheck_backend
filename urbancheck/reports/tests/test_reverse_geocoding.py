@@ -109,16 +109,32 @@ class TestCreateResolvesAddress:
         assert res.status_code == 201
         assert Report.objects.get(id=res.data["id"]).address == ADDRESS
 
-    def test_report_becomes_searchable_by_zone(self, auth_client, nominatim_reverse):
-        """El objetivo real: que la búsqueda por localidad lo encuentre."""
+    def test_report_becomes_searchable_by_zone(
+        self,
+        auth_client,
+        nominatim_reverse,
+        process_pending_photos,
+    ):
+        """El objetivo real: que la búsqueda por localidad lo encuentre.
+
+        La búsqueda es una vista pública, así que el reporte aparece recién
+        cuando su imagen terminó de difuminarse (US-042).
+        """
         client, _ = auth_client
         res = self._create(client, latitude="-32.415620", longitude="-63.240000")
+        process_pending_photos()
         found = client.get("/api/reports/?search=Villa María")
         assert res.data["id"] in {r["id"] for r in found.data["results"]}
 
-    def test_appears_in_map_search(self, auth_client, nominatim_reverse):
+    def test_appears_in_map_search(
+        self,
+        auth_client,
+        nominatim_reverse,
+        process_pending_photos,
+    ):
         client, _ = auth_client
         res = self._create(client, latitude="-32.415620", longitude="-63.240000")
+        process_pending_photos()
         mapa = client.get("/api/reports/map/?search=Rivadavia")
         assert res.data["id"] in {m["id"] for m in mapa.data["results"]}
 

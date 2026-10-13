@@ -8,6 +8,7 @@ pedir una ajena por id responde ``404``.
 from django.db.models import Count
 from rest_framework import status as http_status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -21,6 +22,13 @@ from .area_serializers import OperationalAreaSerializer
 NO_HARD_DELETE_MESSAGE = (
     "Un área operativa no se elimina: se desactiva. Los reportes que ya tiene "
     "asignados conservan el vínculo para no perder su trazabilidad."
+)
+
+# Mismo texto que el de las cuentas de trabajo, con el sujeto cambiado: la
+# regla es la misma y quien la lee está en la misma situación.
+INACTIVE_MUNICIPALITY_MESSAGE = (
+    "No se puede reactivar esta área: su municipalidad está dada de baja. "
+    "Volvé a darla de alta primero."
 )
 
 # Filtro del listado: ``?state=active|inactive``. Mismo contrato que el de las
@@ -102,11 +110,17 @@ class OperationalAreaViewSet(JurisdictionScopedMixin, ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def activate(self, request, pk=None):
-        """Vuelve a ofrecerse en el desplegable de asignación."""
+        """Vuelve a ofrecerse, si su municipalidad sigue en pie."""
         return self._set_active(request, active=True)
 
     def _set_active(self, request, *, active: bool) -> Response:
         area = self.get_object()
+        if active and not area.can_be_reactivated:
+            # ``400`` y no ``403``: a quien la ejecuta no le falta permiso —es
+            # el admin, o el agente de esa jurisdicción—; lo que falta es una
+            # condición del dato. Mismo criterio que ``ensure_can_be_reactivated``
+            # para las cuentas de trabajo.
+            raise ValidationError({"detail": INACTIVE_MUNICIPALITY_MESSAGE})
         area.is_active = active
         area.save(update_fields=["is_active", "updated_at"])
         area = self.get_queryset().get(pk=area.pk)

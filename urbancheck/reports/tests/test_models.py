@@ -5,6 +5,7 @@ from django.db import IntegrityError
 
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.tests.factories import CommentFactory
@@ -24,6 +25,8 @@ class TestReport:
             author=UserFactory.create(),
             municipality=active_municipality,
             photo="reports/2026/07/test.jpg",
+            # Publicada: el modelo rechaza una foto sin difuminar (US-042).
+            photo_status=PhotoStatus.PROCESADA,
             description="Bache en la esquina",
             category=Report.Category.BACHE,
             latitude="-34.6",

@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.tests.factories import ReportComplaintFactory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import UserFactory
@@ -305,6 +306,27 @@ class TestPendingInbox:
 
         assert response.status_code == 200
         assert response.data["count"] == 0
+
+    def test_a_report_held_by_a_privacy_request_leaves_the_inbox(
+        self,
+        validator_client,
+        municipality,
+    ):
+        """US-043: la bandeja muestra la foto denunciada, así que tampoco la lista."""
+        held = pending_report(municipality)
+        ReportComplaintFactory.create(report=held)
+
+        listed = validator_client.get(URL)
+        validated = validator_client.post(
+            f"{URL}{held.id}/validate/",
+            NEARBY,
+            format="json",
+        )
+
+        assert held.id not in {row["id"] for row in listed.data["results"]}
+        assert validated.status_code == 404  # noqa: PLR2004
+        held.refresh_from_db()
+        assert held.status == Report.Status.PENDIENTE_VALIDACION
 
     def test_a_validated_report_leaves_the_inbox(self, validator_client, municipality):
         report = pending_report(municipality)

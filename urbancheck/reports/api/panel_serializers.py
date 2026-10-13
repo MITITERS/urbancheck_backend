@@ -10,16 +10,19 @@ from rest_framework import serializers
 
 from urbancheck.municipalities.api.area_serializers import OperationalAreaSerializer
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
+from urbancheck.reports.comparison import needs_closure_review
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportAreaAssignment
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
+from urbancheck.reports.models import ResolutionComparison
 from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.reports.state_machine import OFFICIAL_RESPONSE_STATUSES
 from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
-from urbancheck.reports.state_machine import Origin
+from urbancheck.reports.services import PHOTO_EXEMPT_TARGETS
 from urbancheck.reports.state_machine import Actor
+from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.state_machine import transitions_from
 
 from .serializers import AuthorSerializer
@@ -53,6 +56,41 @@ class PanelOfficialResponseSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PanelResolutionComparisonSerializer(serializers.ModelSerializer):
+    """La comparación automática de un cierre (US-015).
+
+    Solo existe del lado del panel: es control interno del municipio y no una
+    calificación pública del trabajo del operario (escenario 8). Ningún
+    serializer del ciudadano, del validador ni del operario la referencia.
+    """
+
+    is_doubtful = serializers.BooleanField(read_only=True)
+    # Vacío mientras no hay veredicto; el panel lo recibe como nulo.
+    verdict = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResolutionComparison
+        fields = [
+            "status",
+            "verdict",
+            "is_doubtful",
+            "explanation",
+            "model_name",
+            "requested_at",
+            "completed_at",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(
+        serializers.ChoiceField(
+            choices=ResolutionComparison.Verdict.choices,
+            allow_null=True,
+        ),
+    )
+    def get_verdict(self, obj) -> str | None:
+        return obj.verdict or None
+
+
 class PanelResolutionEvidenceSerializer(serializers.ModelSerializer):
     """La evidencia de resolución vista desde el panel (US-046, escenario 13).
 
@@ -64,20 +102,41 @@ class PanelResolutionEvidenceSerializer(serializers.ModelSerializer):
 
     operator = AuthorSerializer(read_only=True)
     operational_area = AreaSummarySerializer(read_only=True)
+    # La comparación automática de este cierre (US-015). Cuelga de la evidencia
+    # y no del reporte, así que un doble cierre trae los dos veredictos.
+    comparison = serializers.SerializerMethodField()
 
     class Meta:
         model = ResolutionEvidence
         fields = [
             "id",
             "photo",
+            # Retirada por protección de datos (US-043, escenario 11).
+            "photo_removed_at",
+            # El difuminado del cierre (US-042).
+            "photo_status",
             "description",
             "created_at",
             "operator",
             "operational_area",
             "latitude",
             "longitude",
+            "comparison",
         ]
         read_only_fields = fields
+
+    @extend_schema_field(PanelResolutionComparisonSerializer(allow_null=True))
+    def get_comparison(self, obj) -> dict | None:
+        """Nula para los cierres anteriores a US-015, que no tienen comparación.
+
+        El acceso inverso de un ``OneToOneField`` lanza una excepción cuando no
+        hay fila; un campo declarativo haría caer el detalle entero por eso.
+        """
+        try:
+            comparison = obj.comparison
+        except ResolutionComparison.DoesNotExist:
+            return None
+        return PanelResolutionComparisonSerializer(comparison).data
 
 
 class PanelResolutionAppealSerializer(serializers.ModelSerializer):
@@ -92,7 +151,15 @@ class PanelResolutionAppealSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResolutionAppeal
-        fields = ["id", "photo", "reason", "created_at", "author", "evidence"]
+        fields = [
+            "id",
+            "photo",
+            "photo_status",
+            "reason",
+            "created_at",
+            "author",
+            "evidence",
+        ]
         read_only_fields = fields
 
 
@@ -179,6 +246,9 @@ class PanelReportListSerializer(serializers.ModelSerializer):
     has_official_response = serializers.SerializerMethodField()
     validation = serializers.SerializerMethodField()
     closure = serializers.SerializerMethodField()
+    # Si el último cierre quedó señalado por la comparación automática y el
+    # reporte sigue en la ventana de objeción (US-015, escenario 3).
+    needs_closure_review = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -193,14 +263,31 @@ class PanelReportListSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "like_count",
+            # Si el reporte todavía no se publicó porque su imagen sigue en el
+            # difuminado (US-042). El panel es la única vista que lo muestra en
+            # ese estado, y sin el campo la fila se vería igual que una con la
+            # foto retirada por protección de datos.
+            "photo_status",
             "operative_area",
             "has_official_response",
             "municipality",
             "author",
             "validation",
             "closure",
+            "needs_closure_review",
         ]
         read_only_fields = fields
+
+    def get_needs_closure_review(self, obj) -> bool:
+        """Usa la anotación del queryset si está, y si no consulta.
+
+        Mismo criterio que ``has_official_response``: un campo declarativo sin
+        su anotación se omitiría en silencio y el panel perdería el aviso.
+        """
+        annotated = getattr(obj, "closure_review_flag", None)
+        if annotated is not None:
+            return annotated
+        return needs_closure_review(obj)
 
     def get_has_official_response(self, obj) -> bool:
         """Usa la anotación del queryset si está, y si no consulta.
@@ -324,6 +411,14 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
     resolution_evidences = PanelResolutionEvidenceSerializer(many=True, read_only=True)
     resolution_appeals = PanelResolutionAppealSerializer(many=True, read_only=True)
     objection_deadline = serializers.SerializerMethodField()
+    # Si hay una solicitud por dato personal sin resolver (US-043): el reporte
+    # está fuera de las vistas públicas. El agente no la resuelve —es del
+    # administrador de la plataforma— pero tiene que saber por qué el vecino
+    # no lo ve.
+    under_privacy_review = serializers.BooleanField(
+        source="is_on_privacy_hold",
+        read_only=True,
+    )
 
     class Meta:
         model = Report
@@ -332,6 +427,13 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
             # Número de cara al usuario, correlativo dentro del municipio.
             "number",
             "photo",
+            "photo_removed_at",
+            # El panel es la única vista que muestra un reporte con la imagen
+            # sin difuminar todavía (US-042). Sin este campo el agente vería
+            # una tarjeta sin foto y sin explicación, y no sabría que el vecino
+            # todavía no la ve.
+            "photo_status",
+            "under_privacy_review",
             "description",
             "category",
             "status",
@@ -446,6 +548,15 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(AvailableTransitionSerializer(many=True))
     def get_available_transitions(self, obj) -> list[dict]:
+        """Lo que el agente puede hacer con este reporte, ahora.
+
+        Un reporte cuya imagen todavía no se difuminó no se gestiona (US-042,
+        escenario 6), y eso se descuenta acá y no en el panel: el panel dibuja
+        exactamente los botones que esta lista trae, así que dejar la
+        transición listada sería ofrecer una acción que el servidor va a
+        rechazar con un 409. La regla sigue viviendo en un solo lugar
+        —``apply_transition``—; esto es la misma condición, consultada.
+        """
         return [
             {
                 "operation": transition.operation,
@@ -454,4 +565,5 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
                 "requires_area": transition.requires_area,
             }
             for transition in transitions_from(obj.status, Actor.MUNICIPAL_AGENT)
+            if obj.photo_is_ready or transition.target in PHOTO_EXEMPT_TARGETS
         ]
