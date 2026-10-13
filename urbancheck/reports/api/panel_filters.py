@@ -53,6 +53,10 @@ class PanelReportFilterSet(filters.FilterSet):
     # como búsqueda de texto sobre la dirección. Decisión documentada en el
     # README; no se implementa filtrado por polígonos.
     zone = filters.CharFilter(field_name="address", lookup_expr="icontains")
+    # Solo los cierres que la comparación automática señaló como dudosos, para
+    # revisarlos antes de que venza la ventana de objeción (US-015). Se apoya en
+    # la anotación ``closure_review_flag`` del queryset del panel.
+    closure_review = filters.BooleanFilter(field_name="closure_review_flag")
 
     ordering = filters.OrderingFilter(
         fields=(

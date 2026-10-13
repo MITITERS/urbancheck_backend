@@ -43,19 +43,20 @@ class MunicipalityViewSet(ModelViewSet):
         return queryset
 
     def perform_destroy(self, instance):
-        # La baja arrastra al personal del municipio: ver
-        # ``municipalities.services.deactivate_municipality``.
-        self._deactivated_users = deactivate_municipality(instance)
+        # La baja arrastra al personal y a las áreas operativas del municipio:
+        # ver ``municipalities.services.deactivate_municipality``.
+        self._deactivated = deactivate_municipality(instance)
 
     def destroy(self, request, *args, **kwargs):
         super().destroy(request, *args, **kwargs)
-        # Cuántas cuentas cayeron con el municipio: es una consecuencia que no
-        # se ve desde la pantalla donde se ejecuta la baja, así que viaja en la
-        # respuesta para que el panel pueda decirla.
+        # Qué cayó con el municipio: son consecuencias que no se ven desde la
+        # pantalla donde se ejecuta la baja, así que viajan en la respuesta para
+        # que el panel pueda decirlas.
         return Response(
             {
                 "detail": DEACTIVATED_MESSAGE,
-                "deactivated_users": self._deactivated_users,
+                "deactivated_users": self._deactivated.users,
+                "deactivated_areas": self._deactivated.areas,
             },
             status=status.HTTP_200_OK,
         )

@@ -10,9 +10,12 @@ from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
+from urbancheck.reports.models import ResolutionComparison
 from urbancheck.reports.models import ResolutionEvidence
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.users.tests.factories import OperatorFactory
 from urbancheck.users.tests.factories import UserFactory
 
@@ -20,7 +23,12 @@ from urbancheck.users.tests.factories import UserFactory
 class ReportFactory(DjangoModelFactory[Report]):
     author = factory.SubFactory(UserFactory)
     municipality = factory.SubFactory(MunicipalityFactory)
+    # Ya difuminada (US-042): un reporte de factory es un reporte **publicado**.
+    # Sin esto la mitad de la suite dejaría de ver sus propios reportes en el
+    # feed, y además el constraint rechazaría la fila por tener foto sin
+    # procesar. Un reporte en procesamiento se arma explícitamente.
     photo = ImageField(filename="report.jpg")
+    photo_status = PhotoStatus.PROCESADA
     description = factory.Faker("sentence", nb_words=10)
     category = Report.Category.BACHE
     latitude = factory.Faker("latitude")
@@ -85,6 +93,7 @@ class ResolutionEvidenceFactory(DjangoModelFactory[ResolutionEvidence]):
 
     report = factory.SubFactory(ReportFactory)
     photo = ImageField(filename="resolution.jpg")
+    photo_status = PhotoStatus.PROCESADA
     description = factory.Faker("sentence", nb_words=12)
     operator = factory.SubFactory(OperatorFactory)
     operational_area = factory.LazyAttribute(lambda o: o.operator.operational_area)
@@ -95,6 +104,19 @@ class ResolutionEvidenceFactory(DjangoModelFactory[ResolutionEvidence]):
         model = ResolutionEvidence
 
 
+class ResolutionComparisonFactory(DjangoModelFactory[ResolutionComparison]):
+    """Comparación automática ya terminada de un cierre (US-015)."""
+
+    evidence = factory.SubFactory(ResolutionEvidenceFactory)
+    status = ResolutionComparison.Status.COMPLETED
+    verdict = ResolutionComparison.Verdict.CONSISTENT
+    explanation = "El bache ya no se ve y el asfalto es nuevo."
+    model_name = "gemini-test"
+
+    class Meta:
+        model = ResolutionComparison
+
+
 class ResolutionAppealFactory(DjangoModelFactory[ResolutionAppeal]):
     """Apelación del autor a un cierre (US-048)."""
 
@@ -102,6 +124,31 @@ class ResolutionAppealFactory(DjangoModelFactory[ResolutionAppeal]):
     author = factory.LazyAttribute(lambda o: o.report.author)
     reason = factory.Faker("sentence", nb_words=10)
     photo = ImageField(filename="appeal.jpg")
+    photo_status = PhotoStatus.PROCESADA
 
     class Meta:
         model = ResolutionAppeal
+
+
+class ReportComplaintFactory(DjangoModelFactory[ReportComplaint]):
+    """Solicitud por dato personal visible, todavía pendiente (US-043).
+
+    ``image_name`` se toma del archivo que se publica en ese momento, igual que
+    al registrarla desde la API. Con un motivo de contenido (US-021) queda
+    vacío: esas denuncias apuntan al reporte y no a un archivo.
+    """
+
+    report = factory.SubFactory(ReportFactory)
+    resolution_evidence = None
+    reporter = factory.SubFactory(UserFactory)
+    reason = ReportComplaint.Reason.DATO_PERSONAL
+    image_name = factory.LazyAttribute(
+        lambda o: (
+            (o.resolution_evidence or o.report).photo.name
+            if o.reason in ReportComplaint.PLATFORM_REASONS
+            else ""
+        ),
+    )
+
+    class Meta:
+        model = ReportComplaint

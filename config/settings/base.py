@@ -95,6 +95,7 @@ LOCAL_APPS = [
     "urbancheck.users",
     "urbancheck.reports",
     "urbancheck.notifications",
+    "urbancheck.anonymization",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -175,6 +176,38 @@ STATICFILES_FINDERS = [
 MEDIA_ROOT = str(APPS_DIR / "media")
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
+
+# Dónde espera la foto original hasta que la tarea la difumina (US-042). Fuera
+# de MEDIA_ROOT a propósito: `/media/` se sirve entero, y ahí adentro estaría
+# publicada la foto sin difuminar. Ver `urbancheck/anonymization/storage.py`.
+PENDING_PHOTO_ROOT = env(
+    "DJANGO_PENDING_PHOTO_ROOT",
+    default=str(BASE_DIR / "pending_media"),
+)
+# https://docs.djangoproject.com/en/dev/ref/settings/#storages
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+    # La ubicación no viaja en OPTIONS: el storage la lee de
+    # `PENDING_PHOTO_ROOT` en cada uso, y así se puede redirigir sin recrear
+    # nada. Sin `base_url`: `photo_pending.url` levanta ValueError, y exponer
+    # la original por descuido falla en vez de filtrarla.
+    "pending_photos": {
+        "BACKEND": "urbancheck.anonymization.storage.PendingPhotoStorage",
+    },
+}
+
+# La foto sube sin pasar por un temporal a disco (US-041), que es lo que Django
+# hace por defecto con todo archivo de más de 2,5 MB: de ahí no la borra nadie.
+# https://docs.djangoproject.com/en/dev/ref/settings/#file-upload-handlers
+FILE_UPLOAD_HANDLERS = ["urbancheck.anonymization.uploads.MemoryOnlyUploadHandler"]
+PHOTO_MAX_UPLOAD_BYTES = env.int("DJANGO_PHOTO_MAX_UPLOAD_MB", default=15) * 1024 * 1024
+# El cuerpo entero del request: la foto más los campos de texto que la acompañan.
+FILE_UPLOAD_MAX_MEMORY_SIZE = PHOTO_MAX_UPLOAD_BYTES + 1024 * 1024
 
 # TEMPLATES
 # ------------------------------------------------------------------------------
@@ -335,6 +368,13 @@ CELERY_BEAT_SCHEDULE = {
         # dejaría la confirmación automática sin poder demostrarse.
         "schedule": crontab(minute="*/15"),
     },
+    "requeue-stale-pending-photos": {
+        "task": "urbancheck.anonymization.tasks.requeue_stale_pending_photos",
+        # El seguro contra el mensaje que el broker perdió (US-042). En la
+        # práctica no encuentra nada; el día que encuentre algo, es un reporte
+        # que no se habría publicado nunca.
+        "schedule": crontab(minute="*/15"),
+    },
 }
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
 CELERY_WORKER_SEND_TASK_EVENTS = True
@@ -352,6 +392,17 @@ ACTIVE_MUNICIPALITY_ID = env.int("DJANGO_ACTIVE_MUNICIPALITY_ID", default=None)
 # (US-036). Es un único parámetro y no una constante repartida por el código;
 # la verificación se hace siempre en el servidor, nunca en el dispositivo.
 VALIDATION_RADIUS_METERS = env.int("DJANGO_VALIDATION_RADIUS_METERS", default=50)
+
+# Radio dentro del cual un reporte activo de la misma categoría se considera el
+# mismo problema (US-026) y el nuevo no se crea (US-032). Absorbe el error del
+# GPS de un teléfono en la calle (10 a 20 m) sin unificar dos baches distintos
+# de la misma cuadra. Como el radio de US-036 y el umbral de US-040, es un
+# único parámetro y se lee en cada evaluación. El criterio completo vive en
+# ``urbancheck.reports.duplicates``.
+DUPLICATE_REPORT_RADIUS_METERS = env.int(
+    "DJANGO_DUPLICATE_REPORT_RADIUS_METERS",
+    default=30,
+)
 
 # Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
 # validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
@@ -406,6 +457,69 @@ RESOLUTION_OBJECTION_MINUTES = env.int(
 RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
     "DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES",
     default=24 * 60,
+)
+
+# Plazo para resolver una solicitud de revisión por dato personal visible
+# (US-043, RN-12). Corre desde la **recepción** de la solicitud; pasado el plazo
+# la bandeja del administrador la señala como fuera de plazo.
+#
+# **En minutos y no en horas**, por lo mismo que la ventana de objeción: el
+# default son 24 horas y una demostración necesita ver vencer una solicitud.
+PERSONAL_DATA_REVIEW_MINUTES = env.int(
+    "DJANGO_PERSONAL_DATA_REVIEW_MINUTES",
+    default=24 * 60,
+)
+
+# Comparación automática del antes y el después de un cierre (US-015).
+#
+# El cliente habla el dialecto de chat completions de OpenAI, que ofrecen Gemini,
+# Groq, OpenRouter y Ollama: cambiar de proveedor es cambiar estas variables. El
+# default es el free tier de Gemini en Google AI Studio.
+#
+# **Sin clave, la función queda apagada**: cada cierre se registra como
+# "comparación no disponible" y el circuito sigue igual. Es informativa y nunca
+# puede bloquear un cierre.
+RESOLUTION_COMPARISON_API_KEY = env("DJANGO_RESOLUTION_COMPARISON_API_KEY", default="")
+RESOLUTION_COMPARISON_BASE_URL = env(
+    "DJANGO_RESOLUTION_COMPARISON_BASE_URL",
+    default="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+RESOLUTION_COMPARISON_MODEL = env(
+    "DJANGO_RESOLUTION_COMPARISON_MODEL",
+    default="gemini-3.6-flash",
+)
+# Reintentos ante fallos transitorios (timeout, 429, 5xx) antes de darla por no
+# ANONIMIZACIÓN DIFERIDA (US-042)
+# ------------------------------------------------------------------------------
+# Cuántas veces se reintenta una foto cuyo detector falló, y con qué espera
+# inicial entre intentos (se duplica en cada uno). Un fallo permanente —un
+# archivo que no se puede abrir— no se reintenta ninguna vez.
+ANONYMIZATION_MAX_RETRIES = env.int("DJANGO_ANONYMIZATION_MAX_RETRIES", default=3)
+ANONYMIZATION_RETRY_BASE_SECONDS = env.int(
+    "DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS",
+    default=30,
+)
+# A partir de cuánto una foto en cola se considera perdida y se reencola. Cubre
+# el mensaje que el broker nunca entregó: sin esto el reporte queda invisible
+# para siempre y ni siquiera falló, así que su autor no recibe ningún aviso.
+ANONYMIZATION_STALE_MINUTES = env.int("DJANGO_ANONYMIZATION_STALE_MINUTES", default=30)
+
+# disponible. Una respuesta fuera de formato no se reintenta.
+RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES",
+    default=3,
+)
+# Por debajo del ``CELERY_TASK_SOFT_TIME_LIMIT``: la tarea tiene que poder
+# registrar el fallo antes de que Celery la corte.
+RESOLUTION_COMPARISON_TIMEOUT_SECONDS = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS",
+    default=30,
+)
+# Lado mayor con el que viajan las imágenes. Alcanza para ver un bache y ahorra
+# cuota del plan gratuito.
+RESOLUTION_COMPARISON_MAX_SIDE_PX = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX",
+    default=1024,
 )
 
 # django-allauth

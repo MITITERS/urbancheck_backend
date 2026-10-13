@@ -37,3 +37,7 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 MEDIA_URL = "http://media.testserver/"
 # Your stuff...
 # ------------------------------------------------------------------------------
+# La comparación de cierres (US-015) queda "configurada" para que los tests
+# ejerciten el circuito completo. Ninguno sale a la red: ``conftest.py`` bloquea
+# el cliente, y los que necesitan una respuesta la simulan.
+RESOLUTION_COMPARISON_API_KEY = "test-key"

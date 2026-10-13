@@ -12,6 +12,7 @@ from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.reports.comparison import closure_review_annotation
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
@@ -85,6 +86,7 @@ class PanelReportViewSet(
                 queryset=ResolutionEvidence.objects.select_related(
                     "operator",
                     "operational_area",
+                    "comparison",
                 ),
             ),
             Prefetch(
@@ -93,6 +95,7 @@ class PanelReportViewSet(
                     "author",
                     "evidence__operator",
                     "evidence__operational_area",
+                    "evidence__comparison",
                 ),
             ),
         )
@@ -101,6 +104,9 @@ class PanelReportViewSet(
             # Alimenta el indicador de "sin respuesta oficial" del listado
             # (US-024, escenario 13) sin traer el hilo por fila.
             official_response_count=Count("official_responses", distinct=True),
+            # Alimenta la señal de "cierre a revisar" del listado y su filtro
+            # (US-015, escenario 3).
+            closure_review_flag=closure_review_annotation(),
         )
         .order_by("-created_at")
     )

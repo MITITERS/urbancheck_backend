@@ -12,3 +12,6 @@ venv
 .envs/
 .venv/
 **/__pycache__/
+
+# US-042: originales a la espera del difuminado. Nunca se versionan ni se copian a la imagen.
+pending_media/

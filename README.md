@@ -893,6 +893,72 @@ meterlos juntos obligaría al panel a preguntar cuál de los dos casos es —jus
 la ambigüedad que el origen vino a resolver—. Quiénes confirmaron no se expone
 (US-038); solo cuántos.
 
+### Un problema ya reportado no se vuelve a crear (US-026 y US-032)
+
+`POST /api/reports/` rechaza el alta si ya hay un reclamo **activo**
+(*Pendiente de validación*, *Reportado*, *En proceso* o *Resuelto pendiente de
+confirmación*) de la **misma categoría**, en la **misma municipalidad** y a no
+más de `DJANGO_DUPLICATE_REPORT_RADIUS_METERS` (default 30) del punto. Si hay
+varios, cuenta el más cercano. *Resuelto*, *Cancelado* y *Archivado* no
+bloquean: un problema que reaparece después del cierre es un reclamo nuevo.
+
+La detección (US-026) es `find_duplicate` en `reports/duplicates.py`. Recibe
+coordenadas, categoría y municipalidad y devuelve el reporte o `None`. Qué se
+hace con eso (US-032) está en la vista. La categoría es indispensable: un bache
+y una vereda rota en la misma esquina son dos problemas. Los 30 m absorben el
+error del GPS de un teléfono en la calle (10 a 20 m) sin unificar dos baches de
+la misma cuadra.
+
+**Consulta indexada sin PostGIS.** El proyecto no usa PostGIS, así que la
+búsqueda es una caja delimitadora en el `WHERE` seguida de Haversine sobre las
+pocas filas que quedan. Todas las condiciones van en la base, ninguna se
+filtra en Python. Las cubre el índice parcial `report_duplicate_lookup` sobre
+`(municipality, category, latitude, longitude)`, restringido a los estados
+activos. La condición del índice repite `ACTIVE_STATUSES`: si esa lista cambia,
+hace falta una migración, y un test falla si se desincronizan. Otro test
+verifica con `EXPLAIN` que el plan usa el índice.
+
+La respuesta es un **`409`** y no un `400`, para que el cliente la distinga de
+un campo mal cargado. Trae el reclamo serializado, así la app puede ofrecer
+sumarse sin hacer otra llamada:
+
+```json
+{
+  "code": "report_already_exists",
+  "detail": "Este problema ya fue reportado. Podés sumar tu apoyo al reclamo existente.",
+  "existing_report": { "...": "lo del feed", "distance_meters": 12, "is_author": false }
+}
+```
+
+- **Sumarse** es el `POST /like/` de siempre, que cuenta para la validación
+  colectiva (US-040). No hay un endpoint ni un tipo de apoyo aparte.
+- **El intento bloqueado no se registra** en ningún lado.
+- **Ningún flag del cliente saltea la verificación.**
+
+**La verificación corre antes de validar la foto, y el orden importa.** Con la
+verificación en `validate()` o en `perform_create`, la foto de un reporte que
+nunca se crea ya habría entrado al circuito de difuminado: hasta US-041 eso
+significaba haberla anonimizado dentro del request; desde US-042, haberla
+escrito en el storage privado y encolado una tarea. En los dos casos es trabajo
+—y un archivo— sobre algo que no va a existir. Por eso `ReportViewSet.create`
+hace esto:
+
+1. Valida solo la ubicación y la categoría, con `ReportLocationSerializer`.
+2. Resuelve la ubicación: geocoding y municipalidad.
+3. Busca el reclamo existente.
+4. Recién entonces pasa al serializer completo. `perform_create` reutiliza la
+   ubicación ya resuelta para no geocodificar dos veces.
+
+Si la ubicación o la categoría son inválidas, no se decide nada ahí y el `400`
+sale como siempre, con todos los errores juntos.
+
+`resuelto_pendiente_confirmacion` **sí** bloquea desde US-026. US-032 lo había
+dejado afuera de forma provisoria. Mientras el cierre no está confirmado, el
+problema sigue abierto y el lugar para decirlo es el reclamo existente.
+
+**Carrera aceptada:** dos envíos simultáneos del mismo problema pueden crearse
+los dos. Evitarlo pediría un bloqueo por zona.
+
 ### El mapa deja de dibujar los resueltos a los 15 días
 
 El mapa responde «¿qué pasa hoy en mi barrio?». Con los resueltos de todos los
@@ -971,13 +1037,497 @@ automática o el agente, no el operario.
 La reapertura por apelación **conserva el área operativa** y no vuelve a
 *Reportado*: el trabajo mal ejecutado le corresponde a quien lo ejecutó.
 
-### Pendiente conocido: la anonimización de imágenes
+### Anonimización de rostros y patentes (US-041)
 
-US-046 y US-048 dicen que la foto de cierre y la de la apelación atraviesan el
-circuito de difuminado de US-041 (`SCRUM-68`). **Ese circuito no está
-implementado**: US-041 y US-042 siguen en *To do*. Las dos fotos se cargan y se
-publican directo, igual que la foto del reporte de US-004. Cuando se implemente
-la anonimización, los tres puntos de carga tienen que engancharse a ella.
+Toda foto que entra por la API se guarda con los rostros y las patentes
+difuminados (RN-11, Ley 25.326). Son **cuatro** puntos de carga: alta del
+reporte, reemplazo de su foto, cierre del operario (US-046) y apelación
+(US-048). Los cuatro declaran `PendingPhotoField`
+(`urbancheck/common/fields.py`), que valida la imagen y la encamina al
+difuminado. El campo `photo` del modelo nunca recibe la original. Un test
+recorre los serializers de entrada —los de la app y los del panel— y falla si
+aparece una foto que no pase por ese campo.
+
+> El campo se llamaba `AnonymizedImageField` y difuminaba ahí mismo, dentro de
+> `is_valid()`. US-042 movió el difuminado a una tarea y lo renombró, porque el
+> nombre viejo pasó a mentir.
+
+**Decisión técnica: no se usa OpenAI Vision.** El documento de Alcance supone la
+API de visión de OpenAI para las funciones de IA. Para esta se descarta porque
+un modelo de lenguaje visual no devuelve cajas con la precisión necesaria para
+tapar una cara y no puede transformar la imagen. Además, el despliegue es
+on-premise y una obligación legal no puede depender de un servicio externo.
+**Esta contradicción tiene que reflejarse en la próxima versión del Alcance.**
+En su lugar se usan detectores preentrenados que corren localmente en CPU. No
+hay entrenamiento, dataset propio, fine-tuning ni GPU:
+
+| Pieza | Modelo | Licencia |
+|---|---|---|
+| Rostros | YuNet 2023mar (OpenCV Zoo), vía `cv2.FaceDetectorYN` | MIT |
+| Patentes | YOLOv9-s 608 *end2end* de [open-image-models](https://github.com/ankandrew/open-image-models) | MIT |
+| Difuminado | Gaussiano de OpenCV | Apache 2.0 |
+
+Los pesos están versionados en `urbancheck/anonymization/weights/` y nunca se
+bajan en tiempo de ejecución. El detector de patentes se corre directamente con
+`onnxruntime`, no a través del paquete `open-image-models`: ese paquete, ante un
+error de inferencia, lo registra y devuelve «sin detecciones», y acá eso
+significaría publicar una patente sin difuminar.
+
+Cómo funciona `anonymize()` (`urbancheck/anonymization/service.py`):
+
+- Aplica la orientación EXIF a los píxeles y después **descarta el EXIF**, que
+  trae el GPS y el modelo del teléfono.
+- Corre los dos detectores sobre la misma imagen. En fotos de 1200 px o más, las
+  patentes se buscan además por cuadrantes, porque una patente lejana
+  desaparece al reducir la foto a 608 px.
+- Expande cada caja con un margen: 25 % para los rostros y 15 % para las
+  patentes.
+- Difumina todas las cajas en una sola pasada con un gaussiano de sigma igual a
+  ¼ del lado de la caja. **No usa pixelado**, que se revierte en parte con
+  superresolución. Para las cajas grandes, el gaussiano se aplica sobre la
+  región reducida y se reescala en bilineal. Sin eso, una patente de cerca
+  tardaba 30 s.
+- Conserva formato (JPEG, PNG y WebP; cualquier otro sale como JPEG),
+  resolución y transparencia.
+- El log registra cantidades y tiempo, **nunca** el nombre ni la ruta del
+  archivo.
+
+**La original no pasa por un temporal.** Django escribe en `/tmp` todo archivo
+de más de 2,5 MB, y de ahí no la borra nadie. `FILE_UPLOAD_HANDLERS` lo
+reemplaza por un handler solo de memoria, que rechaza con 400 lo que supere
+`DJANGO_PHOTO_MAX_UPLOAD_MB` (15 por defecto) antes de leerlo. En el admin, la
+foto del reporte es de solo lectura.
+
+> **Actualizado por US-042.** Cuando se escribió esto la original no tocaba el
+> disco en ningún momento, porque el difuminado corría dentro del request. Con
+> la publicación diferida sí se escribe, en un storage privado fuera de
+> `MEDIA_ROOT` y sin URL, hasta que la tarea la procesa y la borra. Ver
+> «Publicación diferida hasta completar el difuminado (US-042)».
+
+**Ante un fallo, la foto no se publica.** Si el detector falla, no se guarda
+nada. Desde US-042 el fallo es asíncrono: el alta devuelve 201, el reporte
+queda sin publicar y su autor recibe el aviso.
+
+#### Línea base medida (escenario 9)
+
+`python manage.py benchmark_anonymization [--annotate DIR] [--output DIR]` corre
+el servicio sobre 37 fotos urbanas de Wikimedia Commons con licencia libre,
+guardadas en `urbancheck/anonymization/benchmark/`. El set incluye peatonales
+con multitudes, calles con autos y colectivos, patentes de cerca, escenas
+nocturnas y baches sin nadie. Los rostros reconocibles y las patentes legibles
+de cada foto se contaron a mano; `manifest.json` trae la fuente, la licencia y
+una nota por imagen.
+
+| | Detectados | Tasa |
+|---|---|---|
+| Rostros | 175 / 189 | **92,6 %** |
+| Patentes | 28 / 30 | **93,3 %** |
+| Total | 203 / 219 | **92,7 %** |
+
+Tiempo por imagen (1600 px, CPU del contenedor de desarrollo): mediana de
+0,8 a 1 s y máximo de 1,3 s, según la carga. Una foto de 12 MP tarda menos de
+2 s. El límite de la historia es 10 s. Casi todo el tiempo se va en las cinco
+pasadas del detector de patentes (imagen entera y cuadrantes).
+
+Falsos negativos (son los que justifican el reclamo de US-043):
+
+- **Rostros de perfil o mirando hacia abajo** en peatonales: 7 casos, en
+  `people_03`, `05`, `07` (2), `08` y `09` (2). YuNet se entrenó sobre todo con
+  caras frontales.
+- **Personas chicas al fondo**: 4 casos. Son un caminante en `people_04`, un
+  hombre y la agente de tránsito en `people_06`, y el chofer del colectivo de
+  `street_cars_05`, detrás del parabrisas.
+- **Caras parcialmente tapadas**, por un gorro o por el borde de la foto: 2
+  casos (`people_10` y `people_01`).
+- **Una mujer detrás de otra**, en `street_cars_01`.
+- **Patentes cortadas o tapadas**: la de una moto cortada por el borde inferior
+  (`people_09`) y una trasera tapada por otro auto (`street_cars_14`).
+
+Falsos positivos: dos llantas y dos carteles detectados como rostro, la
+calcomanía «TAXI PREMIUM» y dos carteles detectados como patente, y siluetas
+nocturnas. Difuminan de más, pero no exponen nada. Las caras de tapas de
+revistas y de carteles publicitarios se cuentan como rostros.
+
+El avatar de usuario **no** se anonimiza: es la foto que la propia persona elige
+para su perfil, no un dato de terceros.
+
+### Comparación automática del cierre: informa, no decide (US-015)
+
+Cada cierre de un operario dispara una comparación entre la foto original del
+reporte y la foto del cierre. La hace un modelo de visión generalista, que
+recibe además la categoría y el parte de trabajo. El veredicto sale de un
+conjunto cerrado: `consistente`, `problema_persistente`, `lugar_distinto` o
+`trabajo_incoherente`. Los tres últimos marcan el reporte como **cierre a
+revisar** en el listado del panel mientras dura la ventana de objeción. El
+listado acepta `?closure_review=true` para filtrarlos.
+
+**El veredicto no tiene ninguna consecuencia sobre el reporte.** No cambia el
+estado, no toca el plazo de US-047 y no habilita ni impide transiciones.
+`ResolutionComparison` no tiene ninguna FK ni escritura hacia `Report`. El
+control efectivo sobre un cierre mal hecho sigue siendo la apelación del vecino
+(US-048): alguien responde por ella, mientras que un modelo que se equivoca lo
+hace en silencio.
+
+- **Cuelga de la evidencia, no del reporte**: un segundo cierre tras una
+  apelación trae su propia comparación y la del primero se conserva. Siempre se
+  compara contra la foto original del reporte.
+- **Asíncrona**: `register_comparison` deja la fila dentro de la transacción
+  del cierre, y si el cierre se revierte no queda nada. El operario no espera a
+  un servicio externo. **El disparo se movió con US-042**: lo hace
+  `enqueue_comparison` cuando el difuminado de la foto del cierre termina,
+  porque recién ahí hay una imagen publicable, y es la difuminada —que es la
+  única que se le puede mandar a un servicio externo—. Encolarla al cerrar
+  dejaría toda comparación en `sin material`, en silencio.
+- **Un fallo nunca bloquea un cierre**:
+  - Timeout, 429 y 5xx se reintentan con espera exponencial, hasta
+    `DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES` veces.
+  - Un 4xx, una respuesta fuera de esquema, un broker caído o un error
+    inesperado dejan la comparación como `no_disponible`, con un código corto
+    en `failure_reason`. Nunca se guarda el cuerpo de la respuesta.
+  - La respuesta se valida con un serializer y **no se interpreta a mano**: un
+    JSON envuelto en un bloque de código también se descarta.
+- **Sin material** (`sin_material`): si falta alguna de las dos imágenes, no se
+  llama al servicio. Se verifica al cerrar y otra vez al ejecutar, por si la
+  imagen se borró entre medio (US-043).
+- **Visibilidad**: solo la ve el panel municipal, dentro de
+  `PanelResolutionEvidenceSerializer`. Es el mismo patrón de dos serializers de
+  US-038: ningún serializer del ciudadano, del validador ni del operario la
+  referencia.
+- **Trazabilidad**: la fila guarda fecha, veredicto, explicación, modelo que
+  respondió e intentos. En el admin se ve en solo lectura.
+- **El parte del operario viaja como dato**: va delimitado en el prompt, que
+  instruye ignorar cualquier pedido que aparezca dentro de él. Aun así, es
+  texto que controla quien cierra, y por eso tampoco conviene que el veredicto
+  decida nada.
+
+**Por qué acá sí un modelo generalista y en US-041 no.** El difuminado necesita
+cajas precisas, transformar la imagen, y es una obligación legal que no puede
+depender de un servicio externo. Esto es una comparación cualitativa,
+degradable y sin valor legal: si el servicio no está, el circuito funciona
+igual.
+
+**Solo salen imágenes difuminadas.** El cliente (`reports/vision.py`) recibe
+bytes que `comparison.py` lee del storage, donde solo existe la versión
+procesada de US-041. Un test sube una foto con rostros y patentes y verifica
+que lo que llega al cliente es exactamente lo almacenado.
+
+**Proveedor gratuito: Gemini, y una advertencia.** El cliente habla el dialecto
+de chat completions de OpenAI, así que Gemini, Groq, OpenRouter u Ollama se
+usan cambiando `DJANGO_RESOLUTION_COMPARISON_BASE_URL` y `_MODEL`. El default es
+`gemini-3.6-flash` sobre el free tier de Google AI Studio. **En el plan gratuito
+Google puede usar el contenido para mejorar sus productos**: las fotos van
+difuminadas, pero en producción corresponde el plan pago o un proveedor sin
+retención. El documento de Alcance supone OpenAI Vision, y este desvío tiene
+que reflejarse en su próxima versión, igual que el de US-041.
+
+| Variable | Default | |
+|---|---|---|
+| `DJANGO_RESOLUTION_COMPARISON_API_KEY` | vacía | Sin clave la función queda apagada: todo cierre figura "no disponible" |
+| `DJANGO_RESOLUTION_COMPARISON_BASE_URL` | endpoint OpenAI de Gemini | |
+| `DJANGO_RESOLUTION_COMPARISON_MODEL` | `gemini-3.6-flash` | Los modelos rotan: verificar en la página de precios de la API |
+| `DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES` | 3 | Solo fallos transitorios |
+| `DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS` | 30 | Por debajo del soft time limit de Celery (60 s) |
+| `DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX` | 1024 | Lado mayor con el que viajan las fotos |
+
+Una comparación que quedó `no_disponible`, por ejemplo por falta de clave o por
+una caída larga del proveedor, **no se reintenta sola**. Para volver a correrla:
+`python manage.py retry_resolution_comparisons [--report ID]`. Ejecuta en el
+momento, sin pasar por Celery, e informa el veredicto de cada cierre. Las que
+quedaron `sin_material` no se tocan.
+
+En los tests, `conftest.py` bloquea el cliente y reemplaza `delay`: ningún test
+sale a la red ni encola en el Redis real.
+
+### Denuncia por dato personal visible: oculta primero, revisa después (US-043)
+
+Un vecino denuncia una foto publicada en la que el difuminado de US-041 no
+detectó un rostro o una patente: `POST /api/reports/{id}/privacy-request/`,
+con `{"evidence": <id>}` si la foto es la de un cierre del operario. Lo resuelve
+el **administrador de la plataforma** desde
+`/api/platform/privacy-requests/`, eliminando la imagen (`remove-image/`) o
+desestimando (`dismiss/`).
+
+**La entidad es la denuncia de US-021, que todavía no existía.** US-043 pedía
+sumar un motivo a su catálogo. Como no había catálogo, se creó
+`ReportComplaint` con un solo motivo, `dato_personal`. US-021 le suma los suyos
+sin modelo nuevo: entre motivos cambian el responsable y el efecto, no la
+entidad. El reparto está declarado en dos constantes del modelo:
+
+- `PLATFORM_REASONS`: los motivos que resuelve el administrador.
+  `ReportComplaint.objects.for_municipal_review()` los excluye, y es lo que
+  tiene que usar la bandeja municipal de US-049 (escenario 10). Desde US-021
+  se deriva del catálogo `REASON_RECIPIENTS`.
+- `HIDING_REASONS`: los motivos que ocultan el reporte. Es la única excepción al
+  principio de que una denuncia no altera la visibilidad por sí sola.
+
+### Denunciar un reporte (US-021)
+
+El botón *Denunciar* de la app: `POST /api/reports/{id}/complaints/` con
+`{"reason": ..., "comment": ...}`. El motivo es obligatorio y el comentario,
+opcional (hasta 500 caracteres). Responde `201` con el acuse, que incluye
+`recipient` y un `detail` listo para mostrar: la revisión del municipio para las
+de contenido, el plazo de la RN-12 para las de dato personal.
+
+`GET /api/reports/complaint-reasons/` sirve el catálogo —valor, etiqueta y
+destinatario— para que la app no tenga una copia.
+
+| Motivo | Destinatario | Efecto inmediato |
+| --- | --- | --- |
+| `contenido_inapropiado` | agente municipal de la jurisdicción (US-049) | ninguno |
+| `reporte_falso` | agente municipal de la jurisdicción (US-049) | ninguno |
+| `dato_personal` | administrador de la plataforma (US-043) | oculta el reporte |
+
+**El catálogo se declara una sola vez**, en `ReportComplaint.REASON_RECIPIENTS`.
+De ahí se derivan `PLATFORM_REASONS`, los dos querysets de revisión y el acuse.
+Sumar un motivo es sumar una fila a esa tabla; un test falla si alguno queda sin
+destinatario.
+
+**Esta historia solo registra.** `complaints.py` no ejecuta ninguna transición
+ni toca la visibilidad: no hay umbral de denuncias (escenario 5). La versión
+anterior ocultaba con tres, y se descartó porque tres cuentas nuevas alcanzaban
+para tumbar cualquier reclamo incómodo. El motivo `dato_personal` delega en
+`request_personal_data_review` y hereda el circuito de US-043 completo. La
+bandeja municipal y la resolución son de US-049, que tiene que partir de
+`for_municipal_review()`.
+
+Rechazos:
+
+| Caso | Respuesta |
+| --- | --- |
+| Sin motivo, o motivo fuera del catálogo | `400` en `reason` |
+| El reporte es propio | `403` |
+| Cancelado, Archivado o retirado por protección de datos | `409` `report_not_public` |
+| Ya lo denunció por ese motivo | `409` `complaint_already_filed` |
+| Cuenta de trabajo (validador, agente, operario) | `403` |
+
+**Dos reglas de duplicado, una por circuito.** Las de contenido son únicas por
+denunciante, reporte y motivo **para siempre**
+(`unique_content_complaint_per_reason`): que el municipio desestime una no
+habilita a presentarla otra vez. Las de dato personal siguen contándose por
+imagen y solo mientras están en curso, como las dejó US-043, porque la foto
+puede cambiar.
+
+**El autor y `privacy-request`.** El escenario 7 prohíbe denunciar el reporte
+propio, y `complaints/` lo rechaza para los tres motivos. El endpoint de US-043,
+`privacy-request/`, se conserva sin cambios —es el único que denuncia la foto de
+un cierre del operario— y sigue dejando que el autor pida la revisión de su
+propia foto, que fue una decisión explícita de aquella historia.
+
+**Anonimato.** El denunciante, el comentario y la cantidad de denuncias no
+viajan en ningún serializer del reporte; un test recorre detalle, feed, "mis
+reportes", mapa y comentarios, como autor y como tercero.
+
+**Avisos (pedido posterior a la historia).** Denunciar genera dos:
+
+- `denuncia_recibida`, a quien denunció: el mismo texto del acuse, que queda en
+  sus avisos.
+- `reporte_denunciado`, al autor: "otro vecino denunció tu reporte", sin
+  `actor`, sin motivo y sin comentario. Se manda **una sola vez mientras haya
+  denuncias de contenido pendientes**: uno por denuncia le diría cuántas
+  recibió, que es lo que el escenario 9 reserva. Vuelve a avisarse recién cuando
+  las anteriores se resolvieron.
+
+Con el motivo `dato_personal` el autor no recibe `reporte_denunciado` sino el
+`reporte_en_revision` de US-043, que además le explica por qué dejó de verse.
+Migración `notifications/0009`.
+
+**Visibilidad pública: una sola función.** `ReportQuerySet.publicly_visible()`
+(feed, mapa, perfil público) y `visible_to(user)` (detalle y todo lo que cuelga
+de él) son las únicas definiciones de qué ve un tercero. Antes eran tres
+filtros sueltos en la vista. US-042 sumó ahí su condición —`photo_ready()`, la
+imagen todavía en procesamiento— y con eso quedaron cubiertos el feed, el mapa,
+la búsqueda de US-020 y el perfil público sin tocar una vista.
+
+- Basta **una** solicitud pendiente, sin umbral.
+- La retención **se deduce** de que haya una solicitud pendiente (`on_privacy_hold()`)
+  y no se guarda como marca en el reporte. Una marca habría que apagarla en
+  cada camino que resuelve, y si queda prendida esconde el reporte para
+  siempre.
+- El **autor sigue viendo** su reporte, con `under_privacy_review: true`.
+  Ocultárselo a él no protege a nadie.
+- Para un tercero, detalle, comentarios, me gusta y apelación responden `404`.
+  La excepción es la propia denuncia: quien ya denunció recibe `409` y no un
+  `404` que parece un borrado (escenario 9).
+- El panel no es una vista pública: el agente sigue viendo el reporte, con
+  `under_privacy_review` para saber por qué el vecino no lo ve.
+
+**Se resuelve por imagen, no por solicitud.** Eliminar o desestimar cierra todas
+las solicitudes pendientes sobre el mismo archivo. Si no, el reporte seguiría
+oculto por las solicitudes de otros vecinos sobre algo ya decidido. El
+duplicado es por persona, imagen y motivo, mientras la solicitud está
+pendiente: otro vecino puede sumar la suya, y el mismo vecino puede volver a
+denunciar después de una desestimación.
+
+**Borrado físico dentro de la transacción, al final.** No se usa `on_commit`.
+Si el borrado falla, todo se revierte y la solicitud queda pendiente, con el
+reporte todavía oculto. Con `on_commit`, un borrado caído dejaría la base
+diciendo "eliminada" con el archivo todavía servido. Lo que se borra es
+`image_name`, el archivo tal como era al recibir la solicitud: si el autor
+reemplazó la foto mientras tanto, se borra la denunciada y la nueva queda.
+
+- **Eliminar la foto del reporte retira el reporte entero, para siempre.** Se
+  aparta del escenario 5, que pedía republicarlo sin imagen: por decisión de
+  producto, **ningún reporte sin foto se vuelve a publicar**. La marca es
+  `Report.photo_removed_at`, y `publicly_visible`/`visible_to` lo excluyen como
+  a uno retenido. La fila no se borra: de ella cuelga el registro de la RN-12.
+  - Lo sigue viendo el autor (detalle y "mis reportes", marcado como retirado)
+    y el municipio en el panel.
+  - Sale de la bandeja del validador y no se puede editar (`is_editable`): una
+    foto nueva no lo volvería a publicar.
+  - **No bloquea duplicados** (`find_duplicate`): si el problema sigue, el
+    vecino tiene que poder reportarlo de nuevo, y el aviso se lo dice.
+  - El panel y la bandeja del operario lo siguen mostrando: el problema físico
+    puede existir igual y la gestión municipal no se corta.
+- **La foto de un cierre** (escenario 11) sí se retira sola: el reporte
+  conserva la suya, su estado y el parte de trabajo.
+- `Report.photo` y `ResolutionEvidence.photo` admiten vacío; el alta sigue
+  exigiendo foto porque el serializer la declara obligatoria.
+- **Avisos**, todos sin `actor`: ante el vecino responde la plataforma, y
+  quien denunció no se expone.
+  - `reporte_en_revision`, al autor, cuando se oculta su reporte. Uno solo
+    aunque denuncien varios, y ninguno si lo denunció él mismo.
+  - `imagen_retirada` o `reporte_restituido`, al autor, según la decisión. Si
+    se eliminó la foto del reporte, el aviso dice que se retiró el reporte y
+    que puede volver a reportar el problema. `reporte_restituido` solo va si
+    el reporte de verdad volvió a verse: otra imagen suya puede seguir en
+    revisión.
+  - `denuncia_resuelta`, a cada vecino que denunció esa imagen, con el
+    resultado. El autor no lo recibe: ya tiene el suyo.
+
+**Plazo.** `DJANGO_PERSONAL_DATA_REVIEW_MINUTES` (default 1440) se cuenta desde
+la **recepción** (`created_at`). El modelo no tiene `updated_at` justamente
+para que nada pueda contarse desde ahí. Con un plazo único, ordenar por
+antigüedad ya pone primero las vencidas (escenario 7). La bandeja devuelve
+`remaining_seconds` (negativo si venció) e `is_overdue`. Las resueltas
+(`?state=resolved`) traen `resolved_within_deadline`, que es la evidencia de
+cumplimiento de la RN-12.
+
+**Quién puede denunciar**: cualquier cuenta de vecino, sea o no el autor y
+aparezca o no en la foto (escenario 3). Las cuentas de trabajo reciben `403`,
+igual que para reportar o comentar. Quien trabaja en un municipio y ve un
+rostro lo denuncia desde su cuenta personal.
+
+**Límites conocidos:**
+
+- `/media/` se sirve sin autenticación. Ocultar el reporte no invalida la URL
+  de la foto que un cliente ya tenga guardada; solo el borrado físico la corta.
+- Las fotos de las **apelaciones** (US-048) también se publican y no son
+  denunciables todavía: la historia nombra la foto del reporte y la del cierre.
+- Nada avisa al administrador cuando entra una solicitud: la bandeja se
+  consulta.
+- Un vecino puede volver a denunciar una imagen ya desestimada y ocultarla otra
+  vez. Queda para la moderación de US-021.
+
+### Publicación diferida hasta completar el difuminado (US-042)
+
+**Un reporte existe desde que el vecino lo envía, pero no es público hasta que
+su imagen está difuminada.** US-041 difuminaba dentro del request: el POST se
+bloqueaba varios segundos y un fallo del detector devolvía `400` y perdía el
+reporte en el acto, sin ningún reintento. Ahora el endpoint responde enseguida,
+la foto entra a una cola y el reporte aparece cuando el difuminado termina.
+
+**El estado es de la imagen, no del reporte.** La máquina de estados de US-013
+no se tocó. `PendingPhotoMixin` (`urbancheck/anonymization/models.py`) suma
+`photo_status`, `photo_pending`, `photo_attempts`, `photo_failed_at` y
+`photo_queued_at` a los tres modelos que reciben fotos —reporte, evidencia de
+cierre y apelación— y la visibilidad se resuelve con una condición más en el
+queryset.
+
+**La contrapartida, dicha en voz alta: la original ahora sí toca el disco.**
+US-041 garantizaba que no pasara nunca, ni por un temporal. Procesar en
+diferido obliga a guardarla hasta que la tarea la tome. Se mitiga, no se
+disimula:
+
+- Vive en `PENDING_PHOTO_ROOT`, **fuera de `MEDIA_ROOT`**, así que la ruta
+  `/media/` no la alcanza.
+- `PendingPhotoStorage` no tiene `base_url`, así que `photo_pending.url`
+  levanta `ValueError`. Pasar `base_url=None` por configuración no alcanza:
+  `FileSystemStorage` lo interpreta como "no configurado" y cae en `MEDIA_URL`.
+- Permisos `0600`, y el archivo se borra apenas termina el procesamiento, salga
+  bien o mal. Una foto sin difuminar no se conserva "por las dudas".
+- En producción ese destino **no puede** tener lectura pública ni CDN, y el
+  worker necesita poder leerlo o toda foto termina en `fallida`.
+
+**Transitorio y permanente no son lo mismo.** `AnonymizationError` se abrió en
+dos: `TransientAnonymizationError` (falló el detector ONNX) se reintenta
+`DJANGO_ANONYMIZATION_MAX_RETRIES` veces con espera creciente desde
+`DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS`; `PermanentAnonymizationError` (el
+archivo no se puede abrir) **no se reintenta ni una vez**, porque el resultado
+sería el mismo y el vecino se entera una hora más tarde de lo necesario.
+
+**Toda rama termina en `procesada` o en `fallida`.** Una foto que se queda en
+`pendiente` para siempre es un reporte invisible para siempre, que es la forma
+silenciosa de perder un reclamo. Por eso además hay una verificación periódica
+—`requeue_stale_pending_photos`, cada 15 minutos— que reencola lo que lleva más
+de `DJANGO_ANONYMIZATION_STALE_MINUTES` en cola: cubre el mensaje que el broker
+nunca entregó, que no falla y por lo tanto no avisa a nadie. Mide desde
+`photo_queued_at` y no desde el alta de la fila, o una foto reemplazada hoy
+sobre un reporte viejo parecería vencida al instante.
+
+**Ante el fallo definitivo se pierde el reporte, no la privacidad de un
+tercero.** No hay vía degradada. El reporte queda sin publicar, su autor recibe
+el aviso `imagen_no_procesada` con la invitación a volver a cargarlo —sigue en
+*pendiente de validación*, así que `is_editable` ya lo permite— y el caso queda
+en el log con su `code`, en `photo_attempts` y en el admin.
+
+**El escenario 6 es una afirmación de la base, no una promesa del código.** Un
+`CheckConstraint` por modelo (`photo = '' OR photo_status = 'procesada'`)
+alcanza también a `update()` y `bulk_update()`, que no pasan por `save()`.
+Encima hay tres capas más: la guarda de `PendingPhotoMixin.save()`, el admin
+con los campos en solo lectura, y `apply_transition`, que rechaza gestionar un
+reporte sin publicar. El panel no dibuja esas acciones porque
+`available_transitions` ya las descuenta: dejar el botón listado sería ofrecer
+algo que el servidor contesta con `409`.
+
+**La excepción de `PHOTO_EXEMPT_TARGETS` no es un descuido.** *Cancelado* y
+*archivado* se permiten sobre un reporte sin publicar. Los dos lo sacan de la
+vista pública en lugar de acercarlo a ella, y sin la excepción el archivado por
+inactividad (US-031) —que transiciona reportes *pendientes de validación*, que
+es justo donde queda uno cuyo difuminado falló— lo dejaría varado para siempre.
+
+**La comparación de US-015 se encadena al difuminado.** `register_comparison`
+crea la fila al cerrar, para que el panel muestre "pendiente" desde ese
+momento, pero el envío lo dispara `run_anonymization` al terminar. Encolarla al
+cerrar dejaría **toda** comparación en `NO_MATERIAL` en silencio, porque en ese
+instante `evidence.photo` está vacía; y además lo que hay que mandar a un
+servicio externo es la difuminada, no la original.
+
+**Quién ve un reporte sin publicar**: su autor y el panel municipal, nadie más.
+No aparece en feed, mapa, detalle de terceros, búsqueda (US-020), perfil
+público (US-027) ni bandeja de validación (US-040), y **no puede recibir me
+gusta ni de su propio autor**: si pudiera, el umbral colectivo se alcanzaría
+sobre algo invisible. El panel sí lo ve, con `photo_status`, para saber por qué
+el vecino no lo encuentra.
+
+**Cambio de comportamiento visible**: reemplazar la foto de un reporte lo
+**despublica** hasta que la nueva se difumine. Es la misma regla de siempre —no
+se publica una imagen sin procesar— y el móvil lo avisa, porque sin aviso se
+lee como un bug.
+
+**De paso se cerró un hueco de US-043**: el `report_count` del perfil público
+contaba todos los reportes del autor, así que delataba los cancelados, los
+archivados y los retenidos. Ahora pasa por `publicly_visible()`.
+
+**Límites conocidos:**
+
+- **Las imágenes preexistentes quedan marcadas como `procesada` sin haber
+  pasado por el difuminado.** Es una desviación consciente del escenario 9 y de
+  la definición de terminado, decidida por el equipo: no se implementó el
+  comando de procesamiento retroactivo ni la purga del entorno. Cerrarlo es un
+  comando chico —recorrer las fotos guardadas, correrles `anonymize()` sobre el
+  archivo actual y volver a marcarlas—, idempotente porque difuminar algo ya
+  difuminado no cambia nada.
+- Un reporte en procesamiento **sigue bloqueando** un alta duplicada (US-032).
+  Excluirlo produciría dos reclamos del mismo bache publicados a la vez, que es
+  peor y permanente. El costo es que durante esos segundos la tarjeta del `409`
+  no se puede abrir ni apoyar, y el móvil lo dice en vez de ofrecerlo.
+- Si el difuminado de la foto de un **cierre** falla, el cierre queda en pie:
+  el reporte ya pasó a *resuelto pendiente de confirmación* y el vecino ya fue
+  avisado. Queda un parte de trabajo con descripción y sin imagen, la
+  comparación en `no disponible` y el operario notificado. Revertir la
+  transición abriría un caso que la historia no plantea.
+- Un archivo pendiente puede quedar huérfano si el borrado falla o si el autor
+  elimina el reporte mientras se procesa. No afecta lo publicado: es limpieza.
 
 ## Deployment
 

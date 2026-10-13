@@ -72,6 +72,13 @@ STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
+    # US-042: la original sin difuminar espera acá. Este destino **no** puede
+    # tener lectura pública ni quedar detrás de un CDN; si se migra a un
+    # backend remoto, el bucket va privado y el worker necesita credenciales,
+    # o toda foto termina en `fallida`. Sin `base_url` a propósito.
+    "pending_photos": {
+        "BACKEND": "urbancheck.anonymization.storage.PendingPhotoStorage",
+    },
 }
 
 # EMAIL

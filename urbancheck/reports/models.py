@@ -4,6 +4,8 @@ from django.conf import settings
 from django.db import models
 from django.db import transaction
 
+from urbancheck.anonymization.models import PendingPhotoMixin
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.reports.geo import polygon_bounds
 
 
@@ -67,8 +69,88 @@ class ReportQuerySet(models.QuerySet):
             ),
         )
 
+    # Visibilidad pública
+    # --------------------------------------------------------------------------
+    # **Única** definición de qué reporte puede ver un tercero. Las condiciones
+    # se suman acá y en ningún otro lado: un filtro escrito aparte en una vista
+    # es un filtro que otra vista se olvida de copiar. US-042 sumó la suya
+    # —``photo_ready``, la imagen todavía en procesamiento— junto a
+    # ``on_privacy_hold``.
 
-class Report(models.Model):
+    def publicly_visible(self) -> ReportQuerySet:
+        """Lo que se lista en el feed, el mapa y el perfil público.
+
+        Cuatro condiciones: que el reporte siga siendo un problema activo
+        (US-013), que no esté retenido por una solicitud de protección de datos,
+        que no se haya retirado por una (US-043) y que su imagen ya esté
+        difuminada (US-042). Un reporte existe desde que el ciudadano lo envía,
+        pero no es público hasta que su foto pasó por el servicio.
+        """
+        return (
+            self.exclude(status__in=Report.INACTIVE_PUBLIC_STATUSES)
+            .exclude(on_privacy_hold())
+            .filter(photo_removed_at__isnull=True)
+            .filter(photo_ready())
+        )
+
+    def visible_to(self, user) -> ReportQuerySet:
+        """Lo que ``user`` puede abrir por id: el detalle y lo que cuelga de él.
+
+        Es más ancho que ``publicly_visible`` en una sola cosa: los estados
+        inactivos se abren igual, porque es a donde lleva la notificación del
+        cambio de estado. La protección de datos **no** se afloja —ni la
+        retención mientras se revisa ni el retiro definitivo—, salvo para el
+        autor, que sigue viendo su propio reclamo marcado como en revisión o
+        retirado: ocultarle su propio reporte no protege a nadie.
+
+        Con la imagen en procesamiento (US-042) vale lo mismo y por la misma
+        razón: para cualquier tercero el reporte todavía no existe y el detalle
+        responde 404, pero el autor abre el suyo y ve que se está procesando.
+        """
+        return self.filter(
+            models.Q(author_id=user.pk)
+            | (
+                ~on_privacy_hold()
+                & models.Q(photo_removed_at__isnull=True)
+                & photo_ready()
+            ),
+        )
+
+
+def photo_ready() -> models.Q:
+    """Si la imagen del reporte ya está difuminada y por lo tanto publicable.
+
+    Es la condición de US-042, y se evalúa sobre la foto y no sobre el estado
+    del reporte: la máquina de estados de US-013 no se toca. Un reporte en
+    ``pendiente`` o en ``fallida`` es invisible para todos menos su autor y el
+    panel municipal, que lo ve sin foto y no puede publicarlo.
+    """
+    return models.Q(photo_status=PhotoStatus.PROCESADA)
+
+
+def on_privacy_hold() -> models.Exists:
+    """Si el reporte tiene una solicitud por dato personal sin resolver (US-043).
+
+    Es la única excepción al principio de que una denuncia no altera por sí sola
+    la visibilidad: basta **una** solicitud, sin umbral. Se oculta primero y se
+    revisa después, porque el costo es asimétrico: unas horas de invisibilidad
+    de un reclamo contra la exposición del rostro de alguien que nunca consintió
+    aparecer.
+
+    Se deduce de las solicitudes pendientes en lugar de guardarse como marca en
+    el reporte: una marca aparte hay que acordarse de apagarla en cada camino
+    que resuelve, y una que queda prendida esconde un reporte para siempre.
+    """
+    return models.Exists(
+        ReportComplaint.objects.filter(
+            report=models.OuterRef("pk"),
+            status=ReportComplaint.Status.PENDIENTE,
+            reason__in=ReportComplaint.HIDING_REASONS,
+        ),
+    )
+
+
+class Report(PendingPhotoMixin, models.Model):
     class Category(models.TextChoices):
         BACHE = "bache", "Bache"
         ALUMBRADO = "alumbrado", "Alumbrado"
@@ -119,7 +201,14 @@ class Report(models.Model):
     # instancia leída antes del alta lo rebobina, y el número se repite en
     # silencio hasta chocar contra la restricción de unicidad.
     number = models.PositiveIntegerField(null=True, blank=True, editable=False)
-    photo = models.ImageField(upload_to="reports/%Y/%m/")
+    # Obligatoria al crear —lo exige el serializer de alta—, pero puede quedar
+    # vacía: el administrador la elimina si expone un dato personal (US-043).
+    photo = models.ImageField(upload_to="reports/%Y/%m/", blank=True)
+    # Cuándo se retiró la foto por protección de datos (US-043), y con ella **el
+    # reporte entero**: un reporte sin foto no se vuelve a publicar nunca. Es la
+    # marca que lee ``publicly_visible``. El autor lo sigue viendo como retirado
+    # y el municipio en el panel; nadie más.
+    photo_removed_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField()
     category = models.CharField(max_length=20, choices=Category.choices)
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
@@ -187,6 +276,11 @@ class Report(models.Model):
     # validación sin que nadie se entere.
     EDITABLE_STATUSES = frozenset({Status.PENDIENTE_VALIDACION})
 
+    # Estados que dejan de listarse en el feed y en el mapa: el reporte ya no es
+    # un problema activo (US-013). El autor los sigue viendo en "mis reportes" y
+    # en el detalle, que es a donde lo lleva la notificación del cambio.
+    INACTIVE_PUBLIC_STATUSES = frozenset({Status.CANCELADO, Status.ARCHIVADO})
+
     objects = ReportQuerySet.as_manager()
 
     class Meta:
@@ -195,6 +289,34 @@ class Report(models.Model):
             models.UniqueConstraint(
                 fields=["municipality", "number"],
                 name="unique_report_number_per_municipality",
+            ),
+            # US-042: o la foto está vacía, o ya pasó por el difuminado. No
+            # hay un tercer caso. Va en la base y no solo en `save` porque
+            # `update()` y `bulk_update()` no pasan por `save`: es lo que hace
+            # del escenario 6 una afirmación y no una promesa.
+            models.CheckConstraint(
+                condition=models.Q(photo="")
+                | models.Q(photo_status=PhotoStatus.PROCESADA),
+                name="report_photo_only_when_processed",
+            ),
+        ]
+        indexes = [
+            # Búsqueda de duplicados (US-026): las igualdades primero y la
+            # latitud después, así la caja de ``find_duplicate`` se resuelve
+            # dentro del índice. Es parcial porque los cerrados, que con el
+            # tiempo son la mayoría, nunca bloquean. Los estados repiten
+            # ``duplicates.ACTIVE_STATUSES``, que no se puede importar acá.
+            models.Index(
+                fields=["municipality", "category", "latitude", "longitude"],
+                name="report_duplicate_lookup",
+                condition=models.Q(
+                    status__in=[
+                        "pendiente_validacion",
+                        "reportado",
+                        "en_proceso",
+                        "resuelto_pendiente_confirmacion",
+                    ],
+                ),
             ),
         ]
 
@@ -235,7 +357,27 @@ class Report(models.Model):
 
     @property
     def is_editable(self) -> bool:
-        return self.status in self.EDITABLE_STATUSES
+        # Uno retirado por protección de datos no se edita: una foto nueva no lo
+        # vuelve a publicar, así que ofrecerlo sería una promesa falsa.
+        return self.status in self.EDITABLE_STATUSES and not self.is_withdrawn
+
+    @property
+    def is_withdrawn(self) -> bool:
+        """Si se retiró por exponer un dato personal en su foto (US-043)."""
+        return self.photo_removed_at is not None
+
+    @property
+    def is_on_privacy_hold(self) -> bool:
+        """Si está retenido por protección de datos (US-043).
+
+        Usa la anotación ``privacy_hold`` si el queryset la trae —la trae el
+        feed, para no consultar por fila— y si no, consulta con la misma
+        condición de ``on_privacy_hold()``.
+        """
+        annotated = getattr(self, "privacy_hold", None)
+        if annotated is not None:
+            return annotated
+        return Report.objects.filter(pk=self.pk).filter(on_privacy_hold()).exists()
 
     def confirmation_count(self) -> int:
         """Me gusta que **cuentan como confirmación** de que el problema existe.
@@ -363,7 +505,7 @@ class ReportAreaAssignment(models.Model):
         return f"{self.report_id}: {previous} → {self.area}"
 
 
-class ResolutionEvidence(models.Model):
+class ResolutionEvidence(PendingPhotoMixin, models.Model):
     """El parte de trabajo del operario que cerró el reporte (US-046).
 
     Es una entidad propia y no un puñado de campos sobre el reporte, por dos
@@ -385,7 +527,11 @@ class ResolutionEvidence(models.Model):
         on_delete=models.CASCADE,
         related_name="resolution_evidences",
     )
-    photo = models.ImageField(upload_to="resolutions/%Y/%m/")
+    # Vacía solo si se retiró por protección de datos (US-043, escenario 11): el
+    # parte de trabajo conserva la descripción y el estado del reporte no se
+    # toca.
+    photo = models.ImageField(upload_to="resolutions/%Y/%m/", blank=True)
+    photo_removed_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField()
     # Quién cerró. ``SET_NULL`` porque la cuenta puede desaparecer y el parte de
     # trabajo tiene que sobrevivirle.
@@ -418,12 +564,99 @@ class ResolutionEvidence(models.Model):
     class Meta:
         # Cronológico ascendente: el hilo se lee del primer cierre al último.
         ordering = ["created_at"]
+        constraints = [
+            # US-042: o la foto está vacía, o ya pasó por el difuminado. No
+            # hay un tercer caso. Va en la base y no solo en `save` porque
+            # `update()` y `bulk_update()` no pasan por `save`: es lo que hace
+            # del escenario 6 una afirmación y no una promesa.
+            models.CheckConstraint(
+                condition=models.Q(photo="")
+                | models.Q(photo_status=PhotoStatus.PROCESADA),
+                name="evidence_photo_only_when_processed",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.report_id}: cierre de {self.operational_area}"
 
 
-class ResolutionAppeal(models.Model):
+class ResolutionComparison(models.Model):
+    """La comparación automática entre el antes y el después de un cierre (US-015).
+
+    Se cuelga de la **evidencia**, no del reporte: un segundo cierre tras una
+    apelación trae su propia comparación y la del primero se conserva
+    (escenario 7).
+
+    **Es informativa y no decide nada.** No hay ninguna FK ni escritura hacia el
+    reporte: el veredicto no cambia el estado, no toca el plazo de US-047 y no
+    habilita ni impide transiciones. El control efectivo sobre un cierre mal
+    hecho es la apelación del vecino (US-048), que tiene a alguien que responde
+    por ella; un modelo que se equivoca lo hace en silencio.
+
+    Solo la ve el panel municipal (escenario 8): es control interno, no una
+    calificación pública del trabajo del operario.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pendiente", "Comparación en curso"
+        COMPLETED = "completada", "Completada"
+        # Fallo del servicio, reintentos agotados, respuesta fuera de esquema o
+        # servicio sin configurar. Para el panel es lo mismo: no hay veredicto.
+        UNAVAILABLE = "no_disponible", "Comparación no disponible"
+        # Falta alguna de las dos imágenes (escenario 6).
+        NO_MATERIAL = "sin_material", "Sin material suficiente para comparar"
+
+    class Verdict(models.TextChoices):
+        CONSISTENT = "consistente", "Resolución consistente"
+        # Los tres motivos de un cierre dudoso del escenario 3. Se guardan por
+        # separado porque "a revisar" no dice qué mirar, y esto sí.
+        PROBLEM_PERSISTS = "problema_persistente", "El problema sigue presente"
+        DIFFERENT_PLACE = "lugar_distinto", "Las imágenes no son del mismo lugar"
+        INCONSISTENT_WORK = (
+            "trabajo_incoherente",
+            "El cambio no coincide con lo declarado",
+        )
+
+    evidence = models.OneToOneField(
+        ResolutionEvidence,
+        on_delete=models.CASCADE,
+        related_name="comparison",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    verdict = models.CharField(
+        max_length=20,
+        choices=Verdict.choices,
+        blank=True,
+        default="",
+    )
+    # La explicación breve devuelta por el modelo, tal cual.
+    explanation = models.TextField(blank=True, default="")
+    # Qué modelo respondió, para poder auditar el comportamiento (escenario 9).
+    model_name = models.CharField(max_length=100, blank=True, default="")
+    attempts = models.PositiveSmallIntegerField(default=0)
+    # Un código corto, nunca el cuerpo de la respuesta ni rutas de archivos: la
+    # regla de US-041 sobre logs y trazas vale también acá.
+    failure_reason = models.CharField(max_length=50, blank=True, default="")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["requested_at"]
+
+    def __str__(self) -> str:
+        return f"{self.evidence_id}: {self.status} {self.verdict}".strip()
+
+    @property
+    def is_doubtful(self) -> bool:
+        """Si el cierre merece revisión: hay veredicto y no es consistente."""
+        return bool(self.verdict) and self.verdict != self.Verdict.CONSISTENT
+
+
+class ResolutionAppeal(PendingPhotoMixin, models.Model):
     """La objeción del autor a un cierre que no resolvió el problema (US-048).
 
     Es el control humano sobre el cierre: el operario certifica su propio
@@ -453,13 +686,25 @@ class ResolutionAppeal(models.Model):
         related_name="resolution_appeals",
     )
     reason = models.TextField()
-    # Obligatoria: una apelación sin evidencia no se distingue de una objeción
-    # caprichosa y no reabre trabajo municipal.
-    photo = models.ImageField(upload_to="appeals/%Y/%m/")
+    # Obligatoria al apelar —lo exige el serializer—, pero el campo admite
+    # vacío: con la publicación diferida (US-042) la apelación nace sin foto y
+    # la recibe recién cuando la tarea termina de difuminarla.
+    photo = models.ImageField(upload_to="appeals/%Y/%m/", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["created_at"]
+        constraints = [
+            # US-042: o la foto está vacía, o ya pasó por el difuminado. No
+            # hay un tercer caso. Va en la base y no solo en `save` porque
+            # `update()` y `bulk_update()` no pasan por `save`: es lo que hace
+            # del escenario 6 una afirmación y no una promesa.
+            models.CheckConstraint(
+                condition=models.Q(photo="")
+                | models.Q(photo_status=PhotoStatus.PROCESADA),
+                name="appeal_photo_only_when_processed",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.report_id}: apelación de {self.author}"
@@ -554,3 +799,177 @@ class Like(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["report", "user"], name="unique_report_like")
         ]
+
+
+COMPLAINT_COMMENT_MAX_LENGTH = 500
+
+
+def _reasons_for(catalog: dict, recipient: str) -> frozenset:
+    """Los motivos del catálogo de denuncias que resuelve ``recipient``."""
+    return frozenset(reason for reason, to in catalog.items() if to == recipient)
+
+
+class ReportComplaintQuerySet(models.QuerySet):
+    """Quién resuelve cada denuncia se decide por su motivo, en un solo lugar."""
+
+    def for_platform_review(self) -> ReportComplaintQuerySet:
+        """Las que resuelve el administrador de la plataforma (US-043).
+
+        No pasan por la capa de jurisdicción: la protección de datos es una
+        obligación de la plataforma, no del municipio, y el administrador ve
+        las de todas las municipalidades.
+        """
+        return self.filter(reason__in=ReportComplaint.PLATFORM_REASONS)
+
+    def for_municipal_review(self) -> ReportComplaintQuerySet:
+        """Las que resuelve el agente de la jurisdicción (US-021, US-049).
+
+        La bandeja municipal de US-049 tiene que partir de acá para nacer sin
+        las solicitudes por dato personal (US-043, escenario 10): si la bandeja
+        filtrara por su cuenta, el día que se sume un motivo de plataforma
+        nuevo se filtraría hacia el municipio.
+        """
+        return self.exclude(reason__in=ReportComplaint.PLATFORM_REASONS)
+
+
+class ReportComplaint(models.Model):
+    """Una denuncia de un usuario sobre un reporte publicado.
+
+    Es la entidad del botón *Denunciar* de US-021. US-043 la inauguró con un
+    solo motivo —el dato personal que el difuminado no detectó— y US-021 le
+    sumó los suyos: lo que cambia entre motivos es **quién resuelve y con qué
+    efecto**, no la entidad, y por eso es un modelo con un catálogo y no uno
+    por motivo.
+
+    Una denuncia por dato personal apunta a una imagen concreta: la del
+    reporte, o la de un parte de trabajo del operario cuando
+    ``resolution_evidence`` está cargado (US-043, escenario 11). En los dos
+    casos oculta el reporte entero, porque es el reporte lo que se publica. Las
+    de contenido (US-021) apuntan al reporte y no a un archivo: ``image_name``
+    queda vacío y no ocultan nada.
+
+    Es también el registro de cumplimiento de la RN-12: recepción, resolución,
+    decisión y responsable quedan en la fila y no se borran.
+    """
+
+    class Reason(models.TextChoices):
+        CONTENIDO_INAPROPIADO = (
+            "contenido_inapropiado",
+            "Contenido inapropiado u ofensivo",
+        )
+        REPORTE_FALSO = "reporte_falso", "Reporte falso o inexistente"
+        DATO_PERSONAL = "dato_personal", "Dato personal visible"
+
+    class Recipient(models.TextChoices):
+        """Quién resuelve una denuncia. No existe el rol moderador (US-021)."""
+
+        AGENTE_MUNICIPAL = "agente_municipal", "Agente municipal"
+        ADMIN_PLATAFORMA = "admin_plataforma", "Administrador de la plataforma"
+
+    class Status(models.TextChoices):
+        PENDIENTE = "pendiente", "Pendiente"
+        IMAGEN_ELIMINADA = "imagen_eliminada", "Imagen eliminada"
+        DESESTIMADA = "desestimada", "Desestimada"
+
+    #: **El catálogo de motivos**: cada uno con su destinatario (US-021,
+    #: escenario 3). El enrutamiento se deriva de acá —``PLATFORM_REASONS``,
+    #: los dos querysets de revisión, el acuse que recibe el vecino— y no de
+    #: condicionales en las vistas. Un motivo nuevo se suma en esta tabla; un
+    #: test verifica que ninguno quede sin destinatario.
+    REASON_RECIPIENTS = {
+        Reason.CONTENIDO_INAPROPIADO: Recipient.AGENTE_MUNICIPAL,
+        Reason.REPORTE_FALSO: Recipient.AGENTE_MUNICIPAL,
+        Reason.DATO_PERSONAL: Recipient.ADMIN_PLATAFORMA,
+    }
+    #: Motivos que resuelve el administrador de la plataforma y no el municipio.
+    PLATFORM_REASONS = _reasons_for(REASON_RECIPIENTS, Recipient.ADMIN_PLATAFORMA)
+    #: Motivos que ocultan el reporte mientras están pendientes. Es la única
+    #: excepción al principio de que una denuncia no altera la visibilidad.
+    HIDING_REASONS = frozenset({Reason.DATO_PERSONAL})
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="complaints",
+    )
+    # Nulo cuando lo denunciado es la foto del reporte.
+    resolution_evidence = models.ForeignKey(
+        ResolutionEvidence,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
+    # El archivo denunciado **tal como se llamaba al recibir la solicitud**. Es
+    # la referencia a la imagen del escenario 1, y también lo que se borra: si
+    # el autor reemplaza la foto mientras la solicitud espera, lo que expone el
+    # dato personal es el archivo denunciado, no el nuevo.
+    # Vacío en las denuncias de contenido (US-021), que no señalan un archivo.
+    image_name = models.CharField(max_length=255, blank=True)
+    # ``SET_NULL``: si la cuenta desaparece, el registro de cumplimiento no.
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="complaints",
+    )
+    reason = models.CharField(max_length=30, choices=Reason.choices)
+    # Opcional (US-021, escenario 1). Lo lee quien resuelve y nadie más.
+    comment = models.TextField(blank=True, max_length=COMPLAINT_COMMENT_MAX_LENGTH)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDIENTE,
+    )
+    # Fecha de recepción: el plazo de la RN-12 corre desde acá y desde ningún
+    # otro campo. Por eso no hay ``updated_at`` en el modelo.
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_complaints",
+    )
+
+    objects = ReportComplaintQuerySet.as_manager()
+
+    class Meta:
+        # La más vieja primero: es la que está más cerca de vencer.
+        ordering = ["created_at"]
+        constraints = [
+            # Una sola solicitud en curso por persona, imagen y motivo (US-043,
+            # escenario 9). ``nulls_distinct=False`` porque la foto del reporte
+            # se identifica con ``resolution_evidence`` nulo, y con la semántica
+            # por defecto de SQL dos nulos nunca chocan.
+            models.UniqueConstraint(
+                fields=["reporter", "report", "resolution_evidence", "reason"],
+                condition=models.Q(status="pendiente"),
+                nulls_distinct=False,
+                name="unique_pending_complaint_per_image",
+            ),
+            # Una sola denuncia de contenido por persona, reporte y motivo, para
+            # siempre y no solo mientras está pendiente (US-021, escenario 6):
+            # que el municipio la desestime no habilita a presentarla de nuevo.
+            # Las de dato personal quedan fuera porque se cuentan por imagen
+            # —la restricción de arriba— y sí se pueden repetir tras una
+            # decisión, si la foto cambió.
+            models.UniqueConstraint(
+                fields=["reporter", "report", "reason"],
+                condition=~models.Q(reason="dato_personal"),
+                name="unique_content_complaint_per_reason",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: {self.reason} ({self.status})"
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == self.Status.PENDIENTE
+
+    @property
+    def recipient(self) -> str:
+        """A quién va dirigida, según el catálogo."""
+        return self.REASON_RECIPIENTS[self.reason]

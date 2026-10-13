@@ -29,6 +29,20 @@ AREA_NOT_ALLOWED_MESSAGE = (
     "Esta acción no recibe un área operativa."
 )
 SAME_AREA_MESSAGE = "El reporte ya está asignado a esa área operativa."
+PHOTO_NOT_PROCESSED_MESSAGE = (
+    "La imagen de este reporte todavía no terminó de procesarse, así que el "
+    "reporte no es público. No se puede gestionar hasta que se publique."
+)
+
+#: Destinos que un reporte sin imagen procesada **sí** puede alcanzar (US-042).
+#: Los dos lo sacan de la vista pública en vez de acercarlo a ella, así que no
+#: son una vía de publicación. Dejarlos afuera tendría un costo concreto: el
+#: archivado por inactividad (US-031) transiciona reportes *pendientes de
+#: validación*, que es justo donde queda uno cuyo difuminado falló, y sin esta
+#: excepción quedaría varado para siempre, sin poder archivarse ni cancelarse.
+PHOTO_EXEMPT_TARGETS = frozenset(
+    {Report.Status.CANCELADO, Report.Status.ARCHIVADO},
+)
 
 
 class TransitionError(Exception):
@@ -77,6 +91,28 @@ def _unavailable(report: Report, operation: str, actor: Actor) -> TransitionErro
         f"«{report.get_status_display()}».",
         current_status=report.status,
         available=available,
+    )
+
+
+def _reject_if_unpublished(report: Report, transition: Transition) -> None:
+    """US-042, escenario 6: no se gestiona lo que el vecino todavía no ve.
+
+    Ningún camino publica una imagen sin difuminar, y el panel municipal no es
+    la excepción.
+
+    Dos precisiones que no son opcionales. La condición mira la foto **del
+    reporte** y nunca la de la evidencia: si mirara esa, el cierre del operario
+    se bloquearía a sí mismo, porque su foto recién está entrando a la cola
+    cuando corre esta transición. Y los destinos de ``PHOTO_EXEMPT_TARGETS``
+    quedan afuera, o un reporte cuyo difuminado falló no se podría archivar ni
+    cancelar nunca más.
+    """
+    if report.photo_is_ready or transition.target in PHOTO_EXEMPT_TARGETS:
+        return
+    raise TransitionError(
+        PHOTO_NOT_PROCESSED_MESSAGE,
+        current_status=report.status,
+        available=(),
     )
 
 
@@ -131,6 +167,8 @@ def apply_transition(  # noqa: PLR0913 (cada parámetro es un requisito distinto
         locked = Report.objects.select_for_update().get(pk=report.pk)
         if locked.status != transition.source:
             raise _unavailable(locked, operation, actor)
+
+        _reject_if_unpublished(locked, transition)
 
         # La guarda se evalúa sobre la fila ya bloqueada, no sobre la copia que
         # recibió la función: entre una y otra pudo entrar una apelación.

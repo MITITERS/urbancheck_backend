@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import PlatformAdminFactory
 from urbancheck.users.tests.factories import UserFactory
@@ -348,6 +349,104 @@ class TestDeactivationCascadesToStaff:
         ).data["results"]
 
         assert staffed["agent"].id in {row["id"] for row in archived}
+
+
+class TestDeactivationCascadesToOperationalAreas:
+    """La baja del municipio también arrastra a sus áreas operativas (US-039).
+
+    Por lo mismo que al personal: una dependencia activa de un municipio cerrado
+    seguiría ofreciéndose en el desplegable de asignación de US-028, y un
+    reporte podría entrar en gestión a nombre de un municipio que ya no opera.
+    """
+
+    @pytest.fixture
+    def municipality(self):
+        return MunicipalityFactory.create()
+
+    def test_its_areas_are_deactivated(self, admin_client, municipality):
+        obras = OperationalAreaFactory.create(
+            municipality=municipality,
+            name="Obras Públicas",
+        )
+        alumbrado = OperationalAreaFactory.create(
+            municipality=municipality,
+            name="Alumbrado",
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        for area in (obras, alumbrado):
+            area.refresh_from_db()
+            assert area.is_active is False
+
+    def test_the_response_says_how_many_areas_fell(self, admin_client, municipality):
+        """La consecuencia no se ve desde la pantalla de municipios."""
+        OperationalAreaFactory.create_batch(2, municipality=municipality)
+
+        response = admin_client.delete(f"{URL}{municipality.pk}/")
+
+        assert response.data["deactivated_areas"] == 2  # noqa: PLR2004
+
+    def test_an_already_inactive_area_is_not_counted_twice(
+        self,
+        admin_client,
+        municipality,
+    ):
+        OperationalAreaFactory.create(municipality=municipality)
+        OperationalAreaFactory.create(municipality=municipality, is_active=False)
+
+        response = admin_client.delete(f"{URL}{municipality.pk}/")
+
+        assert response.data["deactivated_areas"] == 1
+
+    def test_the_areas_keep_their_reports(self, admin_client, municipality):
+        """La baja es lógica: no se pierde qué dependencia se hizo cargo."""
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
+
+        area = OperationalAreaFactory.create(municipality=municipality)
+        report = ReportFactory.create(
+            municipality=municipality,
+            operational_area=area,
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        report.refresh_from_db()
+        assert report.operational_area_id == area.pk
+
+    def test_areas_of_other_municipalities_are_untouched(
+        self,
+        admin_client,
+        municipality,
+    ):
+        foreign = OperationalAreaFactory.create(
+            municipality=MunicipalityFactory.create(),
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        foreign.refresh_from_db()
+        assert foreign.is_active is True
+
+    def test_reviving_the_municipality_does_not_reactivate_them(
+        self,
+        admin_client,
+        municipality,
+    ):
+        """Mismo criterio que el personal: se reactivan de a una, a mano."""
+        area = OperationalAreaFactory.create(municipality=municipality)
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        admin_client.post(
+            URL,
+            payload(city=municipality.city, province=municipality.province),
+            format="json",
+        )
+
+        municipality.refresh_from_db()
+        assert municipality.is_active is True
+        area.refresh_from_db()
+        assert area.is_active is False
 
 
 class TestListing:
