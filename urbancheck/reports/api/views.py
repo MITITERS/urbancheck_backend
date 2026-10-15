@@ -123,6 +123,9 @@ class ReportViewSet(
 ):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = Report.objects.none()
 
     def get_permissions(self):
         """Permisos por acción: autoría para editar/borrar, rol para participar.

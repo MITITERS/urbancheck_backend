@@ -20,6 +20,9 @@ class NotificationViewSet(ListModelMixin, DestroyModelMixin, GenericViewSet):
 
     permission_classes = [IsAuthenticated]
     serializer_class = NotificationSerializer
+    # Solo para que el esquema OpenAPI tipe el id: el queryset real lo arma
+    # ``get_queryset``, acotado al destinatario.
+    queryset = Notification.objects.none()
 
     def get_queryset(self):
         qs = Notification.objects.filter(recipient=self.request.user).select_related(
