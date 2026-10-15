@@ -79,6 +79,13 @@ def file_complaint(
     ):
         msg = "Este reporte ya no está publicado."
         raise ReportNotPublicError(msg)
+    # Oculto por una revisión de dato personal (US-043): para un tercero no
+    # existe, y no se interactúa con lo que no se ve (Sprint 5, punto 6.1). El
+    # paso queda abierto solo para el motivo de dato personal, que tiene su
+    # propia regla de duplicado y deja sumar la suya a quien lo vio antes.
+    if reason not in ReportComplaint.PLATFORM_REASONS and report.is_on_privacy_hold:
+        msg = "Este reporte no está publicado en este momento."
+        raise ReportNotPublicError(msg)
 
     if reason in ReportComplaint.PLATFORM_REASONS:
         # Oculta el reporte y avisa al autor: es el circuito de US-043 entero,

@@ -86,35 +86,59 @@ class ReportQuerySet(models.QuerySet):
         difuminada (US-042). Un reporte existe desde que el ciudadano lo envía,
         pero no es público hasta que su foto pasó por el servicio.
         """
-        return (
-            self.exclude(status__in=Report.INACTIVE_PUBLIC_STATUSES)
-            .exclude(on_privacy_hold())
-            .filter(photo_removed_at__isnull=True)
-            .filter(photo_ready())
-        )
+        return self.filter(publicly_visible_condition())
+
+    def publishable(self) -> ReportQuerySet:
+        """``publicly_visible`` sin la condición de estado.
+
+        Para las superficies que se acotan por estado por su cuenta —la bandeja
+        de validación lista solo pendientes, pero valida y rechaza por id—: la
+        imagen tiene que estar difuminada y fuera de toda revisión por dato
+        personal, igual que para el feed.
+        """
+        return self.filter(publishable_condition())
 
     def visible_to(self, user) -> ReportQuerySet:
         """Lo que ``user`` puede abrir por id: el detalle y lo que cuelga de él.
 
-        Es más ancho que ``publicly_visible`` en una sola cosa: los estados
-        inactivos se abren igual, porque es a donde lleva la notificación del
-        cambio de estado. La protección de datos **no** se afloja —ni la
-        retención mientras se revisa ni el retiro definitivo—, salvo para el
-        autor, que sigue viendo su propio reclamo marcado como en revisión o
-        retirado: ocultarle su propio reporte no protege a nadie.
+        Para un tercero son las mismas condiciones que ``publicly_visible``
+        (Sprint 5, punto 6.1). El autor ve siempre el suyo: su reclamo
+        cancelado o archivado —ahí lo lleva el aviso del cambio de estado, que
+        solo le llega a él—, marcado como en revisión o retirado por protección
+        de datos, o con la imagen todavía en procesamiento (US-042). Ocultarle
+        su propio reporte no protege a nadie.
 
-        Con la imagen en procesamiento (US-042) vale lo mismo y por la misma
-        razón: para cualquier tercero el reporte todavía no existe y el detalle
-        responde 404, pero el autor abre el suyo y ve que se está procesando.
+        Hasta el Sprint 5 los estados inactivos se abrían por id para
+        cualquiera; el punto 6.1 los cierra también para terceros.
         """
         return self.filter(
-            models.Q(author_id=user.pk)
-            | (
-                ~on_privacy_hold()
-                & models.Q(photo_removed_at__isnull=True)
-                & photo_ready()
-            ),
+            models.Q(author_id=user.pk) | publicly_visible_condition(),
         )
+
+
+def publishable_condition() -> models.Q:
+    """La imagen se puede mostrar: difuminada, sin revisión en curso, no retirada.
+
+    Junto con ``publicly_visible_condition`` es la **única** definición de la
+    visibilidad pública (Sprint 5, punto 6.1). Todo lo demás la reutiliza.
+    """
+    return (
+        ~models.Q(on_privacy_hold())
+        & models.Q(photo_removed_at__isnull=True)
+        & photo_ready()
+    )
+
+
+def publicly_visible_condition() -> models.Q:
+    """Las tres condiciones del punto 6.1 sobre un reporte, para un tercero.
+
+    1. su estado es visible (no Cancelado ni Archivado);
+    2. su imagen está procesada —o se retiró por protección de datos, que en
+       este producto retira el reporte entero (US-043, decisión del equipo)—;
+    3. no tiene una solicitud por dato personal en curso.
+    """
+    active = ~models.Q(status__in=Report.INACTIVE_PUBLIC_STATUSES)
+    return active & publishable_condition()
 
 
 def photo_ready() -> models.Q:
