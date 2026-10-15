@@ -146,6 +146,19 @@ class TestPasswords:
         assert_no_secrets(caplog, PASSWORD, "Nueva#Clave2026", token)
 
 
+    def test_a_password_reset_is_logged(self, account, security_log, rf):
+        """CP-SEC18-14: restablecimiento de contraseña por el enlace del correo."""
+        from allauth.account.signals import password_reset  # noqa: PLC0415
+
+        request = rf.post("/_allauth/app/v1/auth/password/reset")
+        request.user = account
+        password_reset.send(sender=type(account), request=request, user=account)
+
+        [event] = by_event(security_log(), "password_reset")
+        assert event["user_id"] == account.pk
+        assert event["path"] == "/_allauth/app/v1/auth/password/reset"
+
+
 class TestWorkAccounts:
     def test_creating_an_agent_from_the_panel_is_logged(self, security_log, caplog):
         """CP-SEC18-05: alta de agente, con quién la hizo y la cuenta creada."""

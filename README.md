@@ -1110,9 +1110,13 @@ queda sin publicar y su autor recibe el aviso.
 
 #### Línea base medida (escenario 9)
 
-`python manage.py benchmark_anonymization [--annotate DIR] [--output DIR]` corre
-el servicio sobre 37 fotos urbanas de Wikimedia Commons con licencia libre,
-guardadas en `urbancheck/anonymization/benchmark/`. El set incluye peatonales
+`python manage.py benchmark_anonymization [CARPETA] [--report FILE]
+[--annotate DIR] [--output DIR]` corre el servicio sobre 37 fotos urbanas de
+Wikimedia Commons con licencia libre. **Desde el 15/10/2026 las fotos no se
+versionan** (son personas y patentes): viven en `benchmark_data/anonymization/`,
+ignorada por git y por Docker, o donde diga `DJANGO_ANONYMIZATION_REFERENCE_SET`.
+El formato y el criterio de etiquetado están en
+`urbancheck/anonymization/benchmark/README.md`. El set incluye peatonales
 con multitudes, calles con autos y colectivos, patentes de cerca, escenas
 nocturnas y baches sin nadie. Los rostros reconocibles y las patentes legibles
 de cada foto se contaron a mano; `manifest.json` trae la fuente, la licencia y
@@ -1222,7 +1226,8 @@ que reflejarse en su próxima versión, igual que el de US-041.
 
 | Variable | Default | |
 |---|---|---|
-| `DJANGO_RESOLUTION_COMPARISON_API_KEY` | vacía | Sin clave la función queda apagada: todo cierre figura "no disponible" |
+| `DJANGO_VISION_PROVIDER` | vacío | Proveedor nulo: no se compara nada. `openai_compatible` activa el adaptador de chat completions (Sprint 5) |
+| `DJANGO_RESOLUTION_COMPARISON_API_KEY` | vacía | Con `openai_compatible` y sin clave, la función queda apagada: todo cierre figura "no disponible" |
 | `DJANGO_RESOLUTION_COMPARISON_BASE_URL` | endpoint OpenAI de Gemini | |
 | `DJANGO_RESOLUTION_COMPARISON_MODEL` | `gemini-3.6-flash` | Los modelos rotan: verificar en la página de precios de la API |
 | `DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES` | 3 | Solo fallos transitorios |
@@ -1259,6 +1264,25 @@ entidad. El reparto está declarado en dos constantes del modelo:
   se deriva del catálogo `REASON_RECIPIENTS`.
 - `HIDING_REASONS`: los motivos que ocultan el reporte. Es la única excepción al
   principio de que una denuncia no altera la visibilidad por sí sola.
+
+#### Agregado del 15/10/2026
+
+- **La foto de una apelación también se denuncia** (escenario 1 nombra tres
+  imágenes: la del reporte, la de un cierre y la de una apelación). La
+  solicitud lleva `appeal` en lugar de `evidence`; eliminarla conserva el
+  reporte y el motivo de la objeción, como con la foto de un cierre.
+- **El panel no muestra la imagen en revisión.** El agente sigue viendo el
+  reporte retenido y el aviso `under_privacy_review`, pero el detalle trae
+  `photo: null` para la imagen denunciada (y solo para esa).
+- **La bandeja también está en el admin de Django**, con filtro de fuera de
+  plazo y las acciones "Eliminar la imagen denunciada" y "Desestimar", que
+  llaman a los mismos servicios que el panel. Solo las ve el administrador de
+  la plataforma.
+- **La visibilidad pública se declara una sola vez** en
+  `publicly_visible_condition()` y `publishable_condition()` (modelo de
+  reportes). La bandeja de validación dejó de repetir sus filtros. Un tercero
+  ya no abre por id un reporte cancelado o archivado, y un reporte retenido por
+  dato personal ya no acepta denuncias de contenido.
 
 ### Denunciar un reporte (US-021)
 
@@ -1510,13 +1534,13 @@ archivados y los retenidos. Ahora pasa por `publicly_visible()`.
 
 **Límites conocidos:**
 
-- **Las imágenes preexistentes quedan marcadas como `procesada` sin haber
-  pasado por el difuminado.** Es una desviación consciente del escenario 9 y de
-  la definición de terminado, decidida por el equipo: no se implementó el
-  comando de procesamiento retroactivo ni la purga del entorno. Cerrarlo es un
-  comando chico —recorrer las fotos guardadas, correrles `anonymize()` sobre el
-  archivo actual y volver a marcarlas—, idempotente porque difuminar algo ya
-  difuminado no cambia nada.
+- **Las imágenes preexistentes quedaron marcadas como `procesada` sin haber
+  pasado por el difuminado** (migración `reports/0012`). Desde el 15/10/2026
+  existe el comando retroactivo: `python manage.py anonymize_existing_photos`
+  cuenta las que nunca pasaron por el servicio (`photo_attempts = 0`) y con
+  `--apply` las difumina; la que no se puede procesar se retira y se avisa al
+  autor. Es idempotente. **No se ejecutó sobre ningún entorno**: toca archivos
+  publicados y lo tiene que autorizar el equipo.
 - Un reporte en procesamiento **sigue bloqueando** un alta duplicada (US-032).
   Excluirlo produciría dos reclamos del mismo bache publicados a la vez, que es
   peor y permanente. El costo es que durante esos segundos la tarjeta del `409`
@@ -1528,6 +1552,47 @@ archivados y los retenidos. Ahora pasa por `publicly_visible()`.
   transición abriría un caso que la historia no plantea.
 - Un archivo pendiente puede quedar huérfano si el borrado falla o si el autor
   elimina el reporte mientras se procesa. No afecta lo publicado: es limpieza.
+
+## Seguridad (Sprint 5, deuda del Sprint 4)
+
+Todo lo de esta sección se configura por variables de entorno; la lista
+completa, con sus defaults, está en `.env.example`.
+
+- **Límites de intentos (allauth).** 5 logins fallidos por cuenta cada 15
+  minutos (ventana deslizante) más un tope por IP; 3 recuperaciones y 3
+  reenvíos de confirmación por cuenta y por hora; registro con tope por IP.
+  allauth headless responde el bloqueo de login con `400` y el reenvío limitado
+  con `403`: `HeadlessLockoutMiddleware` los convierte en `429`.
+- **Límites de tasa (DRF).** Por usuario: 20 reportes por hora, 60 comentarios
+  por hora, 10 denuncias por día y 5 solicitudes por dato personal por día.
+  Una denuncia por dato personal consume los dos últimos cupos, venga por
+  `complaints/` o por `privacy-request/`. El `429` lleva `code: "throttled"`,
+  `detail` en castellano y `retry_after`.
+- **Proxies.** `DJANGO_NUM_PROXIES` (default 0) alimenta a DRF, allauth y el
+  registro. Detrás del nginx del panel y de Traefik hay que contarlos, o todo
+  límite por IP cuenta la IP del proxy. Con 0 se ignora `X-Forwarded-For`.
+- **Cache compartido en Redis** (`RedisCache` de Django) en local y producción;
+  sin él cada worker llevaría su propia cuenta.
+- **Registro de seguridad**: logger `security`, archivo con rotación
+  (`DJANGO_SECURITY_LOG_FILE`, default `logs/security.log`). Registra logins,
+  bloqueos, cambios y restablecimientos de contraseña, altas de municipalidades
+  y cuentas de trabajo, denuncias, solicitudes por dato personal y sus
+  resoluciones, y toda respuesta 401, 403 y 429, con usuario, IP y ruta.
+  Nunca contraseñas, tokens ni cuerpos. Un login fallido guarda una huella de
+  la cuenta, no lo que se escribió.
+- **Metadatos.** Toda foto que entra por el circuito de US-041/US-042 se
+  reencodea sin EXIF, XMP ni IPTC. La de perfil no se difumina pero pasa por
+  `MetadataFreeImageField`, que la sanea en cualquier carga (API, admin,
+  shell). `python manage.py strip_image_metadata [--apply]` sanea las de perfil
+  ya guardadas. HEIC no llega al backend: la app reencodea a JPEG antes de
+  subir, y Pillow sin `pillow-heif` rechaza un HEIC con `400`.
+- **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
+  origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
+  `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.
+- **CI** (`.github/workflows/ci.yml`): ruff, Bandit (falla desde severidad
+  media), pip-audit, gitleaks (binario con checksum fijo; excepciones
+  revisadas en `.gitleaksignore`), pytest y `makemigrations --check`. Dependabot
+  semanal para uv, Docker, Docker Compose y GitHub Actions.
 
 ## Deployment
 
