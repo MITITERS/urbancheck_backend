@@ -6,7 +6,10 @@ el resultado es de US-032 y está en ``test_duplicate_reports.py``.
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from django.core.management import call_command
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
@@ -191,3 +194,22 @@ def test_the_index_covers_exactly_the_active_statuses():
 
     assert lookup == "status__in"
     assert set(statuses) == set(duplicates.ACTIVE_STATUSES)
+
+
+def test_the_volume_benchmark_measures_and_leaves_nothing_behind():
+    """CP-026-10: la medición con volumen usa el índice y revierte todo."""
+    out = io.StringIO()
+
+    call_command(
+        "benchmark_duplicate_detection",
+        reports=500,
+        lookups=5,
+        stdout=out,
+    )
+
+    text = out.getvalue()
+    assert "Reportes cargados: 500" in text
+    assert "p95" in text
+    assert not Report.objects.filter(
+        description="Reporte de prueba del benchmark.",
+    ).exists()
