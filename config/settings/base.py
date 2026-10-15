@@ -151,6 +151,11 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Registro de seguridad (401, 403, 429 y el contexto de ``log_event``).
+    # El de allauth va después: tiene que corregir el ``400`` del bloqueo de
+    # login a ``429`` antes de que el registro mire la respuesta.
+    "urbancheck.common.security.SecurityContextMiddleware",
+    "urbancheck.common.security.HeadlessLockoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
@@ -285,6 +290,44 @@ DJANGO_ADMIN_FORCE_ALLAUTH = env.bool("DJANGO_ADMIN_FORCE_ALLAUTH", default=Fals
 # https://docs.djangoproject.com/en/dev/ref/settings/#logging
 # See https://docs.djangoproject.com/en/dev/topics/logging for
 # more details on how to customize your logging configuration.
+# Registro de eventos de seguridad (logger ``security``, ver
+# ``urbancheck/common/security.py``): logins, bloqueos, cambios de contraseña,
+# altas de cuentas de trabajo, denuncias y respuestas 401/403/429. Va a un
+# archivo propio con rotación por tamaño, además de la consola. Vacío
+# desactiva el archivo y deja solo la consola.
+SECURITY_LOG_FILE = env(
+    "DJANGO_SECURITY_LOG_FILE",
+    default=str(BASE_DIR / "logs" / "security.log"),
+)
+SECURITY_LOG_MAX_BYTES = env.int("DJANGO_SECURITY_LOG_MAX_MB", default=10) * 1024 * 1024
+SECURITY_LOG_BACKUP_COUNT = env.int("DJANGO_SECURITY_LOG_BACKUP_COUNT", default=10)
+
+
+def security_logging(log_file: str) -> tuple[dict, dict]:
+    """Handlers y logger de ``security``, para sumar a cualquier ``LOGGING``.
+
+    Es una función porque ``production.py`` arma su propio ``LOGGING`` y el
+    registro de seguridad no puede faltar en ninguno de los dos.
+    """
+    handlers: dict = {}
+    names = ["console"]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers["security_file"] = {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": log_file,
+            "maxBytes": SECURITY_LOG_MAX_BYTES,
+            "backupCount": SECURITY_LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
+            "formatter": "security",
+        }
+        names.append("security_file")
+    logger = {"handlers": names, "level": "INFO", "propagate": False}
+    return handlers, logger
+
+
+_security_handlers, _security_logger = security_logging(SECURITY_LOG_FILE)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -292,6 +335,7 @@ LOGGING = {
         "verbose": {
             "format": "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s",
         },
+        "security": {"format": "%(asctime)s %(levelname)s %(message)s"},
     },
     "handlers": {
         "console": {
@@ -299,12 +343,38 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        **_security_handlers,
     },
     "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {"security": _security_logger},
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
 REDIS_SSL = REDIS_URL.startswith("rediss://")
+
+# CACHES
+# ------------------------------------------------------------------------------
+# Compartido sobre Redis en todos los entornos: los contadores de los límites
+# de allauth y de DRF viven acá, y con un cache por proceso cada worker de
+# gunicorn llevaría su propia cuenta y el límite real se multiplicaría por la
+# cantidad de workers.
+# https://docs.djangoproject.com/en/dev/topics/cache/#redis
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env("DJANGO_CACHE_URL", default=REDIS_URL),
+    },
+}
+
+# PROXIES DE CONFIANZA
+# ------------------------------------------------------------------------------
+# Cuántos proxies propios (Nginx, Traefik) hay delante de Django. Con cero se
+# ignora ``X-Forwarded-For`` y la IP es la de la conexión; detrás de un proxy
+# hay que poner 1, o todos los límites por IP contarían la IP del proxy y un
+# solo cliente agotaría el cupo de todos. Lo leen DRF (``NUM_PROXIES``),
+# allauth (``ALLAUTH_TRUSTED_PROXY_COUNT``) y el registro de seguridad.
+NUM_PROXIES = env.int("DJANGO_NUM_PROXIES", default=0)
+ALLAUTH_TRUSTED_PROXY_COUNT = NUM_PROXIES
 
 # Celery
 # ------------------------------------------------------------------------------
@@ -542,6 +612,30 @@ ACCOUNT_SIGNUP_FORM_CLASS = "urbancheck.users.signup_forms.HeadlessUserSignupFor
 SOCIALACCOUNT_ADAPTER = "urbancheck.users.adapters.SocialAccountAdapter"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
 SOCIALACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSocialSignupForm"}
+# Límites de intentos (deuda de seguridad del Sprint 4). Formato de allauth:
+# ``cantidad/período/clave``, varios separados por coma; ``key`` es la cuenta
+# (el correo) e ``ip`` la IP del cliente. La ventana es deslizante: allauth
+# guarda la marca de cada intento en el cache y cuenta los del período.
+# https://docs.allauth.org/en/latest/account/rate_limits.html
+ACCOUNT_RATE_LIMITS = {
+    # 5 fallidos por cuenta cada 15 minutos, más un tope por IP contra quien
+    # prueba muchas cuentas a la vez. Un login correcto no borra el contador.
+    "login_failed": env(
+        "DJANGO_RATELIMIT_LOGIN_FAILED",
+        default="10/m/ip,5/15m/key",
+    ),
+    "reset_password": env(
+        "DJANGO_RATELIMIT_RESET_PASSWORD",
+        default="20/m/ip,3/h/key",
+    ),
+    # Reenvío del correo de confirmación: conserva la espera de 3 minutos
+    # entre envíos que trae allauth y le suma el tope por hora.
+    "confirm_email": env(
+        "DJANGO_RATELIMIT_CONFIRM_EMAIL",
+        default="1/3m/key,3/h/key",
+    ),
+    "signup": env("DJANGO_RATELIMIT_SIGNUP", default="20/h/ip"),
+}
 
 # django-allauth headless
 # -------------------------------------------------------------------------------
@@ -624,6 +718,17 @@ REST_FRAMEWORK = {
     # activan explícitamente con ``filter_backends``. El feed ciudadano sigue
     # resolviendo sus filtros a mano (ver urbancheck/reports/api/filters.py).
     "DEFAULT_FILTER_BACKENDS": [],
+    # El ``429`` en castellano y con código estable (``throttled``).
+    "EXCEPTION_HANDLER": "urbancheck.common.throttling.api_exception_handler",
+    # Límites por acción: las vistas eligen alcance en ``get_throttles`` (ver
+    # ``urbancheck.common.throttling``). Por usuario; sin sesión, por IP.
+    "DEFAULT_THROTTLE_RATES": {
+        "reports": env("DJANGO_THROTTLE_REPORTS", default="20/hour"),
+        "comments": env("DJANGO_THROTTLE_COMMENTS", default="60/hour"),
+        "complaints": env("DJANGO_THROTTLE_COMPLAINTS", default="10/day"),
+        "privacy_requests": env("DJANGO_THROTTLE_PRIVACY_REQUESTS", default="5/day"),
+    },
+    "NUM_PROXIES": NUM_PROXIES,
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup

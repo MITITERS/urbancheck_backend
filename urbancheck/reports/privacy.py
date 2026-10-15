@@ -29,6 +29,7 @@ from django.db import IntegrityError
 from django.db import transaction
 from django.utils import timezone
 
+from urbancheck.common.security import log_event
 from urbancheck.notifications.services import notify_complaint_resolved
 from urbancheck.notifications.services import notify_image_removed
 from urbancheck.notifications.services import notify_report_restored
@@ -128,6 +129,15 @@ def request_personal_data_review(
     except IntegrityError as error:
         msg = "Ya hay una solicitud en curso sobre esta imagen."
         raise DuplicateComplaintError(msg) from error
+    # Antiabuso (US-043): ocultar un reporte cuesta una sola solicitud, así que
+    # cada una queda con quién y desde dónde la presentó.
+    log_event(
+        "privacy_request",
+        user_id=reporter.pk,
+        report=report.pk,
+        complaint=complaint.pk,
+        evidence=evidence.pk if evidence is not None else None,
+    )
     # Si lo denunció el propio autor, ya sabe lo que pasa: no hay que avisarle.
     if not was_hidden and reporter.pk != report.author_id:
         notify_report_under_review(report)
@@ -181,6 +191,13 @@ def remove_image(complaint: ReportComplaint, *, admin) -> ReportComplaint:
         )
         storage.delete(complaint.image_name)
 
+    log_event(
+        "privacy_request_resolved",
+        user_id=admin.pk,
+        complaint=complaint.pk,
+        report=complaint.report_id,
+        decision="imagen_eliminada",
+    )
     report = complaint.report
     notify_image_removed(
         report,
@@ -215,6 +232,13 @@ def dismiss(complaint: ReportComplaint, *, admin) -> ReportComplaint:
             now=timezone.now(),
         )
 
+    log_event(
+        "privacy_request_resolved",
+        user_id=admin.pk,
+        complaint=complaint.pk,
+        report=complaint.report_id,
+        decision="desestimada",
+    )
     report = complaint.report
     # Solo si de verdad volvió a publicarse: puede seguir oculto por una
     # denuncia sobre otra de sus imágenes.

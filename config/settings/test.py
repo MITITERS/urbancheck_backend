@@ -3,6 +3,7 @@ With these settings, tests run faster.
 """
 
 from .base import *  # noqa: F403
+from .base import LOGGING
 from .base import TEMPLATES
 from .base import env
 
@@ -41,3 +42,22 @@ MEDIA_URL = "http://media.testserver/"
 # ejerciten el circuito completo. Ninguno sale a la red: ``conftest.py`` bloquea
 # el cliente, y los que necesitan una respuesta la simulan.
 RESOLUTION_COMPARISON_API_KEY = "test-key"
+
+# CACHES
+# ------------------------------------------------------------------------------
+# En memoria y no sobre Redis: los contadores de los límites de tasa no pueden
+# pasar de un test a otro ni de una corrida a otra. ``conftest.py`` lo vacía
+# antes de cada test.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "urbancheck-tests",
+    },
+}
+
+# LOGGING
+# ------------------------------------------------------------------------------
+# El registro de seguridad no escribe archivo en los tests y propaga a la raíz,
+# que es donde ``caplog`` lo escucha.
+LOGGING["handlers"].pop("security_file", None)
+LOGGING["loggers"]["security"] = {"handlers": [], "level": "INFO", "propagate": True}

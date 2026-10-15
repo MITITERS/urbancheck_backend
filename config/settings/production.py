@@ -2,7 +2,6 @@
 from .base import *  # noqa: F403
 from .base import DATABASES
 from .base import INSTALLED_APPS
-from .base import REDIS_URL
 from .base import SPECTACULAR_SETTINGS
 from .base import env
 
@@ -19,18 +18,10 @@ DATABASES["default"]["CONN_MAX_AGE"] = env.int("CONN_MAX_AGE", default=60)
 
 # CACHES
 # ------------------------------------------------------------------------------
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            # Mimicking memcache behavior.
-            # https://github.com/jazzband/django-redis#memcached-exceptions-behavior
-            "IGNORE_EXCEPTIONS": True,
-        },
-    },
-}
+# El de ``base.py`` (``RedisCache`` de Django sobre ``REDIS_URL``). Ya no se
+# usa ``django-redis`` con ``IGNORE_EXCEPTIONS``: con Redis caído, ignorar el
+# error dejaba los límites de intentos sin contar, que es abrirlos de par en
+# par. Sin cache, el login falla y se nota.
 
 # SECURITY
 # ------------------------------------------------------------------------------
