@@ -44,8 +44,9 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         if not vision.is_configured():
             msg = (
-                "Falta DJANGO_RESOLUTION_COMPARISON_API_KEY: sin clave la "
-                "comparación no se puede ejecutar."
+                "No hay servicio de visión configurado: hace falta "
+                "DJANGO_VISION_PROVIDER (por ejemplo, openai_compatible) y su "
+                "clave en DJANGO_RESOLUTION_COMPARISON_API_KEY."
             )
             raise CommandError(msg)
 
