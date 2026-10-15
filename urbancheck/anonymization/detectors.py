@@ -10,6 +10,7 @@ importarlo: la interfaz de la anonimización es ``anonymize``.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,33 @@ import onnxruntime as ort
 WEIGHTS_DIR = Path(__file__).resolve().parent / "weights"
 FACE_MODEL_PATH = WEIGHTS_DIR / "face_detection_yunet_2023mar.onnx"
 PLATE_MODEL_PATH = WEIGHTS_DIR / "yolo-v9-s-608-license-plates-end2end.onnx"
+
+#: SHA-256 publicados de cada modelo (ver ``weights/README.md``). Se verifican
+#: al cargarlos y al construir la imagen de producción: un peso corrupto o
+#: reemplazado haría que el detector no encuentre nada, y "nada" publicaría la
+#: foto sin difuminar.
+MODEL_SHA256 = {
+    FACE_MODEL_PATH.name: (
+        "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+    ),
+    PLATE_MODEL_PATH.name: (
+        "2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a"
+    ),
+}
+
+
+class ModelIntegrityError(RuntimeError):
+    """El archivo del modelo no es el publicado. Es un ``RuntimeError`` a
+    propósito: el servicio lo trata como fallo del detector, que reintenta y,
+    si persiste, deja la foto sin publicar."""
+
+
+def verified_model_path(path: Path) -> Path:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != MODEL_SHA256[path.name]:
+        msg = f"El modelo {path.name} no coincide con su checksum publicado."
+        raise ModelIntegrityError(msg)
+    return path
 
 
 @dataclass(frozen=True)
@@ -64,7 +92,7 @@ class FaceDetector:
         self.score_threshold = score_threshold
         self.max_side = max_side
         self._detector = cv2.FaceDetectorYN.create(
-            str(FACE_MODEL_PATH),
+            str(verified_model_path(FACE_MODEL_PATH)),
             "",
             (320, 320),
             score_threshold,
@@ -110,7 +138,7 @@ class PlateDetector:
         options = ort.SessionOptions()
         options.log_severity_level = 3
         self._session = ort.InferenceSession(
-            str(PLATE_MODEL_PATH),
+            str(verified_model_path(PLATE_MODEL_PATH)),
             sess_options=options,
             providers=["CPUExecutionProvider"],
         )
