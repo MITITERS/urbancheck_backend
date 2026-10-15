@@ -750,6 +750,14 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "SCHEMA_PATH_PREFIX": "/api/",
+    # Nombres propios para los catálogos que comparten nombre de campo
+    # (``status``) o se usan en más de uno (``previous_status``): sin esto el
+    # generador inventa nombres como ``Status614Enum``.
+    "ENUM_NAME_OVERRIDES": {
+        "ReportStatusEnum": "urbancheck.reports.models.Report.Status",
+        "ComplaintStatusEnum": "urbancheck.reports.models.ReportComplaint.Status",
+        "ComparisonStatusEnum": "urbancheck.reports.models.ResolutionComparison.Status",
+    },
 }
 # Your stuff...
 # ------------------------------------------------------------------------------
