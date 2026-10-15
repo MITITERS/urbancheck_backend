@@ -251,6 +251,9 @@ class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
     """
 
     permission_classes = [IsAuthenticated, IsPanelUser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = User.objects.none()
 
     def get_queryset(self):
         user = self.request.user
@@ -273,7 +276,8 @@ class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
             return ValidatorSerializer
         # De dónde sale la municipalidad depende de quién da el alta: el agente
         # tiene la suya, el admin la elige.
-        if self.request.user.is_platform_admin:
+        # ``getattr``: al generar el esquema OpenAPI no hay usuario de verdad.
+        if getattr(self.request.user, "is_platform_admin", False):
             return AdminValidatorCreateSerializer
         return ValidatorCreateSerializer
 
@@ -338,6 +342,9 @@ class OperatorViewSet(
     """
 
     permission_classes = [IsAuthenticated, IsPanelUser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = User.objects.none()
 
     def get_queryset(self):
         user = self.request.user

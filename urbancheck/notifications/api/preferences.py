@@ -101,6 +101,8 @@ class NotificationPreferenceView(APIView):
     """``GET`` devuelve el catálogo completo; ``PATCH`` cambia un tipo."""
 
     permission_classes = [IsAuthenticated]
+    # Solo para el esquema OpenAPI: la vista arma la respuesta a mano.
+    serializer_class = NotificationPreferenceSerializer
 
     def get(self, request):
         stored = {

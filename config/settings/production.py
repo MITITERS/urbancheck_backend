@@ -1,9 +1,13 @@
 # ruff: noqa: E501
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *  # noqa: F403
 from .base import DATABASES
 from .base import INSTALLED_APPS
+from .base import SECURITY_LOG_FILE
 from .base import SPECTACULAR_SETTINGS
 from .base import env
+from .base import security_logging
 
 # GENERAL
 # ------------------------------------------------------------------------------
@@ -39,8 +43,10 @@ CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_NAME = "__Secure-csrftoken"
 # https://docs.djangoproject.com/en/dev/topics/security/#ssl-https
 # https://docs.djangoproject.com/en/dev/ref/settings/#secure-hsts-seconds
-# TODO: set this to 60 seconds first and then to 518400 once you prove the former works
-SECURE_HSTS_SECONDS = 60
+# Un año, que es lo que exige la lista de precarga. Para un primer despliegue
+# conviene bajarlo a 60 con la variable, verificar que todo anda sobre HTTPS y
+# recién ahí subirlo: un HSTS largo no se deshace del lado del navegador.
+SECURE_HSTS_SECONDS = env.int("DJANGO_SECURE_HSTS_SECONDS", default=31536000)
 # https://docs.djangoproject.com/en/dev/ref/settings/#secure-hsts-include-subdomains
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool(
     "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS",
@@ -53,6 +59,16 @@ SECURE_CONTENT_TYPE_NOSNIFF = env.bool(
     "DJANGO_SECURE_CONTENT_TYPE_NOSNIFF",
     default=True,
 )
+
+# CORS Y ORÍGENES DE CONFIANZA
+# ------------------------------------------------------------------------------
+# El panel llega por el mismo origen: su nginx hace de proxy de /api y
+# /_allauth (ver urbanchech_frontend/compose/nginx). Por eso el default es
+# **ninguno**: un origen solo se agrega si el panel pasa a servirse desde otro
+# dominio. La app móvil no es un navegador y CORS no la alcanza.
+# https://github.com/adamchainz/django-cors-headers#configuration
+CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
+CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])
 
 # STATIC & MEDIA
 # ------------------------
@@ -90,8 +106,12 @@ ACCOUNT_EMAIL_SUBJECT_PREFIX = EMAIL_SUBJECT_PREFIX
 
 # ADMIN
 # ------------------------------------------------------------------------------
-# Django Admin URL regex.
+# Django Admin URL regex. Obligatoria y sin default: el admin no queda en la
+# ruta predeterminada (`admin/`), que es la primera que prueba un escaneo.
 ADMIN_URL = env("DJANGO_ADMIN_URL")
+if ADMIN_URL.strip("/") == "admin":
+    msg = "DJANGO_ADMIN_URL no puede ser la ruta predeterminada 'admin/'."
+    raise ImproperlyConfigured(msg)
 
 # Anymail
 # ------------------------------------------------------------------------------
@@ -112,6 +132,9 @@ ANYMAIL = {}
 # A sample logging configuration. The only tangible logging
 # performed by this configuration is to send an email to
 # the site admins on every HTTP 500 error when DEBUG=False.
+# El registro de seguridad (punto 5.5) se suma con la misma función que en
+# base.py: este LOGGING reemplaza al de base y sin esto se perdía en producción.
+_security_handlers, _security_logger = security_logging(SECURITY_LOG_FILE)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -120,6 +143,7 @@ LOGGING = {
         "verbose": {
             "format": "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s",
         },
+        "security": {"format": "%(asctime)s %(levelname)s %(message)s"},
     },
     "handlers": {
         "mail_admins": {
@@ -132,9 +156,11 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        **_security_handlers,
     },
     "root": {"level": "INFO", "handlers": ["console"]},
     "loggers": {
+        "security": _security_logger,
         "django.request": {
             "handlers": ["mail_admins"],
             "level": "ERROR",
