@@ -1,30 +1,40 @@
-# Config for Dependabot updates. See Documentation here:
+# Dependabot: actualizaciones semanales de dependencias (Sprint 5, punto 5.4).
 # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Python va por el ecosistema `uv` y no `pip`: es el que entiende `uv.lock` y lo
+# regenera en el mismo PR. Con `pip`, Dependabot tocaría `pyproject.toml` y
+# dejaría el lock desfasado.
 
 version: 2
 updates:
-  # Update GitHub actions in workflows
   - package-ecosystem: 'github-actions'
     directory: '/'
-    # Every weekday
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
     groups:
       github-actions:
         patterns:
           - '*'
 
-  # Enable version updates for Docker
+  - package-ecosystem: 'uv'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    groups:
+      python:
+        update-types:
+          - 'minor'
+          - 'patch'
+
   - package-ecosystem: 'docker'
-    # Look for a `Dockerfile` in the `compose/local/django` directory
     directories:
       - 'compose/local/django/'
       - 'compose/local/docs/'
       - 'compose/production/django/'
-    # Every weekday
     schedule:
-      interval: 'daily'
-    # Ignore minor version updates (3.10 -> 3.11) but update patch versions
+      interval: 'weekly'
+    # Solo parches de la imagen de Python: un salto de versión menor (3.14 a
+    # 3.15) se hace a mano, junto con `requires-python`.
     ignore:
       - dependency-name: '*'
         update-types:
@@ -35,36 +45,16 @@ updates:
         patterns:
           - '*'
 
-
   - package-ecosystem: 'docker'
-    # Look for a `Dockerfile` in the listed directories
     directories:
-      - 'compose/local/node/'
-      - 'compose/production/aws/'
       - 'compose/production/postgres/'
       - 'compose/production/traefik/'
       - 'compose/production/nginx/'
-    # Every weekday
     schedule:
-      interval: 'daily'
+      interval: 'weekly'
 
-  # Enable version updates for Docker Compose files
   - package-ecosystem: 'docker-compose'
     directories:
       - '/'
-    # Every weekday
     schedule:
-      interval: 'daily'
-
-  # Enable version updates for Python/uv
-  - package-ecosystem: 'uv'
-    # Look for a `pyproject.toml` in the `root` directory
-    directory: '/'
-    # Every weekday
-    schedule:
-      interval: 'daily'
-    groups:
-      python:
-        update-types:
-          - 'minor'
-          - 'patch'
+      interval: 'weekly'
