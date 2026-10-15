@@ -18,8 +18,6 @@ from urbancheck.reports.geo import distance_expression
 from urbancheck.reports.geo import haversine_meters
 from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.models import Report
-from urbancheck.reports.models import on_privacy_hold
-from urbancheck.reports.models import photo_ready
 from urbancheck.reports.services import TransitionError
 from urbancheck.reports.services import apply_transition
 from urbancheck.reports.state_machine import Actor
@@ -53,18 +51,13 @@ class ValidationReportViewSet(
         # el detalle de la app ya le respondía 404 al validador: la fila quedaba
         # listada sin poder abrirse. Validarlo espera a que se resuelva la
         # denuncia, que tiene plazo de horas.
-        queryset = (
-            super()
-            .get_queryset()
-            .exclude(on_privacy_hold())
-            # Retirado (US-043): sin foto no hay nada que ir a comparar al lugar.
-            .filter(photo_removed_at__isnull=True)
-            # En procesamiento o fallido (US-042, escenario 7): el reporte
-            # todavía no es público y la bandeja muestra una foto que todavía
-            # no existe. Vale lo mismo que para la retención por privacidad: la
-            # fila quedaría listada sin poder abrirse.
-            .filter(photo_ready())
-        )
+        #
+        # Lo mismo para un reporte retirado (US-043: sin foto no hay nada que
+        # ir a comparar al lugar) y para uno en procesamiento o fallido (US-042,
+        # escenario 7: la bandeja mostraría una foto que todavía no existe).
+        # Las tres condiciones son las de la visibilidad pública, y por eso se
+        # piden a la función única y no se repiten acá.
+        queryset = super().get_queryset().publishable()
         if self.action == "list":
             queryset = queryset.filter(status=Report.Status.PENDIENTE_VALIDACION)
         return self._with_distance(queryset)
