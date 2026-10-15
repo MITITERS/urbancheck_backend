@@ -109,7 +109,7 @@ class TestCanEdit:
     def test_true_for_the_author_of_an_editable_report(self):
         author = UserFactory.create()
         report = ReportFactory.create(
-            author=author, status=Report.Status.PENDIENTE_VALIDACION
+            author=author, status=Report.Status.PENDIENTE_VALIDACION,
         )
         data = ReportDetailSerializer(
             report, context={"request": _request(author)},

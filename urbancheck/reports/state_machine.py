@@ -9,11 +9,14 @@ La ejecución de una transición vive en ``services.transition_report``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from .models import Report
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Actor(StrEnum):

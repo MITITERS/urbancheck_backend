@@ -423,7 +423,7 @@ def validate_report_location(attrs):
     has_address = bool(attrs.get("address", "").strip())
     if not has_coords and not has_address:
         raise serializers.ValidationError(
-            {"location": "Debés proporcionar coordenadas GPS o una dirección."}
+            {"location": "Debés proporcionar coordenadas GPS o una dirección."},
         )
     return attrs
 

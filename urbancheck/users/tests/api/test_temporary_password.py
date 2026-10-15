@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import json
+from http import HTTPStatus
 
 import pytest
-from django.test import Client
+from django.test import Client  # noqa: TC002 (la usan los fixtures en runtime)
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.users.models import User
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 
 LOGIN_URL = "/_allauth/app/v1/auth/login"
-CHANGE_PASSWORD_URL = "/_allauth/app/v1/account/password/change"
+CHANGE_PASSWORD_URL = "/_allauth/app/v1/account/password/change"  # noqa: S105
 
-TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"
-NEW_PASSWORD = "Qw8$rTy4&nBv1?"
+TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"  # noqa: S105
+NEW_PASSWORD = "Qw8$rTy4&nBv1?"  # noqa: S105
 
 pytestmark = pytest.mark.django_db
 
@@ -51,14 +52,14 @@ class TestLoginPayload:
             {"email": agent.email, "password": TEMPORARY_PASSWORD},
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         user_data = response.json()["data"]["user"]
         assert user_data["role"] == User.Role.AGENTE_MUNICIPAL
         assert user_data["must_change_password"] is True
         assert user_data["municipality"]["city"] == "Villa María"
 
     def test_municipality_travels_as_null_for_a_citizen(self, client):
-        from urbancheck.users.tests.factories import UserFactory
+        from urbancheck.users.tests.factories import UserFactory  # noqa: PLC0415
 
         citizen = UserFactory.create(email="vecino@test.com")
         citizen.set_password(TEMPORARY_PASSWORD)
@@ -92,7 +93,7 @@ class TestPasswordChange:
             token=token,
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         agent.refresh_from_db()
         assert agent.must_change_password is False
         assert agent.check_password(NEW_PASSWORD)
@@ -112,12 +113,12 @@ class TestPasswordChange:
             token=token,
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         agent.refresh_from_db()
         assert agent.must_change_password is True
 
     def test_flag_is_untouched_for_a_user_that_never_had_it(self, client):
-        from urbancheck.users.tests.factories import UserFactory
+        from urbancheck.users.tests.factories import UserFactory  # noqa: PLC0415
 
         citizen = UserFactory.create(email="vecino2@test.com")
         citizen.set_password(TEMPORARY_PASSWORD)

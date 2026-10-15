@@ -5,6 +5,8 @@ la verificación, endpoint por endpoint, de que un agente no ve ni un registro
 de la otra.
 """
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -54,7 +56,7 @@ class TestPanelListDoesNotLeak:
     ):
         response = agent_client.get(PANEL_LIST_URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         returned = {row["id"] for row in response.data["results"]}
         assert returned == {r.id for r in two_municipalities["own_reports"]}
 
@@ -127,7 +129,7 @@ class TestDirectAccessIsDenied:
 
         response = agent_client.get(f"{PANEL_LIST_URL}{foreign.id}/")
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
 
     def test_detail_of_own_municipality_is_reachable(
         self,
@@ -138,7 +140,7 @@ class TestDirectAccessIsDenied:
 
         response = agent_client.get(f"{PANEL_LIST_URL}{own.id}/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["id"] == own.id
 
 
@@ -152,7 +154,7 @@ class TestPanelPermissions:
         client = APIClient()
         client.force_authenticate(factory.create())
 
-        assert client.get(PANEL_LIST_URL).status_code == 403
+        assert client.get(PANEL_LIST_URL).status_code == HTTPStatus.FORBIDDEN
 
 
 class TestThePlatformAdminSeesEveryMunicipality:
@@ -182,7 +184,7 @@ class TestThePlatformAdminSeesEveryMunicipality:
             for r in two_municipalities["own_reports"]
             + two_municipalities["other_reports"]
         }
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert expected <= returned
 
     def test_it_can_narrow_to_one_municipality(
@@ -207,7 +209,7 @@ class TestThePlatformAdminSeesEveryMunicipality:
 
         response = admin_client.get(f"{PANEL_LIST_URL}{foreign.id}/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
 
     def test_only_the_admin_crosses_jurisdictions(self):
         """Quién cruza es una sola lista, y esta es su verificación."""
@@ -237,13 +239,19 @@ class TestForUserQueryset:
         [UserFactory, PlatformAdminFactory],
         ids=["citizen", "platform_admin"],
     )
-    def test_a_user_without_municipality_gets_nothing(self, factory, two_municipalities):
+    def test_a_user_without_municipality_gets_nothing(
+        self,
+        factory,
+        two_municipalities,
+    ):
         """Default seguro: sin jurisdicción no se gestiona nada de nadie."""
         assert not Report.objects.for_user(factory.create()).exists()
 
 
 class TestImmutability:
-    def test_report_municipality_cannot_be_changed_through_the_api(self, two_municipalities):
+    def test_report_municipality_cannot_be_changed_through_the_api(
+        self, two_municipalities,
+    ):
         # Pendiente de validación: es el único estado en el que el autor todavía
         # puede editar, y sin eso el PATCH rebota por la regla y no por la
         # inmutabilidad, que es lo que este test quiere probar.
@@ -259,11 +267,13 @@ class TestImmutability:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.municipality == two_municipalities["own"]
 
-    def test_user_municipality_cannot_be_changed_through_the_api(self, two_municipalities):
+    def test_user_municipality_cannot_be_changed_through_the_api(
+        self, two_municipalities,
+    ):
         agent = MunicipalAgentFactory.create(municipality=two_municipalities["own"])
         client = APIClient()
         client.force_authenticate(agent)
@@ -274,7 +284,7 @@ class TestImmutability:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         agent.refresh_from_db()
         assert agent.municipality == two_municipalities["own"]
 
@@ -312,16 +322,16 @@ class TestImmutability:
             format="multipart",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         created = Report.objects.get(pk=response.data["id"])
         assert created.municipality == two_municipalities["own"]
 
 
 def _one_pixel_png():
-    import io
+    import io  # noqa: PLC0415
 
-    from django.core.files.uploadedfile import SimpleUploadedFile
-    from PIL import Image
+    from django.core.files.uploadedfile import SimpleUploadedFile  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
 
     buffer = io.BytesIO()
     Image.new("RGB", (1, 1)).save(buffer, format="PNG")

@@ -14,6 +14,7 @@ jurisdicción.
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -84,7 +85,7 @@ class TestParticipatesAsCitizenRule:
 
     def test_the_rule_is_the_complement_of_citizen(self):
         """Si mañana se agrega un rol, tiene que caer de un lado explícito."""
-        assert User.WORK_ROLES == set(User.Role.values) - {User.Role.CIUDADANO}
+        assert set(User.Role.values) - {User.Role.CIUDADANO} == User.WORK_ROLES
 
 
 class TestWorkAccountsCannotCreateReports:
@@ -92,7 +93,7 @@ class TestWorkAccountsCannotCreateReports:
     def test_the_request_is_rejected(self, factory):
         response = post_report(client_for(factory.create()))
 
-        assert response.status_code == 403
+        assert response.status_code == HTTPStatus.FORBIDDEN
         assert response.data["detail"] == CANNOT_PARTICIPATE_MESSAGE
 
     @pytest.mark.parametrize("factory", WORK_ACCOUNT_FACTORIES)
@@ -104,10 +105,11 @@ class TestWorkAccountsCannotCreateReports:
     def test_a_deactivated_validator_is_rejected_too(self):
         validator = ValidatorFactory.create(is_work_account_active=False)
 
-        assert post_report(client_for(validator)).status_code == 403
+        assert post_report(client_for(validator)).status_code == HTTPStatus.FORBIDDEN
 
     def test_the_citizen_is_untouched(self):
-        assert post_report(client_for(UserFactory.create())).status_code == 201
+        response = post_report(client_for(UserFactory.create()))
+        assert response.status_code == HTTPStatus.CREATED
 
 
 MUNICIPAL_STAFF = [ValidatorFactory, MunicipalAgentFactory]
@@ -134,7 +136,7 @@ class TestWorkAccountsCannotComment:
             format="json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == HTTPStatus.FORBIDDEN
         assert response.data["detail"] == CANNOT_PARTICIPATE_MESSAGE
 
     @pytest.mark.parametrize("factory", MUNICIPAL_STAFF)
@@ -159,7 +161,7 @@ class TestWorkAccountsCannotLike:
 
         response = client_for(user).post(f"/api/reports/{report.id}/like/")
 
-        assert response.status_code == 403
+        assert response.status_code == HTTPStatus.FORBIDDEN
         assert report.likes.count() == 0
 
     @pytest.mark.parametrize("factory", MUNICIPAL_STAFF)
@@ -171,7 +173,7 @@ class TestWorkAccountsCannotLike:
 
         response = client_for(user).delete(f"/api/reports/{report.id}/like/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert report.likes.count() == 0
 
 
@@ -185,7 +187,7 @@ class TestReadingIsUntouched:
 
         response = client_for(user).get("/api/reports/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert len(response.data["results"]) == 1
 
     @pytest.mark.parametrize("factory", MUNICIPAL_STAFF)
@@ -193,7 +195,10 @@ class TestReadingIsUntouched:
         user = factory.create(must_change_password=False)
         report = report_in(user)
 
-        assert client_for(user).get(f"/api/reports/{report.id}/").status_code == 200
+        assert (
+            client_for(user).get(f"/api/reports/{report.id}/").status_code
+            == HTTPStatus.OK
+        )
 
     @pytest.mark.parametrize("factory", MUNICIPAL_STAFF)
     def test_it_still_reads_the_comments_of_the_neighbours(self, factory):
@@ -203,7 +208,7 @@ class TestReadingIsUntouched:
 
         response = client_for(user).get(f"/api/reports/{report.id}/comments/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert [row["text"] for row in response.data] == ["Sigue igual"]
 
     @pytest.mark.parametrize("factory", MUNICIPAL_STAFF)
@@ -211,4 +216,4 @@ class TestReadingIsUntouched:
         user = factory.create(must_change_password=False)
         report_in(user)
 
-        assert client_for(user).get("/api/reports/map/").status_code == 200
+        assert client_for(user).get("/api/reports/map/").status_code == HTTPStatus.OK

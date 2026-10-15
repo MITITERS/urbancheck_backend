@@ -8,6 +8,8 @@ El administrador de la plataforma queda afuera a propósito: también es cuenta 
 trabajo, pero no está acotado a ningún municipio.
 """
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -46,7 +48,9 @@ def scene(two_cities):
 @pytest.fixture(params=["validador", "agente"])
 def staff_client(request, scene) -> APIClient:
     """Las dos cuentas atadas a un municipio, con el mismo contrato."""
-    factory = ValidatorFactory if request.param == "validador" else MunicipalAgentFactory
+    factory = (
+        ValidatorFactory if request.param == "validador" else MunicipalAgentFactory
+    )
     client = APIClient()
     client.force_authenticate(
         factory.create(municipality=scene["own"], must_change_password=False),
@@ -76,7 +80,7 @@ class TestStaffSeesOnlyItsOwnMunicipality:
         """404 y no 403: el reporte no existe para esta cuenta."""
         response = staff_client.get(f"/api/reports/{scene['foreign'].id}/")
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
 
     def test_they_cannot_comment_on_it_either(self, staff_client, scene):
         """403 y no 404, y acá el 403 no delata nada.
@@ -97,7 +101,7 @@ class TestStaffSeesOnlyItsOwnMunicipality:
             format="json",
         )
 
-        assert foreign.status_code == 403
+        assert foreign.status_code == HTTPStatus.FORBIDDEN
         # Lo que importa: un reporte ajeno y uno inexistente son indistinguibles.
         assert foreign.status_code == nonexistent.status_code
 
@@ -105,7 +109,7 @@ class TestStaffSeesOnlyItsOwnMunicipality:
         foreign = staff_client.post(f"/api/reports/{scene['foreign'].id}/like/")
         nonexistent = staff_client.post("/api/reports/999999/like/")
 
-        assert foreign.status_code == 403
+        assert foreign.status_code == HTTPStatus.FORBIDDEN
         assert foreign.status_code == nonexistent.status_code
 
     def test_reading_a_foreign_report_still_answers_404(self, staff_client, scene):
@@ -114,7 +118,7 @@ class TestStaffSeesOnlyItsOwnMunicipality:
             staff_client.get(
                 f"/api/reports/{scene['foreign'].id}/comments/",
             ).status_code
-            == 404
+            == HTTPStatus.NOT_FOUND
         )
 
     def test_no_search_term_brings_a_foreign_report_back(self, staff_client, scene):
@@ -167,4 +171,4 @@ class TestCitizensAreUnaffected:
 
         response = client.get(f"/api/reports/{scene['foreign'].id}/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK

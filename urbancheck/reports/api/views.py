@@ -28,18 +28,20 @@ from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.notifications.services import notify_resolution_appealed
-from urbancheck.reports.collective_validation import evaluate as evaluate_collective_validation
-from urbancheck.reports.duplicates import find_duplicate
-from urbancheck.reports.map_retention import hide_stale_resolved
-from urbancheck.reports.geo import parse_coordinates
-from urbancheck.reports.geocoding import geocode_one
-from urbancheck.reports.geocoding import reverse_geocode
-from urbancheck.reports.geocoding import search_addresses
+from urbancheck.reports.collective_validation import (
+    evaluate as evaluate_collective_validation,
+)
 from urbancheck.reports.complaints import OwnReportError
 from urbancheck.reports.complaints import ReportNotPublicError
 from urbancheck.reports.complaints import confirmation_for
 from urbancheck.reports.complaints import file_complaint
 from urbancheck.reports.complaints import reason_catalog
+from urbancheck.reports.duplicates import find_duplicate
+from urbancheck.reports.geo import parse_coordinates
+from urbancheck.reports.geocoding import geocode_one
+from urbancheck.reports.geocoding import reverse_geocode
+from urbancheck.reports.geocoding import search_addresses
+from urbancheck.reports.map_retention import hide_stale_resolved
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report

@@ -18,9 +18,9 @@ from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionComparison
 from urbancheck.reports.models import ResolutionEvidence
+from urbancheck.reports.services import PHOTO_EXEMPT_TARGETS
 from urbancheck.reports.state_machine import OFFICIAL_RESPONSE_STATUSES
 from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
-from urbancheck.reports.services import PHOTO_EXEMPT_TARGETS
 from urbancheck.reports.state_machine import Actor
 from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.state_machine import transitions_from

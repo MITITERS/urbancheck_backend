@@ -93,7 +93,11 @@ class TestStatusFilter:
 
         response = agent_client.get(
             URL,
-            {"status": f"{Report.Status.PENDIENTE_VALIDACION},{Report.Status.REPORTADO}"},
+            {
+                "status": (
+                    f"{Report.Status.PENDIENTE_VALIDACION},{Report.Status.REPORTADO}"
+                ),
+            },
         )
 
         assert set(ids_in(response)) == {pending.id, reported.id}
@@ -233,7 +237,7 @@ class TestPagination:
 
         response = agent_client.get(URL)
 
-        assert response.data["count"] == 25
+        assert response.data["count"] == 25  # noqa: PLR2004
         assert len(response.data["results"]) == settings.REST_FRAMEWORK["PAGE_SIZE"]
         assert response.data["next"] is not None
 
@@ -242,7 +246,7 @@ class TestPagination:
 
         response = agent_client.get(URL, {"page": 2})
 
-        assert len(response.data["results"]) == 5
+        assert len(response.data["results"]) == 5  # noqa: PLR2004
 
 
 class TestFiltersNeverCrossJurisdiction:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -45,14 +46,14 @@ class TestReportUpdate:
     def test_author_can_edit_pending_report(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         res = client.patch(
             f"/api/reports/{report.id}/",
             data={"description": "Descripción corregida", "category": "basura"},
             format="json",
         )
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.description == "Descripción corregida"
         assert report.category == Report.Category.BASURA
@@ -71,14 +72,14 @@ class TestReportUpdate:
             data={"description": "Otra descripción"},
             format="json",
         )
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         report.refresh_from_db()
         assert report.description != "Otra descripción"
 
     def test_edit_records_edited_at(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         assert report.edited_at is None
         res = client.patch(
@@ -86,7 +87,7 @@ class TestReportUpdate:
             data={"description": "Editado"},
             format="json",
         )
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.edited_at is not None
         assert res.data["edited_at"] is not None
@@ -94,7 +95,7 @@ class TestReportUpdate:
     def test_can_replace_photo(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         original = report.photo.name
         res = client.patch(
@@ -102,7 +103,7 @@ class TestReportUpdate:
             data={"photo": make_image_file()},
             format="multipart",
         )
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.photo.name != original
 
@@ -115,7 +116,7 @@ class TestReportUpdate:
             data={"description": "Intento de edición"},
             format="json",
         )
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         report.refresh_from_db()
         assert report.description != "Intento de edición"
 
@@ -127,24 +128,24 @@ class TestReportUpdate:
             data={"description": "No debería poder"},
             format="json",
         )
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
 
     def test_empty_description_rejected(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         res = client.patch(
             f"/api/reports/{report.id}/",
             data={"description": "   "},
             format="json",
         )
-        assert res.status_code == 400
+        assert res.status_code == HTTPStatus.BAD_REQUEST
 
     def test_detail_exposes_can_edit(self, auth_client):
         client, user = auth_client
         own_editable = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         own_locked = ReportFactory.create(author=user, status=Report.Status.EN_PROCESO)
         someone_else = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
@@ -159,16 +160,16 @@ class TestReportDelete:
     def test_author_can_delete_pending(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         res = client.delete(f"/api/reports/{report.id}/")
-        assert res.status_code == 204
+        assert res.status_code == HTTPStatus.NO_CONTENT
         assert not Report.objects.filter(id=report.id).exists()
 
     def test_deleted_report_disappears_from_feed_and_map(self, auth_client):
         client, user = auth_client
         report = ReportFactory.create(
-            author=user, status=Report.Status.PENDIENTE_VALIDACION
+            author=user, status=Report.Status.PENDIENTE_VALIDACION,
         )
         client.delete(f"/api/reports/{report.id}/")
 
@@ -183,12 +184,12 @@ class TestReportDelete:
         client, user = auth_client
         report = ReportFactory.create(author=user, status=locked_status)
         res = client.delete(f"/api/reports/{report.id}/")
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         assert Report.objects.filter(id=report.id).exists()
 
     def test_other_user_cannot_delete(self, auth_client):
         client, _ = auth_client
         report = ReportFactory.create(status=Report.Status.PENDIENTE_VALIDACION)
         res = client.delete(f"/api/reports/{report.id}/")
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         assert Report.objects.filter(id=report.id).exists()

@@ -211,8 +211,15 @@ class Report(PendingPhotoMixin, models.Model):
     photo_removed_at = models.DateTimeField(null=True, blank=True)
     description = models.TextField()
     category = models.CharField(max_length=20, choices=Category.choices)
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+    longitude = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True,
+    )
     address = models.CharField(max_length=255, blank=True)
     # Área operativa que se hizo cargo del reporte (US-028). Se asigna en la
     # misma transacción que el paso a *En proceso* y no se puede quitar: un
@@ -552,7 +559,9 @@ class ResolutionEvidence(PendingPhotoMixin, models.Model):
     )
     # Desde dónde se registró. Se guarda para poder auditar después la
     # verificación de proximidad que ya se hizo al cerrar.
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    latitude = models.DecimalField(
+        max_digits=9, decimal_places=6, null=True, blank=True,
+    )
     longitude = models.DecimalField(
         max_digits=9,
         decimal_places=6,
@@ -769,7 +778,9 @@ class OfficialResponse(models.Model):
 
 
 class Comment(models.Model):
-    report = models.ForeignKey(Report, on_delete=models.CASCADE, related_name="comments")
+    report = models.ForeignKey(
+        Report, on_delete=models.CASCADE, related_name="comments",
+    )
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -780,6 +791,9 @@ class Comment(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Comentario {self.pk} en el reporte {self.report_id}"
 
 
 class Like(models.Model):
@@ -797,8 +811,14 @@ class Like(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["report", "user"], name="unique_report_like")
+            models.UniqueConstraint(
+                fields=["report", "user"],
+                name="unique_report_like",
+            ),
         ]
+
+    def __str__(self) -> str:
+        return f"Me gusta de {self.user_id} en el reporte {self.report_id}"
 
 
 COMPLAINT_COMMENT_MAX_LENGTH = 500

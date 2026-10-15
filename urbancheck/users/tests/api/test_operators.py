@@ -25,7 +25,7 @@ HTTP_FORBIDDEN = 403
 HTTP_NOT_FOUND = 404
 HTTP_METHOD_NOT_ALLOWED = 405
 
-PASSWORD = "Provisoria2026!"
+PASSWORD = "Provisoria2026!"  # noqa: S105
 
 
 def detail(operator_id: int, suffix: str = "") -> str:

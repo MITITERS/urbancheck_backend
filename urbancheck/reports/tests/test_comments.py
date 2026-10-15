@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -26,14 +28,14 @@ class TestCommentDelete:
         client, user = auth_client
         comment = CommentFactory.create(author=user)
         res = client.delete(f"/api/comments/{comment.id}/")
-        assert res.status_code == 204
+        assert res.status_code == HTTPStatus.NO_CONTENT
         assert not Comment.objects.filter(id=comment.id).exists()
 
     def test_cannot_delete_someone_elses_comment(self, auth_client):
         client, _ = auth_client
         comment = CommentFactory.create()
         res = client.delete(f"/api/comments/{comment.id}/")
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         assert Comment.objects.filter(id=comment.id).exists()
 
     def test_deleted_comment_disappears_from_list(self, auth_client):
@@ -70,7 +72,7 @@ class TestReportAuthorModeratesItsComments:
 
         res = client.delete(f"/api/comments/{comment.id}/")
 
-        assert res.status_code == 204
+        assert res.status_code == HTTPStatus.NO_CONTENT
         assert not Comment.objects.filter(id=comment.id).exists()
 
     def test_a_stranger_still_cannot(self, auth_client):
@@ -80,7 +82,7 @@ class TestReportAuthorModeratesItsComments:
 
         res = client.delete(f"/api/comments/{comment.id}/")
 
-        assert res.status_code == 403
+        assert res.status_code == HTTPStatus.FORBIDDEN
         assert Comment.objects.filter(id=comment.id).exists()
 
     def test_can_delete_tells_the_client_which_ones(self, auth_client):
@@ -108,7 +110,7 @@ class TestReportAuthorModeratesItsComments:
 
         res = client.delete(f"/api/comments/{comment.id}/")
 
-        assert res.status_code == 204
+        assert res.status_code == HTTPStatus.NO_CONTENT
 
 
 @pytest.mark.django_db
@@ -123,7 +125,7 @@ class TestCommentNotification:
             data={"text": "Yo también lo vi"},
             format="json",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
 
         notification = Notification.objects.get(recipient=owner)
         assert notification.kind == Notification.Kind.NUEVO_COMENTARIO

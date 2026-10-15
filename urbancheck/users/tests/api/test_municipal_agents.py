@@ -1,5 +1,7 @@
 """US-017 — alta y baja lógica de agentes municipales, por el admin."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -13,7 +15,7 @@ from urbancheck.users.tests.factories import PlatformAdminFactory
 from urbancheck.users.tests.factories import UserFactory
 
 URL = "/api/municipal-agents/"
-TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"
+TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"  # noqa: S105
 
 pytestmark = pytest.mark.django_db
 
@@ -41,7 +43,7 @@ class TestCreateMunicipalAgent:
 
         response = admin_client.post(URL, payload(municipality), format="json")
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         agent = User.objects.get(email="agente@muni.gob.ar")
         assert agent.role == User.Role.AGENTE_MUNICIPAL
         assert agent.municipality == municipality
@@ -82,17 +84,17 @@ class TestCreateMunicipalAgent:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "email" in response.data
 
     def test_weak_temporary_password_is_rejected(self, admin_client):
         response = admin_client.post(
             URL,
-            payload(MunicipalityFactory.create(), temporary_password="123"),
+            payload(MunicipalityFactory.create(), temporary_password="123"),  # noqa: S106
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "temporary_password" in response.data
 
     def test_municipality_is_required(self, admin_client):
@@ -101,7 +103,7 @@ class TestCreateMunicipalAgent:
 
         response = admin_client.post(URL, body, format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "municipality_id" in response.data
 
 
@@ -121,7 +123,7 @@ class TestMunicipalAgentPermissions:
             format="json",
         )
 
-        assert response.status_code == 403
+        assert response.status_code == HTTPStatus.FORBIDDEN
         assert not User.objects.filter(email="agente@muni.gob.ar").exists()
 
 
@@ -140,7 +142,7 @@ class TestDeactivateMunicipalAgent:
     def test_deactivating_takes_the_panel_away(self, admin_client, agent):
         response = admin_client.post(f"{URL}{agent.id}/deactivate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["is_active_agent"] is False
         agent.refresh_from_db()
         assert agent.can_operate_panel is False
@@ -154,8 +156,8 @@ class TestDeactivateMunicipalAgent:
 
         # No es una pantalla: es todo el panel, porque la baja se verifica en el
         # permiso base y no endpoint por endpoint.
-        assert client.get("/api/panel/reports/").status_code == 403
-        assert client.get("/api/validators/").status_code == 403
+        assert client.get("/api/panel/reports/").status_code == HTTPStatus.FORBIDDEN
+        assert client.get("/api/validators/").status_code == HTTPStatus.FORBIDDEN
 
     def test_the_account_survives_and_can_still_sign_in(self, admin_client, agent):
         admin_client.post(f"{URL}{agent.id}/deactivate/")
@@ -186,7 +188,7 @@ class TestDeactivateMunicipalAgent:
 
         response = admin_client.post(f"{URL}{agent.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         agent.refresh_from_db()
         assert agent.can_operate_panel is True
 
@@ -217,7 +219,8 @@ class TestDeactivateMunicipalAgent:
         client = APIClient()
         client.force_authenticate(factory.create(must_change_password=False))
 
-        assert client.post(f"{URL}{agent.id}/deactivate/").status_code == 403
+        response = client.post(f"{URL}{agent.id}/deactivate/")
+        assert response.status_code == HTTPStatus.FORBIDDEN
         agent.refresh_from_db()
         assert agent.is_work_account_active is True
 
@@ -255,13 +258,13 @@ class TestArchivedListing:
         """Compatibilidad: es lo que hacía el listado antes de existir el filtro."""
         response = admin_client.get(URL)
 
-        assert response.data["count"] == 2
+        assert response.data["count"] == 2  # noqa: PLR2004
 
     def test_an_unknown_state_does_not_filter_nor_break(self, admin_client, two_agents):
         response = admin_client.get(URL, {"state": "cualquiera"})
 
-        assert response.status_code == 200
-        assert response.data["count"] == 2
+        assert response.status_code == HTTPStatus.OK
+        assert response.data["count"] == 2  # noqa: PLR2004
 
     def test_deactivating_moves_the_row_between_listings(
         self,
@@ -287,7 +290,7 @@ class TestArchivedListing:
 
         response = admin_client.post(f"{URL}{agent.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         active = admin_client.get(URL, {"state": "active"}).data["results"]
         assert agent.id in {row["id"] for row in active}
 
@@ -340,7 +343,7 @@ class TestFilterByMunicipality:
     ):
         response = admin_client.get(URL)
 
-        assert response.data["count"] == 2
+        assert response.data["count"] == 2  # noqa: PLR2004
 
     def test_a_municipality_that_is_not_an_id_is_ignored(
         self,
@@ -350,8 +353,8 @@ class TestFilterByMunicipality:
         """Un parámetro mal escrito no puede tumbar el listado."""
         response = admin_client.get(URL, {"municipality": "villa maria"})
 
-        assert response.status_code == 200
-        assert response.data["count"] == 2
+        assert response.status_code == HTTPStatus.OK
+        assert response.data["count"] == 2  # noqa: PLR2004
 
 
 class TestReactivationNeedsAnActiveMunicipality:
@@ -380,7 +383,7 @@ class TestReactivationNeedsAnActiveMunicipality:
 
         response = admin_client.post(f"{URL}{agent.id}/activate/")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         agent.refresh_from_db()
         assert agent.is_work_account_active is False
 
@@ -407,7 +410,7 @@ class TestReactivationNeedsAnActiveMunicipality:
 
         response = admin_client.post(f"{URL}{agent.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         agent.refresh_from_db()
         assert agent.is_work_account_active is True
 
@@ -420,4 +423,4 @@ class TestReactivationNeedsAnActiveMunicipality:
 
         response = admin_client.post(f"{URL}{agent.id}/deactivate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK

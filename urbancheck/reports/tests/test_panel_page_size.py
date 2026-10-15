@@ -7,6 +7,8 @@ existe porque el parámetro llega del cliente.
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -55,7 +57,7 @@ class TestPageSize:
         assert len(response.data["results"]) == min(size, len(many_reports))
 
     def test_the_count_is_the_total_and_not_the_page(self, agent_client, many_reports):
-        """El paginado dice «1–10 de 25»: el total no depende del tamaño."""
+        """El paginado dice «1-10 de 25»: el total no depende del tamaño."""
         response = agent_client.get(URL, {"page_size": 10})
 
         assert response.data["count"] == len(many_reports)
@@ -74,5 +76,5 @@ class TestPageSize:
         """Un valor basura no puede tumbar el listado."""
         response = agent_client.get(URL, {"page_size": "muchas"})
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert len(response.data["results"]) == DEFAULT_PAGE_SIZE
