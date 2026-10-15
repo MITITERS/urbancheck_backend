@@ -1,4 +1,5 @@
-"""Admin de los artefactos del circuito de cierre (US-046 y US-048).
+"""Admin de los artefactos del circuito de cierre (US-046 y US-048) y de las
+denuncias (US-021 y US-043).
 
 Los dos van en **solo lectura**. La evidencia se crea cerrando un reporte desde
 la app, con la verificación de proximidad y en la misma transacción que la
@@ -7,6 +8,8 @@ editables acá abriría por atrás justo lo que esos circuitos garantizan.
 """
 
 from django.contrib import admin
+from django.contrib import messages
+from django.utils import timezone
 
 from .models import Comment
 from .models import Like
@@ -18,6 +21,11 @@ from .models import ReportStatusHistory
 from .models import ResolutionAppeal
 from .models import ResolutionComparison
 from .models import ResolutionEvidence
+from .privacy import ComplaintAlreadyResolvedError
+from .privacy import deadline_for
+from .privacy import dismiss
+from .privacy import remove_image
+from .privacy import review_window
 
 
 class ReadOnlyAdmin(admin.ModelAdmin):
@@ -33,21 +41,121 @@ class ReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
+class OverdueFilter(admin.SimpleListFilter):
+    """Las solicitudes por dato personal que pasaron el plazo (US-043, E7)."""
+
+    title = "plazo"
+    parameter_name = "plazo"
+
+    def lookups(self, request, model_admin):
+        return [("vencidas", "Fuera de plazo"), ("en_plazo", "En plazo")]
+
+    def queryset(self, request, queryset):
+        limit = timezone.now() - review_window()
+        pending = queryset.filter(status=ReportComplaint.Status.PENDIENTE)
+        if self.value() == "vencidas":
+            return pending.filter(created_at__lt=limit)
+        if self.value() == "en_plazo":
+            return pending.filter(created_at__gte=limit)
+        return queryset
+
+
 @admin.register(ReportComplaint)
 class ReportComplaintAdmin(ReadOnlyAdmin):
-    """Denuncias (US-021, US-043). Se resuelven desde el panel, que borra el
-    archivo; marcarlas resueltas acá dejaría la imagen publicada."""
+    """Denuncias (US-021, US-043).
+
+    Las de dato personal se resuelven acá o desde la bandeja del panel: las dos
+    llaman a los mismos servicios de ``privacy.py`` (``remove_image`` y
+    ``dismiss``), que borran el archivo, devuelven la visibilidad y avisan a
+    quien corresponde. Nunca se edita el estado a mano: marcarla resuelta sin
+    pasar por el servicio dejaría la imagen publicada.
+
+    Las de contenido (US-021) son del agente municipal (US-049) y acá solo se
+    miran.
+    """
 
     list_display = [
         "report",
         "reason",
+        "image",
         "status",
         "reporter",
         "created_at",
+        "deadline",
+        "overdue",
         "resolved_at",
         "resolved_by",
     ]
-    list_filter = ["reason", "status", "created_at"]
+    list_filter = ["reason", "status", OverdueFilter, "created_at"]
+    list_select_related = ["report", "reporter", "resolved_by"]
+    # La más vieja primero: es la que está más cerca de vencer (escenario 4).
+    ordering = ["created_at"]
+    actions = ["remove_selected_images", "dismiss_selected_requests"]
+
+    @admin.display(description="imagen")
+    def image(self, obj) -> str:
+        if obj.reason not in ReportComplaint.PLATFORM_REASONS:
+            return "-"
+        labels = {
+            "report": "foto del reporte",
+            "resolution_evidence": "foto del cierre",
+            "resolution_appeal": "foto de la objeción",
+        }
+        return labels[obj.image_kind]
+
+    @admin.display(description="vence")
+    def deadline(self, obj):
+        if obj.reason not in ReportComplaint.PLATFORM_REASONS:
+            return None
+        return deadline_for(obj)
+
+    @admin.display(description="fuera de plazo", boolean=True)
+    def overdue(self, obj) -> bool | None:
+        if obj.reason not in ReportComplaint.PLATFORM_REASONS or not obj.is_pending:
+            return None
+        return timezone.now() > deadline_for(obj)
+
+    def has_resolve_permission(self, request) -> bool:
+        """Las resuelve el administrador de la plataforma (US-043, E10)."""
+        user = request.user
+        return user.is_superuser or user.is_platform_admin
+
+    @admin.action(
+        description="Eliminar la imagen denunciada",
+        permissions=["resolve"],
+    )
+    def remove_selected_images(self, request, queryset):
+        self._resolve(request, queryset, remove_image, "con la imagen eliminada")
+
+    @admin.action(
+        description="Desestimar (la imagen no muestra datos personales)",
+        permissions=["resolve"],
+    )
+    def dismiss_selected_requests(self, request, queryset):
+        self._resolve(request, queryset, dismiss, "desestimadas")
+
+    def _resolve(self, request, queryset, service, outcome: str) -> None:
+        pending = queryset.filter(
+            reason__in=ReportComplaint.PLATFORM_REASONS,
+            status=ReportComplaint.Status.PENDIENTE,
+        )
+        done = 0
+        for complaint in pending:
+            try:
+                service(complaint, admin=request.user)
+            except ComplaintAlreadyResolvedError:
+                # Otra solicitud sobre el mismo archivo la cerró en esta misma
+                # tanda, o la resolvió otro administrador.
+                continue
+            done += 1
+        skipped = queryset.count() - done
+        message = f"{done} solicitudes {outcome}."
+        if skipped:
+            message += (
+                f" {skipped} no se tocaron: ya estaban resueltas o no son de "
+                "dato personal."
+            )
+        self.message_user(request, message, messages.SUCCESS)
 
 
 @admin.register(ResolutionEvidence)

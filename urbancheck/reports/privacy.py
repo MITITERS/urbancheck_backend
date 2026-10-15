@@ -38,6 +38,7 @@ from urbancheck.users.models import User
 
 from .models import Report
 from .models import ReportComplaint
+from .models import ResolutionAppeal
 from .models import ResolutionEvidence
 from .models import on_privacy_hold
 
@@ -87,14 +88,20 @@ def request_personal_data_review(
     report: Report,
     reporter,
     evidence: ResolutionEvidence | None = None,
+    appeal: ResolutionAppeal | None = None,
     comment: str = "",
 ) -> ReportComplaint:
     """Registra la solicitud; el reporte queda oculto en el mismo commit.
 
     Cualquier usuario puede presentarla, sea o no el autor del reporte y sea o
     no la persona que aparece (escenario 3): la RN-12 habilita a cualquiera.
+    La imagen es la del reporte, la de un cierre (``evidence``) o la de una
+    apelación (``appeal``), nunca dos a la vez.
     """
-    target = evidence if evidence is not None else report
+    if evidence is not None and appeal is not None:
+        msg = "Una solicitud señala una sola imagen."
+        raise ValueError(msg)
+    target = evidence or appeal or report
     image_name = target.photo.name
     if not image_name:
         msg = "La imagen ya fue retirada."
@@ -103,6 +110,7 @@ def request_personal_data_review(
     pending = ReportComplaint.objects.filter(
         report=report,
         resolution_evidence=evidence,
+        resolution_appeal=appeal,
         reporter=reporter,
         reason=ReportComplaint.Reason.DATO_PERSONAL,
         status=ReportComplaint.Status.PENDIENTE,
@@ -121,6 +129,7 @@ def request_personal_data_review(
             complaint = ReportComplaint.objects.create(
                 report=report,
                 resolution_evidence=evidence,
+                resolution_appeal=appeal,
                 image_name=image_name,
                 reporter=reporter,
                 reason=ReportComplaint.Reason.DATO_PERSONAL,
@@ -137,6 +146,7 @@ def request_personal_data_review(
         report=report.pk,
         complaint=complaint.pk,
         evidence=evidence.pk if evidence is not None else None,
+        appeal=appeal.pk if appeal is not None else None,
     )
     # Si lo denunció el propio autor, ya sabe lo que pasa: no hay que avisarle.
     if not was_hidden and reporter.pk != report.author_id:
@@ -154,8 +164,9 @@ def remove_image(complaint: ReportComplaint, *, admin) -> ReportComplaint:
     el registro de cumplimiento de la RN-12 cuelga de ella, y el autor y el
     municipio lo siguen viendo.
 
-    Si es la foto de **un cierre** (escenario 11), el reporte conserva la suya,
-    su estado y el parte de trabajo, y vuelve a verse si nada más lo retiene.
+    Si es la foto de **un cierre** (escenario 11) o de **una apelación**
+    (escenario 1), el reporte conserva la suya, su estado, el parte de trabajo
+    y el motivo de la apelación, y vuelve a verse si nada más lo retiene.
 
     **El archivo se borra dentro de la transacción y al final**, no en un
     ``on_commit``. Son dos órdenes con dos fallas posibles, y se elige la que no
@@ -170,11 +181,13 @@ def remove_image(complaint: ReportComplaint, *, admin) -> ReportComplaint:
         complaint = _lock_pending(complaint)
         now = timezone.now()
         evidence = complaint.resolution_evidence
-        target = (
-            ResolutionEvidence.objects.select_for_update().get(pk=evidence.pk)
-            if evidence is not None
-            else Report.objects.select_for_update().get(pk=complaint.report_id)
-        )
+        appeal = complaint.resolution_appeal
+        if evidence is not None:
+            target = ResolutionEvidence.objects.select_for_update().get(pk=evidence.pk)
+        elif appeal is not None:
+            target = ResolutionAppeal.objects.select_for_update().get(pk=appeal.pk)
+        else:
+            target = Report.objects.select_for_update().get(pk=complaint.report_id)
         storage = target.photo.storage
         # Si el autor reemplazó la foto mientras la solicitud esperaba, la que
         # se publica ya no es la denunciada: se borra el archivo denunciado y
@@ -201,7 +214,7 @@ def remove_image(complaint: ReportComplaint, *, admin) -> ReportComplaint:
     report = complaint.report
     notify_image_removed(
         report,
-        from_resolution_evidence=evidence is not None,
+        removed=complaint.image_kind,
         still_hidden=Report.objects.filter(pk=report.pk)
         .filter(on_privacy_hold())
         .exists(),
@@ -210,7 +223,7 @@ def remove_image(complaint: ReportComplaint, *, admin) -> ReportComplaint:
         report,
         recipients=_reporters_to_notify(report, reporter_ids),
         image_removed=True,
-        report_withdrawn=evidence is None,
+        report_withdrawn=complaint.image_kind == "report",
     )
     complaint.refresh_from_db()
     return complaint
@@ -264,7 +277,7 @@ def _lock_pending(complaint: ReportComplaint) -> ReportComplaint:
     # deja bloquear; el reporte o la evidencia se bloquean aparte, después.
     locked = (
         ReportComplaint.objects.select_for_update(of=("self",))
-        .select_related("report", "resolution_evidence")
+        .select_related("report", "resolution_evidence", "resolution_appeal")
         .get(pk=complaint.pk)
     )
     if not locked.is_pending:
@@ -281,6 +294,7 @@ def _close_same_image(complaint, *, status, admin, now) -> set[int]:
     pending = ReportComplaint.objects.filter(
         report_id=complaint.report_id,
         resolution_evidence_id=complaint.resolution_evidence_id,
+        resolution_appeal_id=complaint.resolution_appeal_id,
         image_name=complaint.image_name,
         reason=complaint.reason,
         status=ReportComplaint.Status.PENDIENTE,

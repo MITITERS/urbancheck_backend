@@ -44,8 +44,11 @@ class _ReportSummarySerializer(serializers.ModelSerializer):
 
 
 class _ImageSerializer(serializers.Serializer):
-    kind = serializers.ChoiceField(choices=["report", "resolution_evidence"])
+    kind = serializers.ChoiceField(
+        choices=["report", "resolution_evidence", "resolution_appeal"],
+    )
     evidence_id = serializers.IntegerField(allow_null=True)
+    appeal_id = serializers.IntegerField(allow_null=True)
     url = serializers.CharField(allow_null=True)
 
 
@@ -119,14 +122,14 @@ class PrivacyRequestSerializer(serializers.ModelSerializer):
         no la denunciada, y mostrarla como tal llevaría a decidir sobre la
         imagen equivocada.
         """
-        evidence = obj.resolution_evidence
-        field = evidence.photo if evidence is not None else obj.report.photo
+        field = obj.target.photo
         url = None
         if field and field.name == obj.image_name:
             request = self.context.get("request")
             url = request.build_absolute_uri(field.url) if request else field.url
         return {
-            "kind": "resolution_evidence" if evidence is not None else "report",
-            "evidence_id": evidence.pk if evidence is not None else None,
+            "kind": obj.image_kind,
+            "evidence_id": obj.resolution_evidence_id,
+            "appeal_id": obj.resolution_appeal_id,
             "url": url,
         }
