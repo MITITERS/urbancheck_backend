@@ -2,6 +2,9 @@
 
 Las cuatro puertas por las que una foto entra por la API: crear un reporte,
 reemplazar su foto, cerrarlo en terreno (US-046) y apelar el cierre (US-048).
+En cada una se sube una foto con el GPS, el modelo del teléfono y un bloque XMP
+conocidos, y se verifica que el archivo guardado no conserva nada de eso
+(Sprint 5, punto 5.2: SEC-06, SEC-07 y SEC-08).
 
 Con US-042 el difuminado dejó de pasar dentro del request, así que cada caso
 tiene ahora dos momentos: el endpoint contesta con la foto todavía en cola, y
@@ -26,11 +29,10 @@ from rest_framework import serializers
 from rest_framework.test import APIClient
 
 from urbancheck.anonymization import service
-from urbancheck.anonymization.management.commands.benchmark_anonymization import (
-    BENCHMARK_DIR,
-)
 from urbancheck.anonymization.service import anonymize
 from urbancheck.anonymization.storage import pending_photo_storage
+from urbancheck.anonymization.tests.images import assert_no_metadata
+from urbancheck.anonymization.tests.images import synthetic_photo
 from urbancheck.common.fields import PendingPhotoField
 from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports.admin import ReportAdmin
@@ -54,13 +56,13 @@ HERE = {"latitude": "-32.410300", "longitude": "-63.240000"}
 #: Reporte (alta y edición), cierre y apelación.
 WRITABLE_PHOTOS = 4
 
-#: Tiene dos rostros y dos patentes.
-SENSITIVE = "street_cars_10.jpg"
+#: La foto como sale de un celular: con GPS, modelo, fecha y XMP.
+SENSITIVE = "foto-del-celular.jpg"
 
 
 @pytest.fixture(scope="module")
 def sensitive_bytes() -> bytes:
-    return (BENCHMARK_DIR / "images" / SENSITIVE).read_bytes()
+    return synthetic_photo()
 
 
 @pytest.fixture(scope="module")
@@ -172,6 +174,8 @@ class TestOnlyTheAnonymizedVersionIsStored:
         assert media_files() - before == {stored}
         assert stored.read_bytes() == expected_bytes
         assert stored.read_bytes() != sensitive_bytes
+        # CP-SEC06-01: la foto del reporte se guarda sin GPS ni metadatos.
+        assert_no_metadata(stored.read_bytes())
         # Y la original no sobrevive al procesamiento.
         assert pending_files() == set()
 
@@ -205,6 +209,8 @@ class TestOnlyTheAnonymizedVersionIsStored:
         report.refresh_from_db()
         assert media_files() - before == {Path(report.photo.path)}
         assert Path(report.photo.path).read_bytes() == expected_bytes
+        # CP-SEC06-02: también la foto de reemplazo (US-018).
+        assert_no_metadata(Path(report.photo.path).read_bytes())
         assert pending_files() == set()
 
     def test_the_operator_closing(
@@ -231,6 +237,8 @@ class TestOnlyTheAnonymizedVersionIsStored:
         evidence.refresh_from_db()
         assert media_files() - before == {Path(evidence.photo.path)}
         assert Path(evidence.photo.path).read_bytes() == expected_bytes
+        # CP-SEC07-01: la evidencia del operario se guarda sin GPS ni metadatos.
+        assert_no_metadata(Path(evidence.photo.path).read_bytes())
         assert pending_files() == set()
 
     def test_the_citizen_appealing(  # noqa: PLR0913 (cada fixture es un actor)
@@ -264,6 +272,8 @@ class TestOnlyTheAnonymizedVersionIsStored:
         appeal.refresh_from_db()
         assert media_files() - before == {Path(appeal.photo.path)}
         assert Path(appeal.photo.path).read_bytes() == expected_bytes
+        # CP-SEC08-01: la foto de la apelación se guarda sin GPS ni metadatos.
+        assert_no_metadata(Path(appeal.photo.path).read_bytes())
         assert pending_files() == set()
 
     def test_a_large_photo_never_touches_a_temporary_file(

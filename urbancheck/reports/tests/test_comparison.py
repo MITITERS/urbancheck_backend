@@ -20,11 +20,9 @@ from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APIClient
 
-from urbancheck.anonymization.management.commands.benchmark_anonymization import (
-    BENCHMARK_DIR,
-)
 from urbancheck.anonymization.service import anonymize
 from urbancheck.anonymization.tasks import anonymize_photo
+from urbancheck.anonymization.tests.images import synthetic_photo
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports import resolution
@@ -748,7 +746,9 @@ class TestRestrictedVisibility:
 class TestOnlyBlurredImagesLeave:
     """Escenario 10: al servicio externo solo llegan las versiones difuminadas."""
 
-    SENSITIVE = "street_cars_10.jpg"  # dos rostros y dos patentes
+    # Una foto como sale del celular, con GPS y modelo: lo que llega al servicio
+    # tiene que ser lo que se guardó, nunca lo que se subió.
+    SENSITIVE = "foto-del-celular.jpg"
 
     def test_what_is_sent_is_what_was_stored(
         self,
@@ -758,7 +758,7 @@ class TestOnlyBlurredImagesLeave:
         fake_vision,
         django_capture_on_commit_callbacks,
     ):
-        raw = (BENCHMARK_DIR / "images" / self.SENSITIVE).read_bytes()
+        raw = synthetic_photo()
         upload = io.BytesIO(raw)
         upload.name = self.SENSITIVE
         blurred = anonymize(upload).read()
@@ -966,13 +966,6 @@ class TestVisionClient:
         with pytest.raises(VisionError) as caught:
             self.compare(original=b"no es una imagen")
         assert caught.value.code == "unreadable_image"
-
-
-def test_the_images_directory_exists():
-    """El test del escenario 10 depende del set del benchmark de US-041."""
-    assert Path(
-        BENCHMARK_DIR / "images" / TestOnlyBlurredImagesLeave.SENSITIVE,
-    ).exists()
 
 
 class TestRetryCommand:

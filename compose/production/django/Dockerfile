@@ -23,6 +23,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-dev
 COPY . ${APP_HOME}
 
+# Los pesos de los detectores de US-041 van versionados en el repo; acá se
+# verifica que sean los publicados antes de que la imagen exista.
+RUN cd ${APP_HOME}/urbancheck/anonymization/weights \
+  && echo "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4  face_detection_yunet_2023mar.onnx" | sha256sum -c - \
+  && echo "2b878b38d9aa07b6ddc3ea75c4ffcb39869bc5c218e0a14002f60ab2f7b0be9a  yolo-v9-s-608-license-plates-end2end.onnx" | sha256sum -c -
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
