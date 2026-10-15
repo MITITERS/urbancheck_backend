@@ -9,7 +9,7 @@ equipo decide si este entorno es representativo del servidor de producción**.
 - Mac con Apple Silicon (aarch64), Docker Desktop 28.4.0.
 - Contenedor `django` del compose local: 10 CPU y 7,7 GB de RAM asignados.
 - Python 3.14.2, onnxruntime sobre CPU (sin GPU), OpenCV, Pillow 12.3.0.
-- Script: `python measure_us041.py` (en `docs/sprint-5/measure_us041.py`), que llama a
+- Comando: `python manage.py measure_anonymization`, que llama a
   `anonymization.service.process`, igual que la tarea de Celery.
 
 ## Tiempos por imagen

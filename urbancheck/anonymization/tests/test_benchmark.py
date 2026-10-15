@@ -105,3 +105,17 @@ class TestModelIntegrity:
 
         with pytest.raises(ModelIntegrityError):
             verified_model_path(fake)
+
+
+class TestMeasureCommand:
+    def test_it_reports_time_cpu_and_memory(self, settings, tmp_path):
+        """CP-041-15: la medición del escenario 8 informa reloj, CPU y memoria."""
+        settings.ANONYMIZATION_REFERENCE_SET = str(tmp_path / "sin-set")
+        out = io.StringIO()
+
+        call_command("measure_anonymization", runs=1, stdout=out)
+
+        text = out.getvalue()
+        assert "Foto de 12 MP" in text
+        assert "p95" in text
+        assert "pico" in text
