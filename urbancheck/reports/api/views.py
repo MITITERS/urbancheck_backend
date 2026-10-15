@@ -21,6 +21,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.anonymization.pipeline import restart_anonymization
 from urbancheck.anonymization.pipeline import schedule_anonymization
+from urbancheck.common.throttling import ScopedThrottle
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
@@ -42,6 +43,7 @@ from urbancheck.reports.complaints import reason_catalog
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import on_privacy_hold
 from urbancheck.reports.models import photo_ready
@@ -137,6 +139,24 @@ class ReportViewSet(
         if self._is_citizen_participation():
             return [IsAuthenticated(), ExcludesOperator(), ParticipatesAsCitizen()]
         return [IsAuthenticated(), ExcludesOperator()]
+
+    def get_throttles(self):
+        """Límites de tasa por acción (ver ``urbancheck.common.throttling``)."""
+        return [ScopedThrottle(scope) for scope in self._throttle_scopes()]
+
+    def _throttle_scopes(self) -> list[str]:
+        if self.action == "create":
+            return ["reports"]
+        if self.action == "comments" and self.request.method == "POST":
+            return ["comments"]
+        if self.action == "privacy_request":
+            return ["complaints", "privacy_requests"]
+        if self.action == "complaints":
+            reason = self.request.data.get("reason")
+            if reason in ReportComplaint.PLATFORM_REASONS:
+                return ["complaints", "privacy_requests"]
+            return ["complaints"]
+        return []
 
     def _is_citizen_participation(self) -> bool:
         """Si la petición es un aporte de vecino: reportar, comentar o gustar.

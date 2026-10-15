@@ -21,13 +21,8 @@ ALLOWED_HOSTS = env.list(
 
 # CACHES
 # ------------------------------------------------------------------------------
-# https://docs.djangoproject.com/en/dev/ref/settings/#caches
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "",
-    },
-}
+# El de ``base.py``, sobre el Redis del compose: los límites de intentos tienen
+# que poder probarse en local igual que en producción.
 
 # EMAIL
 # ------------------------------------------------------------------------------

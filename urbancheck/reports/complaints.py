@@ -28,6 +28,7 @@ from __future__ import annotations
 from django.db import IntegrityError
 from django.db import transaction
 
+from urbancheck.common.security import log_event
 from urbancheck.notifications.services import notify_complaint_received
 from urbancheck.notifications.services import notify_report_reported
 
@@ -115,6 +116,13 @@ def _file_content_complaint(report, reporter, reason, comment) -> ReportComplain
     except IntegrityError as error:
         msg = "Ya denunciaste este reporte por ese motivo."
         raise DuplicateComplaintError(msg) from error
+    log_event(
+        "complaint_filed",
+        user_id=reporter.pk,
+        report=report.pk,
+        complaint=complaint.pk,
+        reason=reason,
+    )
     if not already_reported:
         notify_report_reported(report)
     return complaint
