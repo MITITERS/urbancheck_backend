@@ -116,7 +116,10 @@ def _reject_if_unpublished(report: Report, transition: Transition) -> None:
     )
 
 
-def apply_transition(  # noqa: PLR0913 (cada parámetro es un requisito distinto)
+# C901: cada rama es una de las validaciones que el punto único de transición
+# tiene que hacer en orden (estado, rol, jurisdicción, área, guarda, foto);
+# partirla repartiría esa secuencia entre funciones y es lo que la tabla evita.
+def apply_transition(  # noqa: PLR0913, C901 (cada parámetro es un requisito distinto)
     report: Report,
     operation: str,
     *,

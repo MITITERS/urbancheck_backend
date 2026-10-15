@@ -4,6 +4,8 @@ Es la única lectura de reportes que cruza jurisdicciones, y está acotada al
 administrador: el agente municipal sigue viendo solo lo suyo (US-034).
 """
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -51,7 +53,7 @@ class TestReportsOfOneMunicipality:
 
         response = admin_client.get(reports_url(first.pk))
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert {row["id"] for row in response.data["results"]} == {r.id for r in mine}
 
     def test_the_listing_accepts_the_same_filters_as_the_panel(
@@ -126,8 +128,8 @@ class TestPermissions:
         client = APIClient()
         client.force_authenticate(factory.create())
 
-        assert client.get(reports_url(first.pk)).status_code == 403
-        assert client.get(map_url(first.pk)).status_code == 403
+        assert client.get(reports_url(first.pk)).status_code == HTTPStatus.FORBIDDEN
+        assert client.get(map_url(first.pk)).status_code == HTTPStatus.FORBIDDEN
 
     def test_an_agent_cannot_use_it_to_reach_another_municipality(self, two_cities):
         """La vía del administrador no es un atajo para saltear la jurisdicción."""
@@ -136,4 +138,4 @@ class TestPermissions:
         client = APIClient()
         client.force_authenticate(MunicipalAgentFactory.create(municipality=first))
 
-        assert client.get(reports_url(second.pk)).status_code == 403
+        assert client.get(reports_url(second.pk)).status_code == HTTPStatus.FORBIDDEN

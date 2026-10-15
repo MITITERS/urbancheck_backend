@@ -11,9 +11,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image
 from rest_framework.test import APIClient
 
+from urbancheck.anonymization.storage import pending_photo_storage
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import square_boundary
-from urbancheck.anonymization.storage import pending_photo_storage
 from urbancheck.reports.api import views
 from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import LikeFactory

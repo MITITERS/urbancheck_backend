@@ -11,6 +11,8 @@ módulo: cada uno cierra una decisión defensiva del Sprint 3.
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 import requests
 from django.contrib.auth.models import AnonymousUser
@@ -345,7 +347,7 @@ class TestScopingWithoutCoordinates:
 
         response = client.get("/api/reports/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert report.pk in {item["id"] for item in response.data["results"]}
 
     def test_my_own_reports_are_never_scoped_by_where_i_am(self):
@@ -359,7 +361,7 @@ class TestScopingWithoutCoordinates:
             "/api/reports/?mine=true&latitude=-34.6&longitude=-58.4",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert report.pk in {item["id"] for item in response.data["results"]}
 
 
@@ -386,6 +388,6 @@ class TestValidationWithoutReportCoordinates:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.status == Report.Status.REPORTADO

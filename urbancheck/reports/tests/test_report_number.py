@@ -8,6 +8,7 @@ Es como lo nombran el vecino y el municipio: «el reporte 12 de Villa María». 
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -51,7 +52,7 @@ class TestNumberingIsPerMunicipality:
         ReportFactory.create(municipality=other)
         second_of_one = ReportFactory.create(municipality=one)
 
-        assert second_of_one.number == 2
+        assert second_of_one.number == 2  # noqa: PLR2004
 
     def test_the_number_is_not_the_id(self):
         one, other = MunicipalityFactory.create(), MunicipalityFactory.create()
@@ -85,8 +86,8 @@ class TestTheNumberIsStable:
 
         third.refresh_from_db()
         assert first.number == 1
-        assert third.number == 3
-        assert fourth.number == 4
+        assert third.number == 3  # noqa: PLR2004
+        assert fourth.number == 4  # noqa: PLR2004
 
     def test_the_last_number_is_reissued_if_that_report_is_deleted(self):
         """Consecuencia asumida de derivar la secuencia del máximo.
@@ -98,11 +99,11 @@ class TestTheNumberIsStable:
         municipality = MunicipalityFactory.create()
         ReportFactory.create(municipality=municipality)
         last = ReportFactory.create(municipality=municipality)
-        assert last.number == 2
+        assert last.number == 2  # noqa: PLR2004
 
         last.delete()
 
-        assert ReportFactory.create(municipality=municipality).number == 2
+        assert ReportFactory.create(municipality=municipality).number == 2  # noqa: PLR2004
 
     def test_two_reports_cannot_share_a_number_in_the_same_municipality(self):
         municipality = MunicipalityFactory.create()
@@ -167,7 +168,7 @@ class TestTheNumberTravelsToTheClients:
             format="multipart",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         assert response.data["number"] is not None
         assert response.data["number"] == Report.objects.get(
             pk=response.data["id"],
@@ -184,5 +185,5 @@ class TestTheNumberTravelsToTheClients:
         )
 
         report.refresh_from_db()
-        assert report.number != 999
+        assert report.number != 999  # noqa: PLR2004
         assert response.status_code in {200, 403}

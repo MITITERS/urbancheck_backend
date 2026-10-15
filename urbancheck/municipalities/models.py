@@ -117,7 +117,9 @@ PHONE_INVALID_MESSAGE = (
     "un prefijo «+» inicial."
 )
 
-AREA_NAME_TAKEN_MESSAGE = "Ya existe un área operativa con ese nombre en tu municipalidad."
+AREA_NAME_TAKEN_MESSAGE = (
+    "Ya existe un área operativa con ese nombre en tu municipalidad."
+)
 
 
 class OperationalAreaQuerySet(models.QuerySet):

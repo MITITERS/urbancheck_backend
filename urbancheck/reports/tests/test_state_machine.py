@@ -92,14 +92,24 @@ class TestApplyTransition:
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
         with pytest.raises(TransitionError):
-            apply_transition(report, "validar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+            apply_transition(
+                report,
+                "validar",
+                actor=Actor.MUNICIPAL_AGENT,
+                changed_by=agent,
+            )
 
     def test_an_unknown_operation_is_rejected(self):
         report = ReportFactory.create(status=Report.Status.REPORTADO)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
         with pytest.raises(TransitionError):
-            apply_transition(report, "teletransportar", actor=Actor.MUNICIPAL_AGENT, changed_by=agent)
+            apply_transition(
+                report,
+                "teletransportar",
+                actor=Actor.MUNICIPAL_AGENT,
+                changed_by=agent,
+            )
 
 
 class TestReasonIsEnforced:
@@ -111,7 +121,9 @@ class TestReasonIsEnforced:
     def test_reason_is_mandatory_where_declared(self, transition):
         report = ReportFactory.create(status=transition.source)
         user = (
-            ValidatorFactory if transition.actor == Actor.VALIDATOR else MunicipalAgentFactory
+            ValidatorFactory
+            if transition.actor == Actor.VALIDATOR
+            else MunicipalAgentFactory
         ).create(municipality=report.municipality)
 
         with pytest.raises(ReasonRequiredError):
@@ -129,7 +141,9 @@ class TestReasonIsEnforced:
 
 class TestHistory:
     def test_every_change_writes_the_history_entry(self):
-        report = ReportFactory.create(status=Report.Status.REPORTADO, with_history=False)
+        report = ReportFactory.create(
+            status=Report.Status.REPORTADO, with_history=False,
+        )
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
         apply_transition(
@@ -146,7 +160,9 @@ class TestHistory:
         assert entry.changed_by == agent
 
     def test_the_reason_is_stored(self):
-        report = ReportFactory.create(status=Report.Status.EN_PROCESO, with_history=False)
+        report = ReportFactory.create(
+            status=Report.Status.EN_PROCESO, with_history=False,
+        )
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
         apply_transition(
@@ -187,12 +203,12 @@ class TestConcurrency:
                 operational_area=area,
             )
 
-        assert ReportStatusHistory.objects.filter(report=report).count() == 2
+        assert ReportStatusHistory.objects.filter(report=report).count() == 2  # noqa: PLR2004
 
 
 class TestEvent:
     def test_the_single_status_change_event_is_emitted(self):
-        from urbancheck.reports.signals import report_status_changed
+        from urbancheck.reports.signals import report_status_changed  # noqa: PLC0415
 
         received = []
 

@@ -4,6 +4,7 @@ import factory
 from factory.django import DjangoModelFactory
 from factory.django import ImageField
 
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports.models import Comment
@@ -15,7 +16,6 @@ from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionComparison
 from urbancheck.reports.models import ResolutionEvidence
-from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.users.tests.factories import OperatorFactory
 from urbancheck.users.tests.factories import UserFactory
 

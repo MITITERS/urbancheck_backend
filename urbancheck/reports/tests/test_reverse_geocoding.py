@@ -7,6 +7,7 @@ encuentra los reportes que llegaron solo con coordenadas.
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.cache import cache
@@ -82,10 +83,11 @@ class TestReverseGeocode:
         assert nominatim_reverse == []
 
     def test_network_error_returns_empty(self, monkeypatch):
-        import requests
+        import requests  # noqa: PLC0415
 
         def boom(*args, **kwargs):
-            raise requests.RequestException("sin red")
+            msg = "sin red"
+            raise requests.RequestException(msg)
 
         monkeypatch.setattr("urbancheck.reports.geocoding.requests.get", boom)
         cache.clear()
@@ -106,7 +108,7 @@ class TestCreateResolvesAddress:
     def test_gps_report_gets_address(self, auth_client, nominatim_reverse):
         client, _ = auth_client
         res = self._create(client, latitude="-32.415620", longitude="-63.240000")
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         assert Report.objects.get(id=res.data["id"]).address == ADDRESS
 
     def test_report_becomes_searchable_by_zone(
@@ -152,16 +154,17 @@ class TestCreateResolvesAddress:
 
     def test_failure_does_not_block_creation(self, auth_client, monkeypatch):
         """La geocodificación es best-effort: nunca debe romper el alta."""
-        import requests
+        import requests  # noqa: PLC0415
 
         def boom(*args, **kwargs):
-            raise requests.RequestException("sin red")
+            msg = "sin red"
+            raise requests.RequestException(msg)
 
         monkeypatch.setattr("urbancheck.reports.geocoding.requests.get", boom)
         cache.clear()
         client, _ = auth_client
         res = self._create(client, latitude="-32.415620", longitude="-63.240000")
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         assert Report.objects.get(id=res.data["id"]).address == ""
 
 
@@ -170,7 +173,7 @@ class TestKeywordSearch:
     """US-020: la búsqueda libre debe encontrar por palabra de la descripción."""
 
     def test_finds_by_keyword_in_description(self, auth_client):
-        from urbancheck.reports.tests.factories import ReportFactory
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
 
         client, _ = auth_client
         robo = ReportFactory.create(description="Hubo un robo en la esquina")
@@ -180,7 +183,7 @@ class TestKeywordSearch:
         assert {r["id"] for r in res.data["results"]} == {robo.id}
 
     def test_keyword_search_works_on_map(self, auth_client):
-        from urbancheck.reports.tests.factories import ReportFactory
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
 
         client, _ = auth_client
         robo = ReportFactory.create(description="Denuncia por robo reiterado")
