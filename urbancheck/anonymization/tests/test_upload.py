@@ -223,7 +223,7 @@ class TestOnlyTheAnonymizedVersionIsStored:
         expected_bytes,
         process_pending_photos,
     ):
-        """CP-041-15 (US-041 E6) · CP-046-01 (US-046 E7)."""
+        """CP-041-15 (US-041 E6) · CP-046-07 (US-046 E7)."""
         before = media_files()
 
         response = operator_client.post(
