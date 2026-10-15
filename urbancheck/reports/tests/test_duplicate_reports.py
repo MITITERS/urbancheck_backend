@@ -104,6 +104,7 @@ class TestBlocked:
     """Escenarios 1 y 8: el reporte no se crea y la respuesta es identificable."""
 
     def test_it_answers_409_with_its_own_code(self, existing, neighbour_client):
+        """CP-032-17 (US-032 E8)."""
         response = create_report(neighbour_client)
 
         assert response.status_code == HTTP_CONFLICT
@@ -111,6 +112,7 @@ class TestBlocked:
         assert "duplicado" not in response.data["detail"].lower()
 
     def test_it_carries_the_existing_report(self, existing, neighbour_client):
+        """CP-032-01 (US-032 E1)."""
         response = create_report(neighbour_client)
 
         report = response.data["existing_report"]
@@ -131,6 +133,7 @@ class TestBlocked:
         active_municipality,
         neighbour_client,
     ):
+        """CP-032-02 (US-032 E1)."""
         closer = ReportFactory.create(
             municipality=active_municipality,
             category=Report.Category.BACHE,
@@ -149,6 +152,7 @@ class TestBlocked:
         neighbour_client,
         monkeypatch,
     ):
+        """CP-032-03 (US-032 E1)."""
         monkeypatch.setattr(
             views,
             "geocode_one",
@@ -178,6 +182,7 @@ class TestBlocked:
         ],
     )
     def test_every_open_status_blocks(self, existing, neighbour_client, status):
+        """CP-032-04 (US-032 E1)."""
         existing.status = status
         existing.save(update_fields=["status"])
 
@@ -189,6 +194,7 @@ class TestBlocked:
         neighbour_client,
         settings,
     ):
+        """CP-032-05 (US-032 E1)."""
         settings.DUPLICATE_REPORT_RADIUS_METERS = 200
 
         assert create_report(neighbour_client, point=FAR).status_code == HTTP_CONFLICT
@@ -198,6 +204,7 @@ class TestNothingIsStored:
     """Escenario 7: ni reporte, ni imagen, ni paso por la anonimización."""
 
     def test_no_report_and_no_file(self, existing, neighbour_client):
+        """CP-026-11 (US-026 E8) · CP-032-15 (US-032 E7)."""
         before = media_files()
         count = Report.objects.count()
 
@@ -212,7 +219,9 @@ class TestNothingIsStored:
         existing,
         neighbour_client,
     ):
-        """La foto de un reporte bloqueado no llega ni a guardarse.
+        """CP-026-12 (US-026 E8) · CP-032-16 (US-032 E7).
+
+        La foto de un reporte bloqueado no llega ni a guardarse.
 
         La verificación de duplicado corre antes de validar la foto, así que
         un reporte que no se va a crear no deja nada en el storage privado ni
@@ -231,6 +240,7 @@ class TestJoining:
         neighbour_client,
         settings,
     ):
+        """CP-032-06 (US-032 E2)."""
         settings.COLLECTIVE_VALIDATION_THRESHOLD = 1
         blocked = create_report(neighbour_client)
         report_id = blocked.data["existing_report"]["id"]
@@ -251,7 +261,10 @@ class TestWhoIsAsking:
         neighbour,
         neighbour_client,
     ):
-        """Escenario 4: la respuesta dice que ya lo apoya."""
+        """CP-032-07 (US-032 E4).
+
+        Escenario 4: la respuesta dice que ya lo apoya.
+        """
         LikeFactory.create(report=existing, user=neighbour)
 
         report = create_report(neighbour_client).data["existing_report"]
@@ -260,7 +273,10 @@ class TestWhoIsAsking:
         assert report["like_count"] == 1
 
     def test_the_author(self, existing, author):
-        """Escenario 5: su propio reclamo, marcado como tal."""
+        """CP-032-08 (US-032 E5).
+
+        Escenario 5: su propio reclamo, marcado como tal.
+        """
         response = create_report(client_for(author))
 
         assert response.status_code == HTTP_CONFLICT
@@ -271,9 +287,11 @@ class TestNotADuplicate:
     """Escenario 6: sin coincidencia, el reporte se crea como siempre."""
 
     def test_outside_the_radius(self, existing, neighbour_client):
+        """CP-032-09 (US-032 E6)."""
         assert create_report(neighbour_client, point=FAR).status_code == HTTP_CREATED
 
     def test_another_category(self, existing, neighbour_client):
+        """CP-032-10 (US-032 E6)."""
         response = create_report(neighbour_client, category="alumbrado")
 
         assert response.status_code == HTTP_CREATED
@@ -287,12 +305,14 @@ class TestNotADuplicate:
         ],
     )
     def test_a_closed_report(self, existing, neighbour_client, status):
+        """CP-032-11 (US-032 E6)."""
         existing.status = status
         existing.save(update_fields=["status"])
 
         assert create_report(neighbour_client).status_code == HTTP_CREATED
 
     def test_another_municipality(self, existing, neighbour_client):
+        """CP-032-12 (US-032 E6)."""
         existing.municipality = MunicipalityFactory.create(
             boundary=square_boundary(10, 10, 1),
         )
@@ -304,7 +324,10 @@ class TestNotADuplicate:
         self,
         neighbour_client,
     ):
-        """Un reporte que sí se crea entra al circuito de difuminado (US-042)."""
+        """CP-032-13 (US-032 E6).
+
+        Un reporte que sí se crea entra al circuito de difuminado (US-042).
+        """
         assert create_report(neighbour_client).status_code == HTTP_CREATED
 
         report = Report.objects.latest("created_at")
@@ -313,6 +336,7 @@ class TestNotADuplicate:
         assert len(pending_files()) == 1
 
     def test_invalid_data_still_gets_every_error(self, neighbour_client):
+        """CP-032-14 (US-032 E6)."""
         response = neighbour_client.post(
             "/api/reports/",
             {"description": "Sin foto ni categoría.", "address": "Bv. España 100"},
@@ -327,6 +351,7 @@ class TestForcedClient:
     """Escenario 9: nada que mande el cliente saltea la verificación."""
 
     def test_a_forcing_flag_is_ignored(self, existing, neighbour_client):
+        """CP-032-18 (US-032 E9)."""
         response = create_report(neighbour_client, force="true", ignore_duplicates="1")
 
         assert response.status_code == HTTP_CONFLICT

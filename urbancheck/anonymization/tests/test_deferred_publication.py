@@ -115,6 +115,7 @@ class TestSuccess:
     """Escenario 1: el reporte se publica cuando el difuminado termina."""
 
     def test_the_endpoint_answers_before_processing(self, queued):
+        """CP-042-01 (US-042 E1)."""
         assert queued.photo_is_processing
         assert queued.photo_pending
         assert not queued.photo
@@ -124,6 +125,7 @@ class TestSuccess:
         queued,
         django_capture_on_commit_callbacks,
     ):
+        """CP-041-19 (US-041 E6) · CP-042-02 (US-042 E1)."""
         with django_capture_on_commit_callbacks(execute=True):
             run_task(queued)
 
@@ -140,7 +142,9 @@ class TestSuccess:
         queued,
         django_capture_on_commit_callbacks,
     ):
-        """Un broker puede entregar el mismo mensaje dos veces.
+        """CP-042-38 (US-042 Robustez).
+
+        Un broker puede entregar el mismo mensaje dos veces.
 
         La segunda vez la original ya no está, así que sin la guarda de
         idempotencia el reporte publicado terminaría marcado como fallido.
@@ -168,6 +172,7 @@ class TestRetries:
         monkeypatch,
         settings,
     ):
+        """CP-042-12 (US-042 E4)."""
         settings.ANONYMIZATION_MAX_RETRIES = 3
         settings.ANONYMIZATION_RETRY_BASE_SECONDS = 30
         monkeypatch.setattr(service, "_face_detector", BrokenDetector)
@@ -197,7 +202,10 @@ class TestRetries:
         settings,
         django_capture_on_commit_callbacks,
     ):
-        """Nada de números mágicos: bajar el tope cambia el comportamiento."""
+        """CP-042-13 (US-042 E4).
+
+        Nada de números mágicos: bajar el tope cambia el comportamiento.
+        """
         settings.ANONYMIZATION_MAX_RETRIES = 0
         monkeypatch.setattr(service, "_face_detector", BrokenDetector)
 
@@ -214,7 +222,9 @@ class TestRetries:
         settings,
         django_capture_on_commit_callbacks,
     ):
-        """Reintentar algo que no se puede abrir da siempre lo mismo.
+        """CP-042-14 (US-042 E4).
+
+        Reintentar algo que no se puede abrir da siempre lo mismo.
 
         Se falla de una y el ciudadano se entera ahora, en lugar de esperar los
         reintentos completos para recibir la misma respuesta.
@@ -251,15 +261,18 @@ class TestDefinitiveFailure:
         return queued
 
     def test_it_is_marked_and_dated(self, failed):
+        """CP-042-15 (US-042 E5)."""
         assert failed.photo_has_failed
         assert failed.photo_failed_at is not None
 
     def test_nothing_is_published_and_the_original_is_gone(self, failed):
+        """CP-042-16 (US-042 E5)."""
         assert not failed.photo
         assert not failed.photo_pending
         assert pending_files() == set()
 
     def test_the_author_is_told_they_can_upload_it_again(self, failed, author):
+        """CP-042-17 (US-042 E5)."""
         notification = Notification.objects.get(
             recipient=author,
             kind=Notification.Kind.IMAGEN_NO_PROCESADA,
@@ -276,6 +289,7 @@ class TestDefinitiveFailure:
         caplog,
         django_capture_on_commit_callbacks,
     ):
+        """CP-042-18 (US-042 E5)."""
         settings.ANONYMIZATION_MAX_RETRIES = 0
         monkeypatch.setattr(service, "_face_detector", BrokenDetector)
         original_name = queued.photo_pending.name
@@ -294,6 +308,7 @@ class TestDefinitiveFailure:
         failed,
         author_client,
     ):
+        """CP-042-19 (US-042 E5)."""
         response = author_client.patch(
             f"/api/reports/{failed.pk}/",
             {"photo": upload()},
@@ -342,6 +357,7 @@ class TestTheOperatorClosing:
         operator,
         in_progress,
     ):
+        """CP-042-29 (US-042 E8)."""
         assert self.close(operator, in_progress).status_code == HTTP_OK
 
         evidence = ResolutionEvidence.objects.get(report=in_progress)
@@ -358,6 +374,7 @@ class TestTheOperatorClosing:
         in_progress,
         author_client,
     ):
+        """CP-042-30 (US-042 E8)."""
         self.close(operator, in_progress)
 
         evidence = author_client.get(f"/api/reports/{in_progress.pk}/").data[
@@ -375,7 +392,9 @@ class TestTheOperatorClosing:
         settings,
         django_capture_on_commit_callbacks,
     ):
-        """El cierre ya ocurrió y el ciudadano ya fue avisado.
+        """CP-042-31 (US-042 E8).
+
+        El cierre ya ocurrió y el ciudadano ya fue avisado.
 
         Revertirlo ahora abriría un caso que la historia no plantea. Queda un
         parte de trabajo con descripción y sin imagen, y el operario se entera.
@@ -405,6 +424,7 @@ class TestNothingStaysQueuedForever:
     """El seguro contra el mensaje que el broker nunca entregó."""
 
     def test_a_stale_photo_is_requeued(self, queued, settings, monkeypatch):
+        """CP-042-39 (US-042 Robustez)."""
         settings.ANONYMIZATION_STALE_MINUTES = 30
         # Se mide desde que entró a la cola, no desde que se creó el reporte:
         # una foto reemplazada hoy sobre un reporte viejo no está vencida.
@@ -424,6 +444,7 @@ class TestNothingStaysQueuedForever:
         assert sent == [(REPORT_LABEL, queued.pk)]
 
     def test_a_recent_one_is_left_alone(self, queued, settings, monkeypatch):
+        """CP-042-40 (US-042 Robustez)."""
         settings.ANONYMIZATION_STALE_MINUTES = 30
         sent = []
         monkeypatch.setattr(
@@ -438,6 +459,7 @@ class TestNothingStaysQueuedForever:
 
 class TestADeletedReportIsNotAnError:
     def test_the_task_tolerates_a_report_that_no_longer_exists(self, queued):
+        """CP-042-41 (US-042 Robustez)."""
         pk = queued.pk
         Report.objects.filter(pk=pk).delete()
 
@@ -449,7 +471,10 @@ class TestADeletedReportIsNotAnError:
 
 class TestTheOriginalIsNotReachable:
     def test_the_pending_photo_has_no_url(self, queued):
-        """Exponer el campo por descuido falla en vez de filtrar la original."""
+        """CP-041-24 (US-041 E7).
+
+        Exponer el campo por descuido falla en vez de filtrar la original.
+        """
         with pytest.raises(ValueError, match="not accessible via a URL"):
             _ = queued.photo_pending.url
 
@@ -458,6 +483,7 @@ class TestTheOriginalIsNotReachable:
         queued,
         settings,
     ):
+        """CP-041-25 (US-041 E7)."""
         pending = Path(pending_photo_storage().path(queued.photo_pending.name))
 
         assert pending.is_file()
@@ -469,7 +495,10 @@ def test_the_pipeline_never_leaves_a_photo_pending_forever(
     monkeypatch,
     settings,
 ):
-    """Toda rama termina en `procesada` o en `fallida`, nunca en el medio."""
+    """CP-042-42 (US-042 Robustez).
+
+    Toda rama termina en `procesada` o en `fallida`, nunca en el medio.
+    """
     settings.ANONYMIZATION_MAX_RETRIES = 0
 
     def explode(*args, **kwargs):

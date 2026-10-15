@@ -8,6 +8,11 @@ adaptador ``openai_compatible`` con su clave en una variable de entorno.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
@@ -34,13 +39,32 @@ def no_network(monkeypatch):
 
 class TestTheNullProvider:
     def test_it_is_the_default(self):
-        """CP-015-11: sin configurar nada, el proveedor es el nulo."""
-        from config.settings import base  # noqa: PLC0415
+        """CP-015-24 (US-015 Proveedor).
 
-        assert base.VISION_PROVIDER == ""
+        Sin configurar nada, el proveedor es el nulo. Se lee en un proceso
+        aparte y sin la variable: el entorno local la define para usar Gemini.
+        """
+        env = {k: v for k, v in os.environ.items() if k != "DJANGO_VISION_PROVIDER"}
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from config.settings import base; print(repr(base.VISION_PROVIDER))",
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        assert result.stdout.strip().splitlines()[-1] == "''"
 
     def test_it_never_compares(self, settings):
-        """CP-015-12: el nulo no está configurado y no compara."""
+        """CP-015-25 (US-015 Proveedor).
+
+        el nulo no está configurado y no compara.
+        """
         settings.VISION_PROVIDER = ""
 
         provider = vision.get_provider()
@@ -56,7 +80,10 @@ class TestTheNullProvider:
         settings,
         no_network,
     ):
-        """CP-015-13: con el nulo, el cierre queda "no disponible" y nada sale."""
+        """CP-015-26 (US-015 Proveedor).
+
+        con el nulo, el cierre queda "no disponible" y nada sale.
+        """
         settings.VISION_PROVIDER = ""
         evidence = ResolutionEvidenceFactory.create()
 
@@ -69,7 +96,10 @@ class TestTheNullProvider:
 
 class TestTheChosenProvider:
     def test_the_openai_compatible_adapter_needs_its_key(self, settings):
-        """CP-015-14: el adaptador elegido sin clave queda apagado."""
+        """CP-015-27 (US-015 Proveedor).
+
+        el adaptador elegido sin clave queda apagado.
+        """
         settings.VISION_PROVIDER = "openai_compatible"
         settings.RESOLUTION_COMPARISON_API_KEY = ""
 
@@ -80,7 +110,10 @@ class TestTheChosenProvider:
         assert vision.is_configured()
 
     def test_an_unknown_provider_fails_loudly(self, settings):
-        """CP-015-15: un nombre mal escrito no se toma por el nulo en silencio."""
+        """CP-015-28 (US-015 Proveedor).
+
+        un nombre mal escrito no se toma por el nulo en silencio.
+        """
         settings.VISION_PROVIDER = "gemini"
 
         with pytest.raises(ImproperlyConfigured, match="openai_compatible"):

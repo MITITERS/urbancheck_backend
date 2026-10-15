@@ -155,7 +155,10 @@ def legacy_report():
 
 class TestAnonymizeExistingPhotos:
     def test_without_apply_it_only_counts(self, legacy_report):
-        """CP-042-09: el simulacro cuenta y no toca nada."""
+        """CP-042-32 (US-042 E9).
+
+        el simulacro cuenta y no toca nada.
+        """
         original = Path(legacy_report.photo.path).read_bytes()
 
         output = run("anonymize_existing_photos")
@@ -170,7 +173,10 @@ class TestAnonymizeExistingPhotos:
         legacy_report,
         django_capture_on_commit_callbacks,
     ):
-        """CP-042-10: queda solo la versión procesada; la vieja se borra."""
+        """CP-042-33 (US-042 E9).
+
+        queda solo la versión procesada; la vieja se borra.
+        """
         old = Path(legacy_report.photo.path)
 
         with django_capture_on_commit_callbacks(execute=True):
@@ -188,7 +194,10 @@ class TestAnonymizeExistingPhotos:
         legacy_report,
         django_capture_on_commit_callbacks,
     ):
-        """CP-042-11: idempotente."""
+        """CP-042-34 (US-042 E9).
+
+        idempotente.
+        """
         with django_capture_on_commit_callbacks(execute=True):
             run("anonymize_existing_photos", "--apply")
         legacy_report.refresh_from_db()
@@ -202,7 +211,10 @@ class TestAnonymizeExistingPhotos:
         assert "0 difuminadas" in output
 
     def test_photos_that_already_went_through_the_service_are_left_alone(self):
-        """CP-042-12: lo que procesó el circuito de US-042 no se reprocesa."""
+        """CP-042-35 (US-042 E9).
+
+        lo que procesó el circuito de US-042 no se reprocesa.
+        """
         report = ReportFactory.create(photo_attempts=1)
         name = report.photo.name
 
@@ -215,7 +227,10 @@ class TestAnonymizeExistingPhotos:
         self,
         django_capture_on_commit_callbacks,
     ):
-        """CP-042-13: no queda publicada sin difuminar; el autor se entera."""
+        """CP-042-36 (US-042 E9).
+
+        no queda publicada sin difuminar; el autor se entera.
+        """
         report = ReportFactory.create(photo_attempts=0)
         path = Path(report.photo.path)
         path.write_bytes(b"no es una imagen")

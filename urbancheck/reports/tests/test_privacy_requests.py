@@ -104,6 +104,7 @@ class TestRequestingReview:
         report,
         neighbour,
     ):
+        """CP-043-01 (US-043 E1)."""
         before = timezone.now()
 
         response = request_review(client_for(neighbour), report)
@@ -119,6 +120,7 @@ class TestRequestingReview:
         assert complaint.is_pending
 
     def test_the_confirmation_promises_the_24_hour_review(self, report, neighbour):
+        """CP-043-02 (US-043 E1)."""
         response = request_review(client_for(neighbour), report)
 
         assert "24 horas" in response.data["detail"]
@@ -129,7 +131,10 @@ class TestRequestingReview:
         assert deadline == complaint.created_at + timedelta(hours=24)
 
     def test_any_citizen_can_file_it_not_only_the_author(self, report, neighbour):
-        """Escenario 3: ni autor ni persona fotografiada, y se acepta igual."""
+        """CP-043-23 (US-043 E3).
+
+        Escenario 3: ni autor ni persona fotografiada, y se acepta igual.
+        """
         assert neighbour != report.author
 
         response = request_review(client_for(neighbour), report)
@@ -137,6 +142,7 @@ class TestRequestingReview:
         assert response.status_code == HTTP_CREATED
 
     def test_the_author_can_file_it_too(self, report, author):
+        """CP-043-24 (US-043 E3)."""
         response = request_review(client_for(author), report)
 
         assert response.status_code == HTTP_CREATED
@@ -146,7 +152,10 @@ class TestRequestingReview:
         report,
         neighbour,
     ):
-        """Escenario 9: el reporte ya está oculto, y aun así se le dice por qué."""
+        """CP-043-56 (US-043 E9).
+
+        Escenario 9: el reporte ya está oculto, y aun así se le dice por qué.
+        """
         client = client_for(neighbour)
         request_review(client, report)
 
@@ -157,6 +166,7 @@ class TestRequestingReview:
         assert ReportComplaint.objects.count() == 1
 
     def test_another_user_can_add_theirs_on_the_same_image(self, report, neighbour):
+        """CP-043-57 (US-043 E9)."""
         request_review(client_for(neighbour), report)
 
         response = request_review(client_for(UserFactory.create()), report)
@@ -170,6 +180,7 @@ class TestRequestingReview:
         neighbour,
         admin,
     ):
+        """CP-043-58 (US-043 E9)."""
         complaint = ReportComplaintFactory.create(report=report, reporter=neighbour)
         privacy.dismiss(complaint, admin=admin)
 
@@ -182,6 +193,7 @@ class TestRequestingReview:
         report,
         neighbour,
     ):
+        """CP-043-03 (US-043 E1)."""
         evidence = ResolutionEvidenceFactory.create(report=report)
 
         response = request_review(client_for(neighbour), report, evidence=evidence.pk)
@@ -196,6 +208,7 @@ class TestRequestingReview:
         report,
         neighbour,
     ):
+        """CP-043-04 (US-043 E1)."""
         evidence = ResolutionEvidenceFactory.create(report=report)
         client = client_for(neighbour)
         request_review(client, report)
@@ -205,6 +218,7 @@ class TestRequestingReview:
         assert response.status_code == HTTP_CREATED
 
     def test_an_evidence_of_another_report_is_rejected(self, report, neighbour):
+        """CP-043-05 (US-043 E1)."""
         foreign = ResolutionEvidenceFactory.create()
 
         response = request_review(client_for(neighbour), report, evidence=foreign.pk)
@@ -213,6 +227,7 @@ class TestRequestingReview:
         assert not ReportComplaint.objects.exists()
 
     def test_an_image_already_removed_cannot_be_reported(self, report, neighbour):
+        """CP-043-06 (US-043 E1)."""
         Report.objects.filter(pk=report.pk).update(
             photo="",
             photo_removed_at=timezone.now(),
@@ -225,6 +240,7 @@ class TestRequestingReview:
 
     @pytest.mark.parametrize("factory", [ValidatorFactory, MunicipalAgentFactory])
     def test_work_accounts_use_their_personal_account(self, report, factory):
+        """CP-043-07 (US-043 E1)."""
         worker = factory.create(municipality=report.municipality)
 
         response = request_review(client_for(worker), report)
@@ -232,11 +248,13 @@ class TestRequestingReview:
         assert response.status_code == HTTP_FORBIDDEN
 
     def test_the_operator_is_rejected(self, report):
+        """CP-043-08 (US-043 E1)."""
         response = request_review(client_for(OperatorFactory.create()), report)
 
         assert response.status_code == HTTP_FORBIDDEN
 
     def test_it_requires_a_session(self, report):
+        """CP-043-09 (US-043 E1)."""
         response = request_review(APIClient(), report)
 
         assert response.status_code in {401, 403}
@@ -246,6 +264,7 @@ class TestImmediateHiding:
     """Escenario 2: una solicitud, sin umbral, y el reporte deja de verse."""
 
     def test_one_request_hides_it_from_the_feed(self, report, neighbour):
+        """CP-043-13 (US-043 E2)."""
         viewer = client_for(UserFactory.create())
         assert report.pk in listed_ids(viewer.get("/api/reports/"))
 
@@ -254,6 +273,7 @@ class TestImmediateHiding:
         assert report.pk not in listed_ids(viewer.get("/api/reports/"))
 
     def test_it_is_hidden_from_the_map(self, report, neighbour):
+        """CP-043-14 (US-043 E2)."""
         request_review(client_for(neighbour), report)
 
         response = client_for(UserFactory.create()).get("/api/reports/map/")
@@ -261,6 +281,7 @@ class TestImmediateHiding:
         assert report.pk not in listed_ids(response)
 
     def test_it_is_hidden_from_the_authors_public_profile(self, report, neighbour):
+        """CP-043-15 (US-043 E2)."""
         report.author.is_public = True
         report.author.save()
         request_review(client_for(neighbour), report)
@@ -287,6 +308,7 @@ class TestImmediateHiding:
         method,
         suffix,
     ):
+        """CP-043-16 (US-043 E2)."""
         request_review(client_for(neighbour), report)
         client = client_for(UserFactory.create())
 
@@ -299,6 +321,7 @@ class TestImmediateHiding:
         assert response.status_code == HTTP_NOT_FOUND
 
     def test_the_author_still_sees_it_marked_as_under_review(self, report, neighbour):
+        """CP-043-17 (US-043 E2)."""
         request_review(client_for(neighbour), report)
         client = client_for(report.author)
 
@@ -315,6 +338,7 @@ class TestImmediateHiding:
         report,
         neighbour,
     ):
+        """CP-043-18 (US-043 E2)."""
         evidence = ResolutionEvidenceFactory.create(report=report)
 
         request_review(client_for(neighbour), report, evidence=evidence.pk)
@@ -323,12 +347,16 @@ class TestImmediateHiding:
         assert report.pk not in listed_ids(response)
 
     def test_a_report_without_requests_is_not_under_review(self, report):
+        """CP-043-19 (US-043 E2)."""
         response = client_for(report.author).get(f"/api/reports/{report.pk}/")
 
         assert response.data["under_privacy_review"] is False
 
     def test_the_panel_still_shows_it_flagged(self, report, neighbour):
-        """No es una vista pública: el agente tiene que saber por qué no se ve."""
+        """CP-043-63 (US-043 E10).
+
+        No es una vista pública: el agente tiene que saber por qué no se ve.
+        """
         request_review(client_for(neighbour), report)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
@@ -342,6 +370,7 @@ class TestVisibilityFunction:
     """La condición vive en una sola función del queryset."""
 
     def test_only_a_pending_request_hides(self, report, admin):
+        """CP-043-20 (US-043 E2)."""
         complaint = ReportComplaintFactory.create(report=report)
         assert not Report.objects.publicly_visible().filter(pk=report.pk).exists()
 
@@ -350,6 +379,7 @@ class TestVisibilityFunction:
         assert Report.objects.publicly_visible().filter(pk=report.pk).exists()
 
     def test_it_keeps_excluding_inactive_reports(self, active_municipality):
+        """CP-043-21 (US-043 E2)."""
         cancelled = ReportFactory.create(
             municipality=active_municipality,
             status=Report.Status.CANCELADO,
@@ -358,6 +388,7 @@ class TestVisibilityFunction:
         assert not Report.objects.publicly_visible().filter(pk=cancelled.pk).exists()
 
     def test_the_author_is_the_only_one_who_sees_a_held_report(self, report):
+        """CP-043-22 (US-043 E2)."""
         ReportComplaintFactory.create(report=report)
         stranger = UserFactory.create()
 
@@ -369,6 +400,7 @@ class TestAdminInbox:
     """Escenarios 4, 7 y 10: la bandeja del administrador."""
 
     def test_it_lists_requests_from_every_municipality(self, admin):
+        """CP-043-25 (US-043 E4)."""
         here = ReportComplaintFactory.create()
         there = ReportComplaintFactory.create(
             report=ReportFactory.create(municipality=MunicipalityFactory.create()),
@@ -384,6 +416,7 @@ class TestAdminInbox:
         admin,
         report,
     ):
+        """CP-043-26 (US-043 E4)."""
         complaint = ReportComplaintFactory.create(report=report)
         received(complaint, ago(hours=3))
 
@@ -399,6 +432,7 @@ class TestAdminInbox:
         assert row["is_overdue"] is False
 
     def test_they_are_ordered_by_age(self, admin):
+        """CP-043-27 (US-043 E4)."""
         newer = ReportComplaintFactory.create()
         older = ReportComplaintFactory.create()
         received(newer, ago(hours=1))
@@ -409,7 +443,10 @@ class TestAdminInbox:
         assert [row["id"] for row in rows] == [older.pk, newer.pk]
 
     def test_an_overdue_request_is_flagged_and_goes_first(self, admin):
-        """Escenario 7."""
+        """CP-043-49 (US-043 E7).
+
+        Escenario 7.
+        """
         on_time = ReportComplaintFactory.create()
         overdue = ReportComplaintFactory.create()
         received(on_time, ago(hours=2))
@@ -427,7 +464,10 @@ class TestAdminInbox:
         report,
         admin,
     ):
-        """Una solicitud hermana resuelta no mueve el plazo de la que queda."""
+        """CP-043-50 (US-043 E7).
+
+        Una solicitud hermana resuelta no mueve el plazo de la que queda.
+        """
         complaint = ReportComplaintFactory.create(report=report)
         received(complaint, ago(hours=23))
 
@@ -438,6 +478,7 @@ class TestAdminInbox:
         assert row["remaining_seconds"] <= timedelta(hours=1).total_seconds()
 
     def test_the_deadline_follows_the_configuration(self, settings, report):
+        """CP-043-51 (US-043 E7)."""
         settings.PERSONAL_DATA_REVIEW_MINUTES = 5
         complaint = ReportComplaintFactory.create(report=report)
 
@@ -447,6 +488,7 @@ class TestAdminInbox:
         assert privacy.describe_window() == "5 minutos"
 
     def test_resolved_requests_leave_the_pending_list(self, admin, report):
+        """CP-043-28 (US-043 E4)."""
         complaint = ReportComplaintFactory.create(report=report)
         privacy.dismiss(complaint, admin=admin)
 
@@ -455,6 +497,7 @@ class TestAdminInbox:
         assert listed_ids(response) == set()
 
     def test_it_can_be_narrowed_to_one_municipality(self, admin):
+        """CP-043-29 (US-043 E4)."""
         here = ReportComplaintFactory.create()
         ReportComplaintFactory.create(
             report=ReportFactory.create(municipality=MunicipalityFactory.create()),
@@ -467,6 +510,7 @@ class TestAdminInbox:
         assert listed_ids(response) == {here.pk}
 
     def test_the_municipal_agent_gets_403_listing(self, report):
+        """CP-043-59 (US-043 E10)."""
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         ReportComplaintFactory.create(report=report)
 
@@ -476,7 +520,10 @@ class TestAdminInbox:
 
     @pytest.mark.parametrize("decision", ["remove-image", "dismiss"])
     def test_the_municipal_agent_gets_403_resolving_by_id(self, report, decision):
-        """Escenario 10: aunque el reporte sea de su jurisdicción."""
+        """CP-043-60 (US-043 E10).
+
+        Escenario 10: aunque el reporte sea de su jurisdicción.
+        """
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         complaint = ReportComplaintFactory.create(report=report)
 
@@ -488,12 +535,16 @@ class TestAdminInbox:
         assert on_disk(report.photo.name)
 
     def test_a_citizen_gets_403(self, report, neighbour):
+        """CP-043-61 (US-043 E10)."""
         response = client_for(neighbour).get(INBOX)
 
         assert response.status_code == HTTP_FORBIDDEN
 
     def test_the_municipal_review_queue_never_contains_them(self, report):
-        """La bandeja de US-021 nace sin este motivo (escenario 10)."""
+        """CP-043-62 (US-043 E10).
+
+        La bandeja de US-021 nace sin este motivo (escenario 10).
+        """
         ReportComplaintFactory.create(report=report)
 
         assert not ReportComplaint.objects.for_municipal_review().exists()
@@ -504,6 +555,7 @@ class TestRemovingTheImage:
     """Escenarios 5 y 11."""
 
     def test_the_file_is_deleted_from_disk(self, admin, report):
+        """CP-043-30 (US-043 E5)."""
         name = report.photo.name
         complaint = ReportComplaintFactory.create(report=report)
         assert on_disk(name)
@@ -514,6 +566,7 @@ class TestRemovingTheImage:
         assert not on_disk(name)
 
     def test_the_report_keeps_everything_else(self, admin, report):
+        """CP-043-31 (US-043 E5)."""
         before = Report.objects.get(pk=report.pk)
         complaint = ReportComplaintFactory.create(report=report)
 
@@ -529,7 +582,10 @@ class TestRemovingTheImage:
         assert after.status == before.status
 
     def test_the_whole_report_is_withdrawn_for_good(self, admin, report):
-        """Un reporte sin foto no se vuelve a publicar (decisión de producto)."""
+        """CP-043-32 (US-043 E5).
+
+        Un reporte sin foto no se vuelve a publicar (decisión de producto).
+        """
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.remove_image(complaint, admin=admin)
@@ -545,6 +601,7 @@ class TestRemovingTheImage:
         admin,
         report,
     ):
+        """CP-043-33 (US-043 E5)."""
         Report.objects.filter(pk=report.pk).update(
             status=Report.Status.PENDIENTE_VALIDACION,
         )
@@ -564,6 +621,7 @@ class TestRemovingTheImage:
         admin,
         report,
     ):
+        """CP-043-34 (US-043 E5)."""
         from urbancheck.reports.duplicates import find_duplicate  # noqa: PLC0415
 
         Report.objects.filter(pk=report.pk).update(
@@ -584,6 +642,7 @@ class TestRemovingTheImage:
         )
 
     def test_a_withdrawn_report_leaves_the_validator_inbox(self, admin, report):
+        """CP-043-35 (US-043 E5)."""
         Report.objects.filter(pk=report.pk).update(
             status=Report.Status.PENDIENTE_VALIDACION,
         )
@@ -599,6 +658,7 @@ class TestRemovingTheImage:
         assert report.pk not in listed_ids(response)
 
     def test_the_author_is_notified_with_the_reason(self, admin, report):
+        """CP-043-36 (US-043 E5)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.remove_image(complaint, admin=admin)
@@ -610,6 +670,7 @@ class TestRemovingTheImage:
         assert notification.actor is None
 
     def test_every_pending_request_on_that_image_is_closed(self, admin, report):
+        """CP-043-37 (US-043 E5)."""
         first = ReportComplaintFactory.create(report=report)
         second = ReportComplaintFactory.create(report=report)
 
@@ -620,6 +681,7 @@ class TestRemovingTheImage:
         assert second.resolved_by == admin
 
     def test_it_is_registered_with_the_admin_and_the_date(self, admin, report):
+        """CP-043-55 (US-043 E8)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.remove_image(complaint, admin=admin)
@@ -630,6 +692,7 @@ class TestRemovingTheImage:
         assert complaint.resolved_at is not None
 
     def test_a_resolved_request_cannot_be_decided_again(self, admin, report):
+        """CP-043-38 (US-043 E5)."""
         complaint = ReportComplaintFactory.create(report=report)
         privacy.dismiss(complaint, admin=admin)
 
@@ -645,7 +708,10 @@ class TestRemovingTheImage:
         admin,
         report,
     ):
-        """Lo que expone el dato es el archivo denunciado, no el de hoy."""
+        """CP-043-39 (US-043 E5).
+
+        Lo que expone el dato es el archivo denunciado, no el de hoy.
+        """
         complaint = ReportComplaintFactory.create(report=report)
         reported = complaint.image_name
         report.photo.save("replacement.jpg", ContentFile(b"new"), save=True)
@@ -663,7 +729,10 @@ class TestRemovingTheImage:
         admin,
         report,
     ):
-        """Escenario 11."""
+        """CP-043-66 (US-043 E11).
+
+        Escenario 11.
+        """
         Report.objects.filter(pk=report.pk).update(
             status=Report.Status.RESUELTO_PENDIENTE,
         )
@@ -697,7 +766,10 @@ class TestRemovingTheImage:
         report,
         monkeypatch,
     ):
-        """Si el archivo no se pudo borrar, la base no puede decir que sí."""
+        """CP-043-40 (US-043 E5).
+
+        Si el archivo no se pudo borrar, la base no puede decir que sí.
+        """
         complaint = ReportComplaintFactory.create(report=report)
 
         def broken(name):
@@ -719,6 +791,7 @@ class TestDismissing:
     """Escenario 6."""
 
     def test_the_image_stays_and_the_report_is_visible_again(self, admin, report):
+        """CP-043-44 (US-043 E6)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         response = client_for(admin).post(f"{INBOX}{complaint.pk}/dismiss/")
@@ -735,6 +808,7 @@ class TestDismissing:
         admin,
         report,
     ):
+        """CP-043-45 (US-043 E6)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.dismiss(complaint, admin=admin)
@@ -750,6 +824,7 @@ class TestTraceability:
     """Escenario 8: evidencia del cumplimiento del plazo de la RN-12."""
 
     def test_the_resolved_log_has_every_field(self, admin, report):
+        """CP-043-53 (US-043 E8)."""
         complaint = ReportComplaintFactory.create(report=report)
         received(complaint, ago(hours=2))
         privacy.remove_image(complaint, admin=admin)
@@ -768,6 +843,7 @@ class TestTraceability:
         assert row["image"]["url"] is None
 
     def test_a_late_resolution_is_recorded_as_such(self, admin, report):
+        """CP-043-54 (US-043 E8)."""
         complaint = ReportComplaintFactory.create(report=report)
         received(complaint, ago(hours=30))
         privacy.dismiss(complaint, admin=admin)
@@ -789,6 +865,7 @@ class TestNotifications:
     """Quién se entera de cada paso del circuito, y quién no."""
 
     def test_the_author_learns_the_report_was_hidden(self, report, neighbour):
+        """CP-043-71 (US-043 Avisos)."""
         request_review(client_for(neighbour), report)
 
         notification = Notification.objects.get(recipient=report.author)
@@ -803,6 +880,7 @@ class TestNotifications:
         report,
         neighbour,
     ):
+        """CP-043-72 (US-043 Avisos)."""
         request_review(client_for(neighbour), report)
         request_review(client_for(UserFactory.create()), report)
 
@@ -813,6 +891,7 @@ class TestNotifications:
         report,
         author,
     ):
+        """CP-043-73 (US-043 Avisos)."""
         request_review(client_for(author), report)
 
         assert kinds_for(author) == []
@@ -823,6 +902,7 @@ class TestNotifications:
         neighbour,
         admin,
     ):
+        """CP-043-47 (US-043 E6)."""
         complaint = ReportComplaintFactory.create(report=report, reporter=neighbour)
 
         privacy.dismiss(complaint, admin=admin)
@@ -830,6 +910,7 @@ class TestNotifications:
         assert kinds_for(report.author) == [Notification.Kind.REPORTE_RESTITUIDO]
 
     def test_a_dismissal_tells_every_reporter_the_result(self, report, admin):
+        """CP-043-48 (US-043 E6)."""
         first = ReportComplaintFactory.create(report=report)
         second = ReportComplaintFactory.create(report=report)
 
@@ -841,6 +922,7 @@ class TestNotifications:
             assert "no muestra datos personales" in notification.message
 
     def test_a_removal_tells_every_reporter_the_result(self, report, admin):
+        """CP-043-42 (US-043 E5)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.remove_image(complaint, admin=admin)
@@ -855,6 +937,7 @@ class TestNotifications:
         author,
         admin,
     ):
+        """CP-043-74 (US-043 Avisos)."""
         complaint = ReportComplaintFactory.create(report=report, reporter=author)
 
         privacy.dismiss(complaint, admin=admin)
@@ -866,6 +949,7 @@ class TestNotifications:
         report,
         admin,
     ):
+        """CP-043-75 (US-043 Avisos)."""
         evidence = ResolutionEvidenceFactory.create(report=report)
         on_photo = ReportComplaintFactory.create(report=report)
         ReportComplaintFactory.create(report=report, resolution_evidence=evidence)
@@ -879,7 +963,10 @@ class TestNotifications:
         report,
         admin,
     ):
-        """Se retira la foto de un cierre mientras la del reporte sigue en revisión."""
+        """CP-043-69 (US-043 E11).
+
+        Se retira la foto de un cierre mientras la del reporte sigue en revisión.
+        """
         evidence = ResolutionEvidenceFactory.create(report=report)
         on_evidence = ReportComplaintFactory.create(
             report=report,
@@ -901,6 +988,7 @@ class TestNotifications:
         report,
         admin,
     ):
+        """CP-043-70 (US-043 E11)."""
         evidence = ResolutionEvidenceFactory.create(report=report)
         complaint = ReportComplaintFactory.create(
             report=report,
@@ -918,6 +1006,7 @@ class TestNotifications:
         report,
         admin,
     ):
+        """CP-043-43 (US-043 E5)."""
         complaint = ReportComplaintFactory.create(report=report)
 
         privacy.remove_image(complaint, admin=admin)
