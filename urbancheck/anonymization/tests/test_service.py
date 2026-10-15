@@ -116,14 +116,20 @@ def assert_all_blurred(before: np.ndarray, after: np.ndarray, boxes: list[Box]) 
 
 class TestFaces:
     def test_a_single_face_is_blurred(self, processed):
-        """Escenario 1."""
+        """CP-041-01 (US-041 E1).
+
+        Escenario 1.
+        """
         before, result, after = processed("people_12.jpg")
 
         assert len(result.detections.faces) == 1
         assert_all_blurred(before, after, result.detections.faces)
 
     def test_the_blurred_face_is_no_longer_a_face(self, processed):
-        """Lo que queda en la caja no lo reconoce ni el mismo detector."""
+        """CP-041-02 (US-041 E1).
+
+        Lo que queda en la caja no lo reconoce ni el mismo detector.
+        """
         _, result, after = processed("people_10.jpg")
 
         remaining = detect(after).faces
@@ -133,7 +139,10 @@ class TestFaces:
             )
 
     def test_every_face_is_blurred_not_only_the_largest(self, processed):
-        """Escenario 3: una multitud frente a una vidriera."""
+        """CP-041-05 (US-041 E3).
+
+        Escenario 3: una multitud frente a una vidriera.
+        """
         before, result, after = processed("people_10.jpg")
 
         assert len(result.detections.faces) >= FACES_AT_THE_SHOP_WINDOW
@@ -142,14 +151,20 @@ class TestFaces:
 
 class TestPlates:
     def test_a_single_plate_is_blurred(self, processed):
-        """Escenario 2: patente Mercosur de cerca."""
+        """CP-041-04 (US-041 E2).
+
+        Escenario 2: patente Mercosur de cerca.
+        """
         before, result, after = processed("plate_closeup_02.jpg")
 
         assert len(result.detections.plates) == 1
         assert_all_blurred(before, after, result.detections.plates)
 
     def test_every_plate_is_blurred(self, processed):
-        """Escenario 3: dos colectivos y dos autos a distintas distancias."""
+        """CP-041-06 (US-041 E3).
+
+        Escenario 3: dos colectivos y dos autos a distintas distancias.
+        """
         before, result, after = processed("street_cars_05.jpg")
 
         assert len(result.detections.plates) >= PLATES_ON_THE_AVENUE
@@ -158,7 +173,10 @@ class TestPlates:
 
 class TestMixedAndClean:
     def test_faces_and_plates_in_the_same_image(self, processed):
-        """Escenario 3: los dos detectores sobre la misma imagen, una sola pasada."""
+        """CP-041-07 (US-041 E3).
+
+        Escenario 3: los dos detectores sobre la misma imagen, una sola pasada.
+        """
         before, result, after = processed("street_cars_10.jpg")
 
         assert len(result.detections.faces) >= FACES_IN_MIXED
@@ -166,7 +184,10 @@ class TestMixedAndClean:
         assert_all_blurred(before, after, result.detections.boxes)
 
     def test_the_rest_of_the_image_is_left_alone(self, processed):
-        """Escenario 1: fuera de las cajas, la imagen es la misma."""
+        """CP-041-03 (US-041 E1).
+
+        Escenario 1: fuera de las cajas, la imagen es la misma.
+        """
         before, result, after = processed("street_cars_10.jpg")
 
         mask = np.ones(before.shape[:2], dtype=bool)
@@ -182,7 +203,10 @@ class TestMixedAndClean:
         assert difference.mean() < JPEG_TOLERANCE
 
     def test_a_clean_image_comes_back_unaltered(self):
-        """CP-041-04: una calle sin nadie alrededor vuelve igual y procesada."""
+        """CP-041-08 (US-041 E4).
+
+        una calle sin nadie alrededor vuelve igual y procesada.
+        """
         data = synthetic_photo()
         result = process(named(data))
         before = np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
@@ -203,6 +227,7 @@ class TestIrreversibleBlur:
         return rng.integers(0, 256, size=(200, 300, 3), dtype=np.uint8)
 
     def test_the_region_loses_all_detail(self, noise):
+        """CP-041-09 (US-041 E5)."""
         box = Box(100, 60, 60, 60, "face")
 
         result = blur_regions(noise, [box])
@@ -210,8 +235,11 @@ class TestIrreversibleBlur:
         assert texture(result, box) < texture(noise, box) * 0.01
 
     def test_it_is_not_block_pixelation(self, noise):
-        """El pixelado deja bloques con saltos bruscos entre uno y otro; el
-        gaussiano, una variación continua sin bordes."""
+        """CP-041-10 (US-041 E5).
+
+        El pixelado deja bloques con saltos bruscos entre uno y otro; el
+        gaussiano, una variación continua sin bordes.
+        """
         box = Box(100, 60, 60, 60, "face")
 
         blurred = blur_regions(noise, [box])[60:120, 100:160]
@@ -222,7 +250,10 @@ class TestIrreversibleBlur:
         assert largest_step(pixelated) > MAX_SMOOTH_STEP
 
     def test_the_box_is_expanded_with_a_safety_margin(self, noise):
-        """Un recorte exacto deja a la vista el borde de la cara."""
+        """CP-041-11 (US-041 E5).
+
+        Un recorte exacto deja a la vista el borde de la cara.
+        """
         box = Box(100, 60, 60, 60, "face")
         margin = int(60 * service.FACE_MARGIN)
 
@@ -235,6 +266,7 @@ class TestIrreversibleBlur:
         )
 
     def test_nothing_outside_the_expanded_box_changes(self, noise):
+        """CP-041-12 (US-041 E5)."""
         box = Box(100, 60, 60, 60, "face")
         region = box.expanded(service.FACE_MARGIN, 300, 200)
 
@@ -255,6 +287,7 @@ class TestFormat:
         return buffer.getvalue()
 
     def test_jpeg_keeps_format_resolution_and_name(self):
+        """CP-041-32 (US-041 E10)."""
         data = synthetic_photo((1600, 1200))
         original = Image.open(io.BytesIO(data))
 
@@ -270,6 +303,7 @@ class TestFormat:
         [("PNG", "foto.png"), ("WEBP", "foto.webp")],
     )
     def test_png_and_webp_keep_their_format(self, fmt, name):
+        """CP-041-33 (US-041 E10)."""
         data = self.encode(Image.new("RGB", (120, 80), (30, 90, 150)), fmt)
 
         content = anonymize(named(data, name))
@@ -278,6 +312,7 @@ class TestFormat:
         assert content.name == name
 
     def test_transparency_survives(self):
+        """CP-041-34 (US-041 E10)."""
         image = Image.new("RGBA", (40, 40), (200, 0, 0, 0))
         image.paste((0, 0, 200, 255), (10, 10, 30, 30))
 
@@ -290,6 +325,7 @@ class TestFormat:
         assert alpha[20, 20] == OPAQUE
 
     def test_an_unusual_format_comes_out_as_jpeg(self):
+        """CP-041-35 (US-041 E10)."""
         data = self.encode(Image.new("RGB", (40, 40), (10, 10, 10)), "BMP")
 
         content = anonymize(named(data, "scan.bmp"))
@@ -298,8 +334,11 @@ class TestFormat:
         assert content.name == "scan.jpg"
 
     def test_the_exif_orientation_is_applied(self):
-        """Un celular guarda la foto acostada y la marca como rotada en el EXIF.
-        Como el EXIF se descarta, la rotación tiene que quedar en los píxeles."""
+        """CP-041-36 (US-041 E10).
+
+        Un celular guarda la foto acostada y la marca como rotada en el EXIF.
+        Como el EXIF se descarta, la rotación tiene que quedar en los píxeles.
+        """
         exif = Image.Exif()
         exif[0x0112] = 6  # Rotar 90° en sentido horario al mostrar.
         data = self.encode(Image.new("RGB", (60, 20), (80, 80, 80)), "JPEG", exif=exif)
@@ -309,7 +348,10 @@ class TestFormat:
         assert output.size == (20, 60)
 
     def test_exif_metadata_is_dropped(self):
-        """El EXIF de un celular trae la ubicación GPS y el modelo del equipo."""
+        """CP-041-37 (US-041 Metadatos).
+
+        El EXIF de un celular trae la ubicación GPS y el modelo del equipo.
+        """
         exif = Image.Exif()
         exif[0x0110] = "Moto G"  # Modelo.
         exif[0x8825] = {1: "S", 2: (32.0, 24.0, 36.0)}  # GPSInfo.
@@ -322,11 +364,15 @@ class TestFormat:
 
 class TestFailures:
     def test_a_file_that_is_not_an_image_is_rejected(self):
+        """CP-041-40 (US-041 Fallos)."""
         with pytest.raises(AnonymizationError):
             anonymize(named(b"esto no es una imagen"))
 
     def test_a_detector_failure_is_not_published_silently(self, monkeypatch):
-        """Ante un error del detector no se devuelve la foto sin difuminar."""
+        """CP-041-41 (US-041 Fallos).
+
+        Ante un error del detector no se devuelve la foto sin difuminar.
+        """
 
         class BrokenDetector:
             def detect(self, bgr):
@@ -341,7 +387,10 @@ class TestFailures:
 
 class TestPerformance:
     def test_a_twelve_megapixel_photo_takes_less_than_ten_seconds(self):
-        """Escenario 8: el tamaño de una foto de celular actual."""
+        """CP-041-26 (US-041 E8).
+
+        Escenario 8: el tamaño de una foto de celular actual.
+        """
         result = process(named(synthetic_photo((4000, 3000))))
 
         assert result.elapsed_ms < MAX_SECONDS * 1000
@@ -349,7 +398,10 @@ class TestPerformance:
 
 class TestLogging:
     def test_the_log_never_names_the_file(self, caplog):
-        """Ni el nombre ni la ruta del original en logs o trazas."""
+        """CP-041-20 (US-041 E6).
+
+        Ni el nombre ni la ruta del original en logs o trazas.
+        """
         caplog.set_level(logging.INFO, logger="urbancheck.anonymization")
 
         anonymize(named(synthetic_photo(), "vecino-dni-30111222.jpg"))

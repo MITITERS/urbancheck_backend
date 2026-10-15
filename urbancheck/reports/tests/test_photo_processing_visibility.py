@@ -83,20 +83,24 @@ class TestInvisibleWhileProcessing:
     """Escenario 2: para cualquiera que no sea el autor, todavía no existe."""
 
     def test_it_is_not_in_the_feed(self, processing, neighbour_client):
+        """CP-042-04 (US-042 E2)."""
         assert processing.pk not in listed_ids(neighbour_client.get("/api/reports/"))
 
     def test_it_is_not_on_the_map(self, processing, neighbour_client):
+        """CP-042-05 (US-042 E2)."""
         assert processing.pk not in listed_ids(
             neighbour_client.get("/api/reports/map/"),
         )
 
     def test_it_is_not_found_by_search(self, processing, neighbour_client):
+        """CP-042-06 (US-042 E2)."""
         response = neighbour_client.get(
             "/api/reports/?search=" + processing.description,
         )
         assert processing.pk not in listed_ids(response)
 
     def test_it_cannot_be_opened_by_id(self, processing, neighbour_client):
+        """CP-042-07 (US-042 E2)."""
         response = neighbour_client.get(f"/api/reports/{processing.pk}/")
         assert response.status_code == HTTP_NOT_FOUND
 
@@ -106,7 +110,9 @@ class TestInvisibleWhileProcessing:
         author,
         neighbour_client,
     ):
-        """Un contador que no coincide con la lista es la pista de lo escondido.
+        """CP-042-08 (US-042 E2).
+
+        Un contador que no coincide con la lista es la pista de lo escondido.
 
         Contaba todos los reportes del autor, así que el perfil público
         delataba lo que ninguna vista mostraba. Ahora cuenta exactamente lo
@@ -125,6 +131,7 @@ class TestTheAuthorSeesTheirOwn:
     """Escenario 3: ocultarle al autor su propio reporte no protege a nadie."""
 
     def test_it_is_in_their_own_history(self, processing, author_client):
+        """CP-042-09 (US-042 E3)."""
         response = author_client.get("/api/reports/?mine=true")
 
         assert processing.pk in listed_ids(response)
@@ -135,12 +142,14 @@ class TestTheAuthorSeesTheirOwn:
         assert row["photo"] is None
 
     def test_they_can_open_it(self, processing, author_client):
+        """CP-042-10 (US-042 E3)."""
         response = author_client.get(f"/api/reports/{processing.pk}/")
 
         assert response.status_code == HTTP_OK
         assert response.data["photo_status"] == PhotoStatus.PENDIENTE
 
     def test_they_can_still_delete_it(self, processing, author_client):
+        """CP-042-11 (US-042 E3)."""
         response = author_client.delete(f"/api/reports/{processing.pk}/")
 
         assert response.status_code == HTTP_NO_CONTENT
@@ -150,12 +159,15 @@ class TestItDoesNotCountForCollectiveValidation:
     """Escenario 7: lo que nadie ve no recibe apoyo ni espera validación."""
 
     def test_a_neighbour_cannot_like_it(self, processing, neighbour_client):
+        """CP-042-25 (US-042 E7)."""
         response = neighbour_client.post(f"/api/reports/{processing.pk}/like/")
 
         assert response.status_code == HTTP_NOT_FOUND
 
     def test_not_even_the_author_can_like_it(self, processing, author_client):
-        """Más estricto que el detalle, y a propósito.
+        """CP-042-26 (US-042 E7).
+
+        Más estricto que el detalle, y a propósito.
 
         El autor abre su reporte para ver que se está procesando, pero un
         reporte que nadie ve no puede acumular apoyos: si pudiera, el umbral de
@@ -166,6 +178,7 @@ class TestItDoesNotCountForCollectiveValidation:
         assert response.status_code == HTTP_NOT_FOUND
 
     def test_it_is_not_in_the_validation_inbox(self, processing, active_municipality):
+        """CP-042-27 (US-042 E7)."""
         validator = ValidatorFactory.create(municipality=active_municipality)
 
         response = client_for(validator).get("/api/validation/reports/")
@@ -177,6 +190,7 @@ class TestItDoesNotCountForCollectiveValidation:
         processing,
         active_municipality,
     ):
+        """CP-042-28 (US-042 E7)."""
         validator = ValidatorFactory.create(municipality=active_municipality)
 
         response = client_for(validator).get(
@@ -196,7 +210,9 @@ class TestThePanelSeesItButCannotPublishIt:
         )
 
     def test_the_panel_lists_it_with_its_state(self, processing, agent_client):
-        """El agente tiene que saber que el vecino todavía no lo ve.
+        """CP-042-20 (US-042 E6).
+
+        El agente tiene que saber que el vecino todavía no lo ve.
 
         Sin el campo vería una tarjeta sin foto y sin explicación, que es
         indistinguible de una imagen retirada por protección de datos.
@@ -213,7 +229,9 @@ class TestThePanelSeesItButCannotPublishIt:
         agent_client,
         active_municipality,
     ):
-        """Un reporte validado en terreno cuya foto todavía no se difuminó.
+        """CP-042-21 (US-042 E6).
+
+        Un reporte validado en terreno cuya foto todavía no se difuminó.
 
         Puede pasar: la validación colectiva de US-040 no es el único camino a
         *Reportado*. Lo que no puede pasar es que el municipio lo ponga en
@@ -240,7 +258,9 @@ class TestThePanelSeesItButCannotPublishIt:
         agent_client,
         active_municipality,
     ):
-        """El panel dibuja los botones que esta lista trae, y nada más.
+        """CP-042-22 (US-042 E6).
+
+        El panel dibuja los botones que esta lista trae, y nada más.
 
         Dejar la transición listada sería ofrecer una acción que el servidor
         rechaza con un 409 apenas se la aprieta.
@@ -257,7 +277,9 @@ class TestThePanelSeesItButCannotPublishIt:
         assert offered <= {"archivar", "cancelar"}
 
     def test_a_failed_report_can_still_be_archived_or_cancelled(self, processing):
-        """La guarda no puede dejar varado un reporte que nunca se va a publicar.
+        """CP-042-43 (US-042 Robustez).
+
+        La guarda no puede dejar varado un reporte que nunca se va a publicar.
 
         El archivado por inactividad (US-031) transiciona reportes *pendientes
         de validación*, que es justo donde queda uno cuyo difuminado falló. Sin
@@ -284,13 +306,17 @@ class TestNoPathPublishesAnUnprocessedPhoto:
     """Escenario 6: la invariante se sostiene también fuera de la API."""
 
     def test_saving_a_photo_without_processing_it_is_rejected(self, processing):
+        """CP-042-23 (US-042 E6)."""
         processing.photo = "reports/2026/09/colada.jpg"
 
         with pytest.raises(ValueError, match="US-042"):
             processing.save()
 
     def test_not_even_a_bulk_update_can_publish_it(self, processing):
-        """`update()` no pasa por `save`: por eso la guarda vive también en la base."""
+        """CP-042-24 (US-042 E6).
+
+        `update()` no pasa por `save`: por eso la guarda vive también en la base.
+        """
         with pytest.raises(IntegrityError), transaction.atomic():
             Report.objects.filter(pk=processing.pk).update(
                 photo="reports/2026/09/colada.jpg",
@@ -305,6 +331,7 @@ class TestVisibleOnceProcessed:
         processing,
         neighbour_client,
     ):
+        """CP-042-03 (US-042 E1)."""
         processing.photo = "reports/2026/09/difuminada.jpg"
         processing.photo_pending = ""
         processing.photo_status = PhotoStatus.PROCESADA

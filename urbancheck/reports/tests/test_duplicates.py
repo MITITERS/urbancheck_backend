@@ -61,12 +61,18 @@ def look(municipality, category=Report.Category.BACHE, point=HERE):
 
 
 def test_the_default_radius_is_30_meters(settings):
-    """El valor que pide la historia, sin pisarlo desde el entorno del test."""
+    """CP-026-02 (US-026 E1).
+
+    El valor que pide la historia, sin pisarlo desde el entorno del test.
+    """
     assert settings.DUPLICATE_REPORT_RADIUS_METERS == 30  # noqa: PLR2004
 
 
 def test_same_category_within_the_radius(active_municipality):
-    """Escenario 1."""
+    """CP-026-01 (US-026 E1).
+
+    Escenario 1.
+    """
     existing = existing_at(TWENTY_METERS, active_municipality)
 
     duplicate = look(active_municipality)
@@ -76,14 +82,20 @@ def test_same_category_within_the_radius(active_municipality):
 
 
 def test_same_place_another_category(active_municipality):
-    """Escenario 2: un bache y una vereda rota a 5 m son dos problemas."""
+    """CP-026-03 (US-026 E2).
+
+    Escenario 2: un bache y una vereda rota a 5 m son dos problemas.
+    """
     existing_at(FIVE_METERS, active_municipality, category=Report.Category.BACHE)
 
     assert look(active_municipality, category=Report.Category.VEREDA) is None
 
 
 def test_same_category_outside_the_radius(active_municipality):
-    """Escenario 3: a ~40 m no bloquea con el radio por defecto."""
+    """CP-026-04 (US-026 E3).
+
+    Escenario 3: a ~40 m no bloquea con el radio por defecto.
+    """
     existing_at(FORTY_METERS, active_municipality)
 
     assert look(active_municipality) is None
@@ -91,6 +103,7 @@ def test_same_category_outside_the_radius(active_municipality):
 
 @pytest.mark.parametrize("status", duplicates.ACTIVE_STATUSES)
 def test_every_active_status_counts(active_municipality, status):
+    """CP-026-06 (US-026 E4)."""
     existing = existing_at(FIVE_METERS, active_municipality, status=status)
 
     assert look(active_municipality) == existing
@@ -98,21 +111,30 @@ def test_every_active_status_counts(active_municipality, status):
 
 @pytest.mark.parametrize("status", CLOSED_STATUSES)
 def test_a_closed_report_does_not_count(active_municipality, status):
-    """Escenario 4: un problema que reaparece después del cierre es nuevo."""
+    """CP-026-05 (US-026 E4).
+
+    Escenario 4: un problema que reaparece después del cierre es nuevo.
+    """
     existing_at(FIVE_METERS, active_municipality, status=status)
 
     assert look(active_municipality) is None
 
 
 def test_every_status_is_either_active_or_closed():
-    """Un estado nuevo tiene que decidir de qué lado cae."""
+    """CP-026-07 (US-026 E4).
+
+    Un estado nuevo tiene que decidir de qué lado cae.
+    """
     assert set(duplicates.ACTIVE_STATUSES) | set(CLOSED_STATUSES) == set(
         Report.Status,
     )
 
 
 def test_the_closest_one_wins(active_municipality):
-    """Escenario 5."""
+    """CP-026-08 (US-026 E5).
+
+    Escenario 5.
+    """
     existing_at(TWENTY_METERS, active_municipality)
     closest = existing_at(FIVE_METERS, active_municipality)
 
@@ -120,7 +142,10 @@ def test_the_closest_one_wins(active_municipality):
 
 
 def test_another_municipality_does_not_count(active_municipality):
-    """Escenario 7: la deduplicación no cruza un límite jurisdiccional."""
+    """CP-026-10 (US-026 E7).
+
+    Escenario 7: la deduplicación no cruza un límite jurisdiccional.
+    """
     neighbour = MunicipalityFactory.create(boundary=square_boundary(10, 10, 1))
     existing_at(FIVE_METERS, neighbour)
 
@@ -128,7 +153,10 @@ def test_another_municipality_does_not_count(active_municipality):
 
 
 def test_the_radius_is_read_from_configuration(active_municipality, settings):
-    """Escenario 6: el valor vigente se aplica sin tocar código."""
+    """CP-026-09 (US-026 E6).
+
+    Escenario 6: el valor vigente se aplica sin tocar código.
+    """
     existing = existing_at(FORTY_METERS, active_municipality)
     assert look(active_municipality) is None
 
@@ -138,7 +166,9 @@ def test_the_radius_is_read_from_configuration(active_municipality, settings):
 
 
 def test_the_lookup_uses_the_index(active_municipality):
-    """Escenario 9: la consulta la resuelve el índice, no un recorrido completo.
+    """CP-026-13 (US-026 E9).
+
+    Escenario 9: la consulta la resuelve el índice, no un recorrido completo.
 
     La tabla se llena como la de un municipio con historia —muchos reportes
     cerrados y de otras categorías, dispersos— y se le pasa ``ANALYZE``. Sin
@@ -184,7 +214,10 @@ def test_the_lookup_uses_the_index(active_municipality):
 
 
 def test_the_index_covers_exactly_the_active_statuses():
-    """La condición del índice repite la lista; no pueden separarse."""
+    """CP-026-14 (US-026 E9).
+
+    La condición del índice repite la lista; no pueden separarse.
+    """
     (index,) = [
         index
         for index in Report._meta.indexes  # noqa: SLF001
@@ -197,7 +230,10 @@ def test_the_index_covers_exactly_the_active_statuses():
 
 
 def test_the_volume_benchmark_measures_and_leaves_nothing_behind():
-    """CP-026-10: la medición con volumen usa el índice y revierte todo."""
+    """CP-026-15 (US-026 E9).
+
+    la medición con volumen usa el índice y revierte todo.
+    """
     out = io.StringIO()
 
     call_command(

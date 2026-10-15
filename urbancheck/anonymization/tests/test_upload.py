@@ -155,6 +155,7 @@ class TestOnlyTheAnonymizedVersionIsStored:
         expected_bytes,
         process_pending_photos,
     ):
+        """CP-041-13 (US-041 E6)."""
         before = media_files()
 
         response = create_report(author_client, upload())
@@ -187,6 +188,7 @@ class TestOnlyTheAnonymizedVersionIsStored:
         expected_bytes,
         process_pending_photos,
     ):
+        """CP-041-14 (US-041 E6)."""
         report = ReportFactory.create(
             author=author,
             status=Report.Status.PENDIENTE_VALIDACION,
@@ -221,6 +223,7 @@ class TestOnlyTheAnonymizedVersionIsStored:
         expected_bytes,
         process_pending_photos,
     ):
+        """CP-041-15 (US-041 E6) · CP-046-01 (US-046 E7)."""
         before = media_files()
 
         response = operator_client.post(
@@ -250,6 +253,7 @@ class TestOnlyTheAnonymizedVersionIsStored:
         expected_bytes,
         process_pending_photos,
     ):
+        """CP-041-16 (US-041 E6) · CP-042-37 (US-042 Apelación)."""
         operator_client.post(
             f"/api/operator/reports/{in_progress.pk}/resolve/",
             {"photo": upload(), "description": "Se rellenó el bache.", **HERE},
@@ -281,7 +285,10 @@ class TestOnlyTheAnonymizedVersionIsStored:
         author_client,
         monkeypatch,
     ):
-        """Django pasa a un temporal en disco todo archivo de más de 2,5 MB."""
+        """CP-041-17 (US-041 E6).
+
+        Django pasa a un temporal en disco todo archivo de más de 2,5 MB.
+        """
         rng = np.random.default_rng(7)
         noise = rng.integers(0, 256, size=(1100, 1100, 3), dtype=np.uint8)
         buffer = io.BytesIO()
@@ -315,7 +322,9 @@ class TestOnlyTheAnonymizedVersionIsStored:
         monkeypatch,
         process_pending_photos,
     ):
-        """Si el servicio falla, la foto no se publica sin difuminar.
+        """CP-041-18 (US-041 E6).
+
+        Si el servicio falla, la foto no se publica sin difuminar.
 
         Lo que cambió con US-042 es el momento y la respuesta: el alta devuelve
         201 porque el reporte sí se crea, y el fallo llega después. Lo que no
@@ -374,6 +383,7 @@ class TestNoWayToTheOriginal:
         upload,
         process_pending_photos,
     ):
+        """CP-041-21 (US-041 E7)."""
         report_id = create_report(author_client, upload()).data["id"]
         process_pending_photos()
         report = Report.objects.get(pk=report_id)
@@ -388,7 +398,9 @@ class TestNoWayToTheOriginal:
         )
 
     def test_every_photo_the_api_accepts_goes_through_the_queue(self):
-        """Una foto nueva que entre por la API tiene que pasar por el servicio.
+        """CP-041-22 (US-041 E7).
+
+        Una foto nueva que entre por la API tiene que pasar por el servicio.
 
         Los serializers de entrada se llaman ``*Create*`` o ``*Update*``; los de
         lectura (feed, mapa, detalle) nunca reciben datos. El avatar de usuario
@@ -425,7 +437,9 @@ class TestNoWayToTheOriginal:
         assert all(field is PendingPhotoField for *_, field in writable), writable
 
     def test_the_admin_cannot_upload_a_photo_or_force_its_state(self):
-        """Ni la foto ni el estado del procesamiento se editan desde el admin.
+        """CP-041-23 (US-041 E7).
+
+        Ni la foto ni el estado del procesamiento se editan desde el admin.
 
         Poder escribir `photo_status` a mano sería la vía degradada que la
         historia descarta: marcar «procesada» una imagen que nunca pasó por el
