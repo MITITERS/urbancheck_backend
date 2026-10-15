@@ -549,6 +549,11 @@ PERSONAL_DATA_REVIEW_MINUTES = env.int(
 # **Sin clave, la función queda apagada**: cada cierre se registra como
 # "comparación no disponible" y el circuito sigue igual. Es informativa y nunca
 # puede bloquear un cierre.
+# Qué servicio de visión se usa (ver ``urbancheck/reports/vision.py``). Vacío
+# es el proveedor nulo: no se compara nada y ninguna foto sale del servidor.
+# ``openai_compatible`` es el adaptador de chat completions (Gemini, Groq,
+# OpenRouter, Ollama), que usa las variables de abajo.
+VISION_PROVIDER = env("DJANGO_VISION_PROVIDER", default="")
 RESOLUTION_COMPARISON_API_KEY = env("DJANGO_RESOLUTION_COMPARISON_API_KEY", default="")
 RESOLUTION_COMPARISON_BASE_URL = env(
     "DJANGO_RESOLUTION_COMPARISON_BASE_URL",

@@ -5,8 +5,19 @@ imágenes y no rutas: quien lo invoca las lee del storage, donde solo existen la
 versiones ya difuminadas de US-041 (escenario 10). La original sin procesar no
 llega a este punto porque no existe en ningún lado.
 
-Habla el dialecto de chat completions de OpenAI, que ofrecen Gemini, Groq,
-OpenRouter y Ollama; el proveedor, el modelo y la clave salen de configuración.
+El proveedor se elige con ``VISION_PROVIDER`` y se usa a través de una
+interfaz propia (``VisionProvider``): ``is_configured`` y ``compare``. Hay dos:
+
+- ``""`` (el default): **proveedor nulo**. No se compara nada y cada cierre
+  queda como "comparación no disponible". Es lo que corre si nadie configuró
+  nada, a propósito: ninguna foto sale del servidor sin que el equipo lo pida.
+- ``"openai_compatible"``: el dialecto de chat completions de OpenAI, que
+  ofrecen Gemini —el que eligió el equipo, en su plan gratuito—, Groq,
+  OpenRouter y Ollama. El modelo, la URL y la clave salen de configuración; la
+  clave solo existe en el backend.
+
+Un proveedor nuevo es una clase con esos dos métodos y una entrada en
+``PROVIDERS``; el resto del circuito (``comparison.py``) no se entera.
 
 La respuesta se valida contra un esquema cerrado. Una respuesta que no se ajusta
 es ``InvalidVisionResponseError`` y termina como "comparación no disponible": nunca se
@@ -19,9 +30,11 @@ import base64
 import io
 import json
 from dataclasses import dataclass
+from typing import Protocol
 
 import requests
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from PIL import Image
 from PIL import UnidentifiedImageError
 from rest_framework import serializers
@@ -91,8 +104,71 @@ class _VerdictSerializer(serializers.Serializer):
     explicacion = serializers.CharField(max_length=EXPLANATION_MAX_LENGTH)
 
 
+class VisionProvider(Protocol):
+    """Lo que el circuito de US-015 necesita de un servicio de visión."""
+
+    def is_configured(self) -> bool:
+        """Si puede comparar: sin esto el cierre queda "no disponible"."""
+        ...
+
+    def compare(
+        self,
+        original: bytes,
+        resolution: bytes,
+        *,
+        category: str,
+        description: str,
+    ) -> VisionResult: ...
+
+
+class NullVisionProvider:
+    """Sin proveedor (``VISION_PROVIDER`` vacío): no se compara nada."""
+
+    def is_configured(self) -> bool:
+        return False
+
+    def compare(self, original, resolution, *, category, description):
+        # No se llega acá: ``comparison`` mira ``is_configured`` antes. Si
+        # alguien lo llama igual, falla como un rechazo y no se reintenta.
+        code = "no_provider"
+        raise VisionError(code)
+
+
+class OpenAICompatibleProvider:
+    """Chat completions de OpenAI: Gemini, Groq, OpenRouter, Ollama."""
+
+    def is_configured(self) -> bool:
+        return bool(settings.RESOLUTION_COMPARISON_API_KEY)
+
+    def compare(self, original, resolution, *, category, description):
+        return _compare_via_chat_completions(
+            original,
+            resolution,
+            category=category,
+            description=description,
+        )
+
+
+#: Valores aceptados de ``VISION_PROVIDER``.
+PROVIDERS: dict[str, type] = {
+    "": NullVisionProvider,
+    "openai_compatible": OpenAICompatibleProvider,
+}
+
+
+def get_provider() -> VisionProvider:
+    """El proveedor configurado, leído en cada uso como el resto de parámetros."""
+    name = settings.VISION_PROVIDER
+    try:
+        return PROVIDERS[name]()
+    except KeyError as error:
+        valid = ", ".join(repr(key) for key in PROVIDERS)
+        msg = f"VISION_PROVIDER={name!r} no existe. Valores posibles: {valid}."
+        raise ImproperlyConfigured(msg) from error
+
+
 def is_configured() -> bool:
-    return bool(settings.RESOLUTION_COMPARISON_API_KEY)
+    return get_provider().is_configured()
 
 
 def compare_images(
@@ -107,6 +183,21 @@ def compare_images(
     ``category`` es el valor interno de ``Report.Category``; ``description`` es
     el parte de trabajo del operario, que viaja delimitado como dato.
     """
+    return get_provider().compare(
+        original,
+        resolution,
+        category=category,
+        description=description,
+    )
+
+
+def _compare_via_chat_completions(
+    original: bytes,
+    resolution: bytes,
+    *,
+    category: str,
+    description: str,
+) -> VisionResult:
     model_name = settings.RESOLUTION_COMPARISON_MODEL
     payload = {
         "model": model_name,
