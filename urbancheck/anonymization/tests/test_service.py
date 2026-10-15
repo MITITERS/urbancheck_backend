@@ -1,8 +1,10 @@
 """US-041 — servicio de anonimización: escenarios 1 a 5, 8 y 10.
 
-Las imágenes salen del set de benchmark (fotos reales de Wikimedia Commons):
-un rostro o una patente dibujados a mano no los detecta un modelo entrenado
-con fotos, y un test contra eso no probaría nada.
+Las pruebas de detección usan el set de referencia (fotos reales con rostros y
+patentes): un rostro o una patente dibujados a mano no los detecta un modelo
+entrenado con fotos, y un test contra eso no probaría nada. Ese set **no se
+versiona** (ver ``images.py``); sin él esas pruebas se saltean. El resto usa
+imágenes sintéticas.
 """
 
 from __future__ import annotations
@@ -17,14 +19,13 @@ from PIL import Image
 
 from urbancheck.anonymization import service
 from urbancheck.anonymization.detectors import Box
-from urbancheck.anonymization.management.commands.benchmark_anonymization import (
-    BENCHMARK_DIR,
-)
 from urbancheck.anonymization.service import AnonymizationError
 from urbancheck.anonymization.service import anonymize
 from urbancheck.anonymization.service import blur_regions
 from urbancheck.anonymization.service import detect
 from urbancheck.anonymization.service import process
+from urbancheck.anonymization.tests.images import reference_image
+from urbancheck.anonymization.tests.images import synthetic_photo
 
 MAX_SECONDS = 10
 
@@ -51,10 +52,6 @@ OPAQUE = 255
 MAX_SMOOTH_STEP = 3
 
 
-def benchmark_image(name: str) -> bytes:
-    return (BENCHMARK_DIR / "images" / name).read_bytes()
-
-
 def named(data: bytes, name: str = "foto.jpg") -> io.BytesIO:
     file = io.BytesIO(data)
     file.name = name
@@ -79,7 +76,7 @@ def processed():
 
     def get(name: str):
         if name not in cache:
-            data = benchmark_image(name)
+            data = reference_image(name)
             result = process(named(data, name))
             before = np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
             after = np.asarray(decode(result.content).convert("RGB"))
@@ -184,9 +181,12 @@ class TestMixedAndClean:
         difference = np.abs(before.astype(int) - after.astype(int))[mask]
         assert difference.mean() < JPEG_TOLERANCE
 
-    def test_a_clean_image_comes_back_unaltered(self, processed):
-        """Escenario 4: un bache sin nadie alrededor."""
-        before, result, after = processed("clean_03.jpg")
+    def test_a_clean_image_comes_back_unaltered(self):
+        """CP-041-04: una calle sin nadie alrededor vuelve igual y procesada."""
+        data = synthetic_photo()
+        result = process(named(data))
+        before = np.asarray(Image.open(io.BytesIO(data)).convert("RGB"))
+        after = np.asarray(decode(result.content).convert("RGB"))
 
         assert result.detections.boxes == []
         assert after.shape == before.shape
@@ -255,7 +255,7 @@ class TestFormat:
         return buffer.getvalue()
 
     def test_jpeg_keeps_format_resolution_and_name(self):
-        data = benchmark_image("clean_03.jpg")
+        data = synthetic_photo((1600, 1200))
         original = Image.open(io.BytesIO(data))
 
         content = anonymize(named(data, "bache.jpg"))
@@ -336,17 +336,13 @@ class TestFailures:
         monkeypatch.setattr(service, "_plate_detector", BrokenDetector)
 
         with pytest.raises(AnonymizationError):
-            anonymize(named(benchmark_image("clean_03.jpg")))
+            anonymize(named(synthetic_photo()))
 
 
 class TestPerformance:
     def test_a_twelve_megapixel_photo_takes_less_than_ten_seconds(self):
         """Escenario 8: el tamaño de una foto de celular actual."""
-        source = Image.open(io.BytesIO(benchmark_image("people_09.jpg"))).convert("RGB")
-        buffer = io.BytesIO()
-        source.resize((4000, 3000)).save(buffer, format="JPEG", quality=92)
-
-        result = process(named(buffer.getvalue()))
+        result = process(named(synthetic_photo((4000, 3000))))
 
         assert result.elapsed_ms < MAX_SECONDS * 1000
 
@@ -356,7 +352,7 @@ class TestLogging:
         """Ni el nombre ni la ruta del original en logs o trazas."""
         caplog.set_level(logging.INFO, logger="urbancheck.anonymization")
 
-        anonymize(named(benchmark_image("clean_03.jpg"), "vecino-dni-30111222.jpg"))
+        anonymize(named(synthetic_photo(), "vecino-dni-30111222.jpg"))
 
         assert caplog.records
         assert all("vecino-dni" not in record.getMessage() for record in caplog.records)

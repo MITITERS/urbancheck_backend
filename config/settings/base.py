@@ -573,6 +573,14 @@ ANONYMIZATION_RETRY_BASE_SECONDS = env.int(
 # el mensaje que el broker nunca entregó: sin esto el reporte queda invisible
 # para siempre y ni siquiera falló, así que su autor no recibe ningún aviso.
 ANONYMIZATION_STALE_MINUTES = env.int("DJANGO_ANONYMIZATION_STALE_MINUTES", default=30)
+# Carpeta **no versionada** con el set de referencia de US-041: fotos reales con
+# rostros y patentes y su ``manifest.json`` de etiquetas. La leen el comando
+# ``benchmark_anonymization`` y los tests de detección, que se saltean si falta.
+# Nunca va dentro del control de versiones ni de la imagen de Docker.
+ANONYMIZATION_REFERENCE_SET = env(
+    "DJANGO_ANONYMIZATION_REFERENCE_SET",
+    default=str(BASE_DIR / "benchmark_data" / "anonymization"),
+)
 
 # disponible. Una respuesta fuera de formato no se reintenta.
 RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
