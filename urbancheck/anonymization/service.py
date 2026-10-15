@@ -147,6 +147,20 @@ def process(file: IO[bytes]) -> AnonymizationResult:
     return AnonymizationResult(ContentFile(content, name=name), detections, elapsed_ms)
 
 
+def strip_metadata(file: IO[bytes]) -> ContentFile:
+    """La misma imagen sin EXIF, XMP ni IPTC, y con la orientación aplicada.
+
+    Es el tratamiento de las fotos que no pasan por el difuminado —la de
+    perfil— (Sprint 5, punto 5.2): no se buscan rostros, pero el GPS, el modelo
+    del teléfono y la fecha se descartan igual. Mismas reglas de formato que
+    ``anonymize``.
+    """
+    image, output_format = _open(file)
+    content = _encode(image, image.info, output_format)
+    name = _output_name(getattr(file, "name", None), output_format)
+    return ContentFile(content, name=name)
+
+
 def detect(pixels: np.ndarray) -> Detections:
     """Rostros y patentes de una imagen RGB o RGBA, sin tocarla."""
     bgr = cv2.cvtColor(np.ascontiguousarray(pixels[:, :, :3]), cv2.COLOR_RGB2BGR)

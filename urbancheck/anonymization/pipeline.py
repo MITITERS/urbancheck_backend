@@ -28,6 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import PhotoStatus
+from .service import AnonymizationError
 from .service import anonymize
 
 if TYPE_CHECKING:
@@ -180,6 +181,79 @@ def mark_failed(label: str, pk: int, code: str) -> None:
     hook = _ON_FAILURE.get(label)
     if hook is not None:
         hook(instance, code)
+
+
+def legacy_photos(model):
+    """Fotos publicadas que nunca pasaron por el servicio (US-042, escenario 9).
+
+    Son las que la migración ``reports/0012`` marcó como ``procesada`` sin
+    procesarlas: el circuito suma un intento a cada foto que difumina, así que
+    una publicada con cero intentos es una que llegó antes de US-041.
+    """
+    return model.objects.filter(
+        photo_status=PhotoStatus.PROCESADA,
+        photo_attempts=0,
+    ).exclude(photo="")
+
+
+def reprocess_legacy_photo(label: str, pk: int) -> str:
+    """Difumina una foto ya publicada que nunca pasó por el servicio.
+
+    Devuelve ``"processed"``, ``"failed"``, ``"missing"`` o ``"skipped"``. La
+    nueva versión reemplaza a la vieja y la vieja se borra después del commit.
+    Si el servicio no puede con ella, la foto **se retira**: una foto sin
+    difuminar no queda publicada "por las dudas", que es la misma regla del
+    fallo definitivo de ``mark_failed``. El autor se entera por el mismo aviso.
+
+    Es idempotente: una foto ya reprocesada tiene un intento y no se vuelve a
+    tocar.
+    """
+    model = apps.get_model(label)
+    with transaction.atomic():
+        instance = model.objects.select_for_update().get(pk=pk)
+        if not instance.photo or instance.photo_attempts:
+            return "skipped"
+        old_name = instance.photo.name
+        storage = instance.photo.storage
+        if not storage.exists(old_name):
+            return "missing"
+        code = None
+        try:
+            with instance.photo.open("rb") as file:
+                content = anonymize(file)
+        except AnonymizationError as error:
+            code = error.code
+            instance.photo = ""
+            instance.photo_status = PhotoStatus.FALLIDA
+            instance.photo_failed_at = timezone.now()
+            instance.save(
+                update_fields=["photo", "photo_status", "photo_failed_at"],
+            )
+        else:
+            instance.photo_attempts = 1
+            instance.photo.save(content.name, content, save=False)
+            instance.save(update_fields=["photo", "photo_attempts"])
+        transaction.on_commit(partial(_discard_published, storage, old_name))
+
+    if code is None:
+        return "processed"
+    logger.warning(
+        "Se retiró la foto preexistente de %s #%s: no se pudo anonimizar (%s).",
+        label,
+        pk,
+        code,
+    )
+    hook = _ON_FAILURE.get(label)
+    if hook is not None:
+        hook(instance, code)
+    return "failed"
+
+
+def _discard_published(storage, name: str) -> None:
+    try:
+        storage.delete(name)
+    except OSError:
+        logger.exception("Quedó sin borrar una foto reemplazada.")
 
 
 def _discard_pending(label: str, pk: int, name: str) -> None:
