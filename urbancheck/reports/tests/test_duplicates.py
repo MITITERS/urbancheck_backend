@@ -10,11 +10,11 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import square_boundary
 from urbancheck.reports import duplicates
 from urbancheck.reports.duplicates import find_duplicate
-from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.reports.models import Report
 from urbancheck.reports.tests.factories import ReportFactory
 

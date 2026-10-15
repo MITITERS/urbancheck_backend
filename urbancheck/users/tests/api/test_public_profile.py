@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -25,10 +27,10 @@ class TestPublicProfile:
         ReportFactory.create_batch(2, author=other)
 
         res = client.get(f"/api/users/{other.id}/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["name"] == "Carla"
         assert res.data["date_joined"] is not None
-        assert res.data["report_count"] == 2
+        assert res.data["report_count"] == 2  # noqa: PLR2004
         assert "avatar" in res.data
 
     def test_does_not_leak_email(self, auth_client):
@@ -43,7 +45,7 @@ class TestPublicProfile:
         ReportFactory.create_batch(3, author=other)
 
         res = client.get(f"/api/users/{other.id}/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["name"] == "Reservado"
         assert res.data["is_public"] is False
         assert res.data["date_joined"] is None
@@ -52,7 +54,7 @@ class TestPublicProfile:
     def test_own_profile_still_returns_full_data(self, auth_client):
         client, user = auth_client
         res = client.get(f"/api/users/{user.id}/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["email"] == user.email
 
     def test_anonymous_denied(self, db):
@@ -71,7 +73,7 @@ class TestPublicProfileReports:
         ReportFactory.create()  # de un tercero
 
         res = client.get(f"/api/reports/?author={other.id}")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert [r["id"] for r in res.data["results"]] == [newer.id, older.id]
 
     def test_private_profile_reports_are_hidden(self, auth_client):
@@ -89,7 +91,7 @@ class TestPublicProfileReports:
         ReportFactory.create_batch(2, author=user)
 
         res = client.get(f"/api/reports/?author={user.id}")
-        assert res.data["count"] == 2
+        assert res.data["count"] == 2  # noqa: PLR2004
 
 
 @pytest.mark.django_db
@@ -98,7 +100,7 @@ class TestPrivacyToggle:
         client, user = auth_client
         assert user.is_public is True
         res = client.patch("/api/users/me/", data={"is_public": False}, format="json")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         user.refresh_from_db()
         assert user.is_public is False
 
@@ -106,8 +108,8 @@ class TestPrivacyToggle:
         client, _ = auth_client
         other = UserFactory.create(name="Intacto")
         res = client.patch(
-            f"/api/users/{other.id}/", data={"name": "Hackeado"}, format="json"
+            f"/api/users/{other.id}/", data={"name": "Hackeado"}, format="json",
         )
-        assert res.status_code == 404
+        assert res.status_code == HTTPStatus.NOT_FOUND
         other.refresh_from_db()
         assert other.name == "Intacto"

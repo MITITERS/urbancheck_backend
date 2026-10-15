@@ -24,12 +24,12 @@ from urbancheck.anonymization.management.commands.benchmark_anonymization import
     BENCHMARK_DIR,
 )
 from urbancheck.anonymization.service import anonymize
+from urbancheck.anonymization.tasks import anonymize_photo
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports import resolution
 from urbancheck.reports import tasks
 from urbancheck.reports import vision
-from urbancheck.anonymization.tasks import anonymize_photo
 from urbancheck.reports.comparison import enqueue_comparison
 from urbancheck.reports.comparison import register_comparison
 from urbancheck.reports.management.commands import (

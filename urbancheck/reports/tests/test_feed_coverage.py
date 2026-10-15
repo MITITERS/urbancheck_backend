@@ -7,6 +7,8 @@ poder distinguir "todavía no hay reportes acá" de "estás fuera del área de t
 municipalidad adherida".
 """
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -108,7 +110,7 @@ class TestFeedScopedToCoverage:
     ):
         response = feed(citizen_client, VILLA_MARIA)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         returned = {report["id"] for report in response.data["results"]}
         assert returned == {r.id for r in two_cities["villa_maria_reports"]}
 
@@ -143,7 +145,7 @@ class TestOutOfCoverage:
     def test_feed_is_empty(self, citizen_client, two_cities):
         response = feed(citizen_client, UNCOVERED)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["count"] == 0
         assert response.data["results"] == []
 
@@ -166,15 +168,15 @@ class TestFeedWithoutLocation:
         """Sin ubicación el feed no se acota: un cliente viejo sigue andando."""
         response = feed(citizen_client)
 
-        assert response.data["count"] == 5
+        assert response.data["count"] == 5  # noqa: PLR2004
         assert "coverage" not in response.data
 
     def test_unreadable_coordinates_are_ignored(self, citizen_client, two_cities):
         """Un parámetro roto no rompe el feed ni devuelve 400."""
         response = citizen_client.get(FEED_URL, {"latitude": "acá", "longitude": ""})
 
-        assert response.status_code == 200
-        assert response.data["count"] == 5
+        assert response.status_code == HTTPStatus.OK
+        assert response.data["count"] == 5  # noqa: PLR2004
 
 
 class TestOwnReportsAreNotScoped:
@@ -204,7 +206,7 @@ class TestMapIsScopedToo:
     ):
         response = map_markers(citizen_client, VILLA_MARIA)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         returned = {marker["id"] for marker in response.data["results"]}
         assert returned == {r.id for r in two_cities["villa_maria_reports"]}
 
@@ -217,7 +219,7 @@ class TestMapIsScopedToo:
     def test_unscoped_without_location(self, citizen_client, two_cities):
         response = map_markers(citizen_client)
 
-        assert len(response.data["results"]) == 5
+        assert len(response.data["results"]) == 5  # noqa: PLR2004
         assert "coverage" not in response.data
 
 

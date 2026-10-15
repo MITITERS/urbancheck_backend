@@ -14,7 +14,7 @@ from urbancheck.users.tests.factories import UserFactory
 
 
 def make_photo():
-    from urbancheck.reports.tests.test_views import make_image_file
+    from urbancheck.reports.tests.test_views import make_image_file  # noqa: PLC0415
 
     return make_image_file()
 
@@ -39,7 +39,9 @@ class TestReportCreateSerializer:
     @pytest.mark.django_db
     def test_valid_with_address_only(self):
         serializer = ReportCreateSerializer(
-            data=self._data(latitude=None, longitude=None, address="Av. Corrientes 1234"),
+            data=self._data(
+                latitude=None, longitude=None, address="Av. Corrientes 1234",
+            ),
         )
         assert serializer.is_valid(), serializer.errors
 
@@ -51,7 +53,9 @@ class TestReportCreateSerializer:
 
     @pytest.mark.django_db
     def test_missing_location_is_invalid(self):
-        serializer = ReportCreateSerializer(data=self._data(latitude=None, longitude=None))
+        serializer = ReportCreateSerializer(
+            data=self._data(latitude=None, longitude=None),
+        )
         assert not serializer.is_valid()
         assert "location" in serializer.errors
 
@@ -105,7 +109,7 @@ class TestReportDetailSerializer:
         report = ReportFactory.create()
         CommentFactory.create_batch(2, report=report)
         data = self._serialize(report)
-        assert len(data["comments"]) == 2
+        assert len(data["comments"]) == 2  # noqa: PLR2004
         assert len(data["status_history"]) == 1
         assert data["status_history"][0]["status"] == report.status
 

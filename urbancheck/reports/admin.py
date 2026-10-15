@@ -91,10 +91,18 @@ class ResolutionAppealAdmin(ReadOnlyAdmin):
 
 @admin.register(Report)
 class ReportAdmin(admin.ModelAdmin):
-    list_display = ["id", "number", "category", "status", "municipality", "author", "created_at"]
+    list_display = [
+        "id",
+        "number",
+        "category",
+        "status",
+        "municipality",
+        "author",
+        "created_at",
+    ]
     list_filter = ["status", "category", "municipality"]
     search_fields = ["description", "address", "author__email"]
-    list_display += ["photo_status"]  # noqa: RUF005 (se lee como continuación)
+    list_display += ["photo_status"]
     list_filter += ["photo_status"]
     # La foto solo entra por la API, que la manda a difuminar (US-041/US-042).
     # Un formulario del admin la guardaría tal cual se subió, y el estado de
@@ -113,7 +121,9 @@ class ReportAdmin(admin.ModelAdmin):
         Historial, asignaciones, evidencias y apelaciones son de solo lectura
         sueltos, y eso haría que Django bloquee el borrado en cascada.
         """
-        deleted, model_count, perms_needed, protected = super().get_deleted_objects(objs, request)
+        deleted, model_count, perms_needed, protected = super().get_deleted_objects(
+            objs, request,
+        )
         if request.user.is_superuser:
             perms_needed = set()
         return deleted, model_count, perms_needed, protected
@@ -121,7 +131,14 @@ class ReportAdmin(admin.ModelAdmin):
 
 @admin.register(ReportStatusHistory)
 class ReportStatusHistoryAdmin(ReadOnlyAdmin):
-    list_display = ["report", "previous_status", "status", "changed_by", "origin", "created_at"]
+    list_display = [
+        "report",
+        "previous_status",
+        "status",
+        "changed_by",
+        "origin",
+        "created_at",
+    ]
     list_filter = ["status", "origin"]
 
 

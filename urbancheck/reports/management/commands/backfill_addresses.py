@@ -17,7 +17,10 @@ _THROTTLE_SECONDS = 1.1
 
 
 class Command(BaseCommand):
-    help = "Completa la dirección de los reportes que tienen coordenadas pero no dirección."
+    help = (
+        "Completa la dirección de los reportes que tienen coordenadas pero no "
+        "dirección."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(

@@ -41,7 +41,8 @@ def _no_geocoding_network(monkeypatch) -> None:
     """
 
     def _blocked(*args, **kwargs):
-        raise requests.RequestException("Network disabled in tests")
+        msg = "Network disabled in tests"
+        raise requests.RequestException(msg)
 
     monkeypatch.setattr("urbancheck.reports.geocoding.requests.get", _blocked)
     # Mismo criterio para el catálogo de provincias y localidades: ningún test

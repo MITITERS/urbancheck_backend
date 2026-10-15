@@ -8,6 +8,8 @@ visible.
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from django.conf import settings
 from rest_framework.test import APIClient
@@ -35,7 +37,7 @@ class TestFeedPagination:
         client, _ = auth_client
         ReportFactory.create_batch(TOTAL)
         res = client.get("/api/reports/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["count"] == TOTAL
         assert len(res.data["results"]) == PAGE_SIZE
         assert res.data["next"] is not None
@@ -45,7 +47,7 @@ class TestFeedPagination:
         client, _ = auth_client
         ReportFactory.create_batch(TOTAL)
         res = client.get("/api/reports/?page=2")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert len(res.data["results"]) == EXTRA
         assert res.data["next"] is None
 
@@ -72,7 +74,7 @@ class TestFeedPagination:
         client, _ = auth_client
         ReportFactory.create_batch(3)
         res = client.get("/api/reports/?page=99")
-        assert res.status_code == 404
+        assert res.status_code == HTTPStatus.NOT_FOUND
 
     def test_filters_survive_pagination(self, auth_client):
         """El scroll infinito filtrado debe seguir filtrando en la página 2."""
