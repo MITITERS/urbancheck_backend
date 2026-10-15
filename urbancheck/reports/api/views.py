@@ -601,13 +601,20 @@ class ReportViewSet(
         serializer = PrivacyRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        evidence = None
+        evidence = appeal = None
         evidence_id = serializer.validated_data.get("evidence")
+        appeal_id = serializer.validated_data.get("appeal")
         if evidence_id is not None:
             evidence = report.resolution_evidences.filter(pk=evidence_id).first()
             if evidence is None:
                 raise ValidationError(
                     {"evidence": "La imagen no pertenece a este reporte."},
+                )
+        if appeal_id is not None:
+            appeal = report.resolution_appeals.filter(pk=appeal_id).first()
+            if appeal is None:
+                raise ValidationError(
+                    {"appeal": "La imagen no pertenece a este reporte."},
                 )
 
         try:
@@ -615,6 +622,7 @@ class ReportViewSet(
                 report=report,
                 reporter=request.user,
                 evidence=evidence,
+                appeal=appeal,
             )
         except DuplicateComplaintError:
             return Response(

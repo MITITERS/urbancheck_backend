@@ -197,40 +197,44 @@ def notify_resolution_appealed(appeal) -> list[Notification]:
 def notify_image_removed(
     report,
     *,
-    from_resolution_evidence: bool,
+    removed: str,
     still_hidden: bool = False,
 ) -> Notification:
     """Avisa al autor qué se retiró por protección de datos (US-043).
 
-    Son dos consecuencias distintas y el mensaje dice cuál:
+    ``removed`` es ``image_kind`` de la solicitud: ``"report"``,
+    ``"resolution_evidence"`` o ``"resolution_appeal"``. Son dos consecuencias
+    distintas y el mensaje dice cuál:
 
     - **La foto del reporte**: se retira el reporte entero, para siempre. Un
       reporte sin foto no se vuelve a publicar. Se le dice que puede volver a
       reportar el problema con otra foto, para que no se quede sin reclamo.
-    - **La foto de un cierre del operario**: el reporte conserva la suya y
-      sigue como estaba, salvo que otra imagen lo mantenga en revisión.
+    - **La foto de un cierre del operario o de su apelación**: el reporte
+      conserva la suya y sigue como estaba, salvo que otra imagen lo mantenga
+      en revisión.
 
     No lleva ``actor``, aunque lo decidió un administrador: ante el vecino
     responde la plataforma, con el mismo criterio de protección del personal
     de US-038. Quién resolvió queda en el registro de la solicitud.
     """
-    if not from_resolution_evidence:
+    if removed == "report":
         message = (
             "Retiramos tu reporte porque su foto mostraba un rostro o una patente "
             "sin difuminar. Ya no está publicado; si el problema sigue, podés "
             "reportarlo de nuevo con otra foto."
         )
-    elif still_hidden:
-        message = (
-            "Retiramos la foto del trabajo realizado en tu reporte porque mostraba "
-            "un dato personal. El reporte sigue oculto mientras revisamos otra de "
-            "sus imágenes."
-        )
     else:
-        message = (
-            "Retiramos la foto del trabajo realizado en tu reporte porque mostraba "
-            "un dato personal. El reporte sigue publicado como estaba."
+        which = (
+            "la foto de tu objeción al cierre"
+            if removed == "resolution_appeal"
+            else "la foto del trabajo realizado en tu reporte"
         )
+        rest = (
+            "El reporte sigue oculto mientras revisamos otra de sus imágenes."
+            if still_hidden
+            else "El reporte sigue publicado como estaba."
+        )
+        message = f"Retiramos {which} porque mostraba un dato personal. {rest}"
     notification = Notification.objects.create(
         recipient=report.author,
         actor=None,

@@ -75,7 +75,16 @@ class ResolutionAppealSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResolutionAppeal
-        fields = ["id", "photo", "photo_status", "reason", "created_at"]
+        # ``photo_removed_at``: la foto se retiró por protección de datos
+        # (US-043) y la app muestra "imagen retirada" en su lugar.
+        fields = [
+            "id",
+            "photo",
+            "photo_status",
+            "photo_removed_at",
+            "reason",
+            "created_at",
+        ]
         read_only_fields = fields
 
 
@@ -511,11 +520,19 @@ COMPLAINT_REASON_REQUIRED_MESSAGE = "El motivo es obligatorio."
 class PrivacyRequestCreateSerializer(serializers.Serializer):
     """La solicitud de revisión por dato personal visible (US-043).
 
-    Sin ``evidence`` se denuncia la foto del reporte; con ella, la foto de ese
-    parte de trabajo del operario. El reporte lo fija la URL.
+    Sin ``evidence`` ni ``appeal`` se denuncia la foto del reporte; con
+    ``evidence``, la de ese parte de trabajo del operario, y con ``appeal``, la
+    de esa objeción del autor. El reporte lo fija la URL.
     """
 
     evidence = serializers.IntegerField(required=False, allow_null=True)
+    appeal = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if attrs.get("evidence") is not None and attrs.get("appeal") is not None:
+            msg = "Indicá una sola imagen: la de un cierre o la de una objeción."
+            raise serializers.ValidationError(msg)
+        return attrs
 
 
 class ComplaintCreateSerializer(serializers.Serializer):
@@ -573,6 +590,7 @@ class PrivacyRequestReceiptSerializer(serializers.ModelSerializer):
     received_at = serializers.DateTimeField(source="created_at", read_only=True)
     deadline = serializers.SerializerMethodField()
     evidence = serializers.IntegerField(source="resolution_evidence_id", read_only=True)
+    appeal = serializers.IntegerField(source="resolution_appeal_id", read_only=True)
 
     class Meta:
         model = ReportComplaint
@@ -580,6 +598,7 @@ class PrivacyRequestReceiptSerializer(serializers.ModelSerializer):
             "id",
             "report",
             "evidence",
+            "appeal",
             "reason",
             "status",
             "received_at",
