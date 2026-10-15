@@ -699,6 +699,9 @@ class ResolutionAppeal(PendingPhotoMixin, models.Model):
     # vacío: con la publicación diferida (US-042) la apelación nace sin foto y
     # la recibe recién cuando la tarea termina de difuminarla.
     photo = models.ImageField(upload_to="appeals/%Y/%m/", blank=True)
+    # Retirada por protección de datos (US-043, escenario 1): la apelación y su
+    # motivo quedan; la foto no.
+    photo_removed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -862,9 +865,11 @@ class ReportComplaint(models.Model):
     por motivo.
 
     Una denuncia por dato personal apunta a una imagen concreta: la del
-    reporte, o la de un parte de trabajo del operario cuando
-    ``resolution_evidence`` está cargado (US-043, escenario 11). En los dos
-    casos oculta el reporte entero, porque es el reporte lo que se publica. Las
+    reporte, la de un parte de trabajo del operario cuando
+    ``resolution_evidence`` está cargado (US-043, escenario 11), o la de una
+    apelación del autor cuando lo está ``resolution_appeal`` (escenario 1).
+    En todos los casos oculta el reporte entero, porque es el reporte lo que
+    se publica. Las
     de contenido (US-021) apuntan al reporte y no a un archivo: ``image_name``
     queda vacío y no ocultan nada.
 
@@ -920,6 +925,14 @@ class ReportComplaint(models.Model):
         blank=True,
         related_name="complaints",
     )
+    # Nulo salvo cuando lo denunciado es la foto de una apelación (US-048).
+    resolution_appeal = models.ForeignKey(
+        ResolutionAppeal,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
     # El archivo denunciado **tal como se llamaba al recibir la solicitud**. Es
     # la referencia a la imagen del escenario 1, y también lo que se borra: si
     # el autor reemplaza la foto mientras la solicitud espera, lo que expone el
@@ -964,10 +977,23 @@ class ReportComplaint(models.Model):
             # se identifica con ``resolution_evidence`` nulo, y con la semántica
             # por defecto de SQL dos nulos nunca chocan.
             models.UniqueConstraint(
-                fields=["reporter", "report", "resolution_evidence", "reason"],
+                fields=[
+                    "reporter",
+                    "report",
+                    "resolution_evidence",
+                    "resolution_appeal",
+                    "reason",
+                ],
                 condition=models.Q(status="pendiente"),
                 nulls_distinct=False,
                 name="unique_pending_complaint_per_image",
+            ),
+            # Una imagen por denuncia: la del reporte, la de un cierre o la de
+            # una apelación, nunca dos a la vez.
+            models.CheckConstraint(
+                condition=models.Q(resolution_evidence__isnull=True)
+                | models.Q(resolution_appeal__isnull=True),
+                name="complaint_targets_one_image",
             ),
             # Una sola denuncia de contenido por persona, reporte y motivo, para
             # siempre y no solo mientras está pendiente (US-021, escenario 6):
@@ -988,6 +1014,19 @@ class ReportComplaint(models.Model):
     @property
     def is_pending(self) -> bool:
         return self.status == self.Status.PENDIENTE
+
+    @property
+    def target(self):
+        """El dueño de la imagen denunciada: cierre, apelación o el reporte."""
+        return self.resolution_evidence or self.resolution_appeal or self.report
+
+    @property
+    def image_kind(self) -> str:
+        if self.resolution_evidence_id is not None:
+            return "resolution_evidence"
+        if self.resolution_appeal_id is not None:
+            return "resolution_appeal"
+        return "report"
 
     @property
     def recipient(self) -> str:

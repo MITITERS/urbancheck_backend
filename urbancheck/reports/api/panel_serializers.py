@@ -14,6 +14,7 @@ from urbancheck.reports.comparison import needs_closure_review
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportAreaAssignment
+from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionComparison
@@ -155,6 +156,7 @@ class PanelResolutionAppealSerializer(serializers.ModelSerializer):
             "id",
             "photo",
             "photo_status",
+            "photo_removed_at",
             "reason",
             "created_at",
             "author",
@@ -463,6 +465,43 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
             "appeal_count",
         ]
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        """Sin la imagen que está en revisión por dato personal (US-043).
+
+        El agente sigue viendo el reporte y sabe por qué el vecino no lo ve
+        (``under_privacy_review``), pero no la foto denunciada: mientras el
+        administrador no la resuelve, puede mostrar un rostro o una patente sin
+        difuminar, y el panel no es la excepción a la regla del punto 6.1. Se
+        retiene solo la imagen denunciada —la del reporte o la de un cierre—,
+        no las demás.
+        """
+        data = super().to_representation(instance)
+        under_review = set(
+            ReportComplaint.objects.filter(
+                report=instance,
+                status=ReportComplaint.Status.PENDIENTE,
+                reason__in=ReportComplaint.HIDING_REASONS,
+            ).values_list("image_name", flat=True),
+        )
+        if not under_review:
+            return data
+        if instance.photo.name in under_review:
+            data["photo"] = None
+        names = {
+            evidence.pk: evidence.photo.name
+            for evidence in instance.resolution_evidences.all()
+        }
+        for evidence in data.get("resolution_evidences", []):
+            if names.get(evidence["id"]) in under_review:
+                evidence["photo"] = None
+        appeals = {
+            appeal.pk: appeal.photo.name for appeal in instance.resolution_appeals.all()
+        }
+        for appeal in data.get("resolution_appeals", []):
+            if appeals.get(appeal["id"]) in under_review:
+                appeal["photo"] = None
+        return data
 
     def get_objection_deadline(self, obj) -> str | None:
         """Hasta cuándo el autor puede objetar el cierre (US-047).
