@@ -39,7 +39,10 @@ def synthetic_set(tmp_path) -> Path:
 
 class TestBenchmarkCommand:
     def test_it_reports_rate_false_negatives_and_times(self, synthetic_set, tmp_path):
-        """CP-041-09: informe con tasa por tipo, falsos negativos y tiempos."""
+        """CP-041-28 (US-041 E9).
+
+        informe con tasa por tipo, falsos negativos y tiempos.
+        """
         report = tmp_path / "informe.md"
         out = io.StringIO()
 
@@ -64,7 +67,10 @@ class TestBenchmarkCommand:
         synthetic_set,
         settings,
     ):
-        """CP-041-10: sin argumento, la carpeta sale de la configuración."""
+        """CP-041-29 (US-041 E9).
+
+        sin argumento, la carpeta sale de la configuración.
+        """
         settings.ANONYMIZATION_REFERENCE_SET = str(synthetic_set)
         out = io.StringIO()
 
@@ -73,12 +79,18 @@ class TestBenchmarkCommand:
         assert "2 imágenes" in out.getvalue()
 
     def test_without_a_set_it_says_what_is_missing(self, tmp_path):
-        """CP-041-11: sin set, un error claro y no un informe vacío."""
+        """CP-041-30 (US-041 E9).
+
+        sin set, un error claro y no un informe vacío.
+        """
         with pytest.raises(CommandError, match=r"manifest\.json"):
             call_command("benchmark_anonymization", str(tmp_path / "vacia"))
 
     def test_the_reference_set_is_not_versioned(self):
-        """CP-041-12: las fotos de referencia nunca entran al repositorio."""
+        """CP-041-31 (US-041 E9).
+
+        las fotos de referencia nunca entran al repositorio.
+        """
         root = Path(__file__).resolve().parents[3]
         ignored = (root / ".gitignore").read_text()
         docker_ignored = (root / ".dockerignore").read_text()
@@ -90,7 +102,10 @@ class TestBenchmarkCommand:
 
 class TestModelIntegrity:
     def test_the_shipped_weights_match_their_published_checksums(self):
-        """CP-041-13: los pesos versionados son los publicados."""
+        """CP-041-38 (US-041 Modelos).
+
+        los pesos versionados son los publicados.
+        """
         for path in (detectors.FACE_MODEL_PATH, detectors.PLATE_MODEL_PATH):
             assert verified_model_path(path) == path
         assert set(MODEL_SHA256) == {
@@ -99,7 +114,10 @@ class TestModelIntegrity:
         }
 
     def test_a_tampered_model_is_refused(self, tmp_path):
-        """CP-041-14: un peso alterado no se carga."""
+        """CP-041-39 (US-041 Modelos).
+
+        un peso alterado no se carga.
+        """
         fake = tmp_path / detectors.FACE_MODEL_PATH.name
         fake.write_bytes(b"no es el modelo")
 
@@ -109,7 +127,10 @@ class TestModelIntegrity:
 
 class TestMeasureCommand:
     def test_it_reports_time_cpu_and_memory(self, settings, tmp_path):
-        """CP-041-15: la medición del escenario 8 informa reloj, CPU y memoria."""
+        """CP-041-27 (US-041 E8).
+
+        la medición del escenario 8 informa reloj, CPU y memoria.
+        """
         settings.ANONYMIZATION_REFERENCE_SET = str(tmp_path / "sin-set")
         out = io.StringIO()
 

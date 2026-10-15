@@ -60,7 +60,10 @@ def appeal(report):
 
 class TestTheAppealPhoto:
     def test_anyone_can_ask_to_review_it(self, report, appeal):
-        """CP-043-12: se denuncia la foto de una apelación y el reporte se oculta."""
+        """CP-043-10 (US-043 E1).
+
+        se denuncia la foto de una apelación y el reporte se oculta.
+        """
         response = client_for(UserFactory.create()).post(
             f"/api/reports/{report.pk}/privacy-request/",
             {"appeal": appeal.pk},
@@ -75,7 +78,10 @@ class TestTheAppealPhoto:
         assert not Report.objects.publicly_visible().filter(pk=report.pk).exists()
 
     def test_an_appeal_of_another_report_is_rejected(self, report):
-        """CP-043-13: la imagen tiene que pertenecer al reporte de la URL."""
+        """CP-043-11 (US-043 E1).
+
+        la imagen tiene que pertenecer al reporte de la URL.
+        """
         foreign = ResolutionAppealFactory.create()
 
         response = client_for(UserFactory.create()).post(
@@ -88,7 +94,10 @@ class TestTheAppealPhoto:
         assert "appeal" in response.data
 
     def test_one_image_per_request(self, report, appeal):
-        """CP-043-14: no se denuncian dos imágenes en la misma solicitud."""
+        """CP-043-12 (US-043 E1).
+
+        no se denuncian dos imágenes en la misma solicitud.
+        """
         response = client_for(UserFactory.create()).post(
             f"/api/reports/{report.pk}/privacy-request/",
             {"appeal": appeal.pk, "evidence": 1},
@@ -102,7 +111,10 @@ class TestTheAppealPhoto:
         report,
         appeal,
     ):
-        """CP-043-15: se borra la foto; el reporte y el motivo de la objeción quedan."""
+        """CP-043-67 (US-043 E11).
+
+        se borra la foto; el reporte y el motivo de la objeción quedan.
+        """
         complaint = ReportComplaintFactory.create(
             report=report,
             resolution_appeal=appeal,
@@ -128,7 +140,10 @@ class TestTheAppealPhoto:
         assert "objeción" in notice.message
 
     def test_the_citizen_payload_says_the_photo_was_withdrawn(self, report, appeal):
-        """CP-043-16: la app sabe que la foto de la objeción se retiró."""
+        """CP-043-68 (US-043 E11).
+
+        la app sabe que la foto de la objeción se retiró.
+        """
         complaint = ReportComplaintFactory.create(
             report=report,
             resolution_appeal=appeal,
@@ -201,7 +216,10 @@ class TestTheDjangoAdminInbox:
         model_admin,
         report,
     ):
-        """CP-043-17: la acción del admin borra el archivo y retira el reporte."""
+        """CP-043-41 (US-043 E5).
+
+        la acción del admin borra el archivo y retira el reporte.
+        """
         complaint = ReportComplaintFactory.create(report=report)
         name = report.photo.name
         admin = PlatformAdminFactory.create(is_staff=True)
@@ -217,7 +235,10 @@ class TestTheDjangoAdminInbox:
         assert not on_disk(name)
 
     def test_dismissing_from_the_admin_restores_the_report(self, model_admin, report):
-        """CP-043-18: la acción de desestimar devuelve la visibilidad."""
+        """CP-043-46 (US-043 E6).
+
+        la acción de desestimar devuelve la visibilidad.
+        """
         complaint = ReportComplaintFactory.create(report=report)
         admin = PlatformAdminFactory.create(is_staff=True)
 
@@ -231,7 +252,10 @@ class TestTheDjangoAdminInbox:
         assert Report.objects.publicly_visible().filter(pk=report.pk).exists()
 
     def test_content_complaints_are_not_touched(self, model_admin, report):
-        """CP-043-19: las de contenido son del agente (US-049), no se resuelven acá."""
+        """CP-043-65 (US-043 E10).
+
+        las de contenido son del agente (US-049), no se resuelven acá.
+        """
         complaint = ReportComplaintFactory.create(
             report=report,
             reason=ReportComplaint.Reason.REPORTE_FALSO,
@@ -246,7 +270,10 @@ class TestTheDjangoAdminInbox:
         assert complaint.is_pending
 
     def test_only_the_platform_admin_can_resolve(self, model_admin):
-        """CP-043-20: un agente con acceso al admin no ve las acciones."""
+        """CP-043-64 (US-043 E10).
+
+        un agente con acceso al admin no ve las acciones.
+        """
         agent = MunicipalAgentFactory.create(is_staff=True)
 
         assert not model_admin.has_resolve_permission(admin_request(agent))
@@ -255,7 +282,10 @@ class TestTheDjangoAdminInbox:
         )
 
     def test_the_inbox_flags_overdue_requests(self, model_admin, report, settings):
-        """CP-043-21: la columna "fuera de plazo" del admin."""
+        """CP-043-52 (US-043 E7).
+
+        la columna "fuera de plazo" del admin.
+        """
         complaint = ReportComplaintFactory.create(report=report)
         settings.PERSONAL_DATA_REVIEW_MINUTES = 0
 

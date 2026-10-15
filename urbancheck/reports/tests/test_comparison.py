@@ -209,7 +209,9 @@ class TestTriggeredByTheClose:
         enqueued,
         django_capture_on_commit_callbacks,
     ):
-        """El disparo se movió del cierre al final del difuminado (US-042).
+        """CP-015-01 (US-015 E1).
+
+        El disparo se movió del cierre al final del difuminado (US-042).
 
         La fila de comparación se crea igual al cerrar, para que el panel pueda
         mostrar "pendiente" desde ese momento. Lo que espera es el envío: lo
@@ -235,6 +237,7 @@ class TestTriggeredByTheClose:
         monkeypatch,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-02 (US-015 E1)."""
         def broken_transition(*args, **kwargs):
             raise RuntimeError
 
@@ -263,6 +266,7 @@ class TestTriggeredByTheClose:
         fake_vision,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-03 (US-015 E1)."""
         fake = fake_vision(Verdict.CONSISTENT)
 
         run(
@@ -304,6 +308,7 @@ class TestVerdicts:
         agent_client,
         in_progress,
     ):
+        """CP-015-04 (US-015 E2) · CP-015-22 (US-015 E9)."""
         fake_vision(Verdict.CONSISTENT)
 
         comparison = run(evidence)
@@ -333,6 +338,7 @@ class TestVerdicts:
         in_progress,
         verdict,
     ):
+        """CP-015-05 (US-015 E3)."""
         fake_vision(verdict)
 
         run(evidence)
@@ -351,6 +357,7 @@ class TestVerdicts:
         in_progress,
         area,
     ):
+        """CP-015-06 (US-015 E3)."""
         fake_vision(Verdict.PROBLEM_PERSISTS)
         run(evidence)
         consistent = ResolutionEvidenceFactory.create(
@@ -379,7 +386,10 @@ class TestVerdicts:
         agent_client,
         in_progress,
     ):
-        """Pasada la ventana de confirmación no hay nada que priorizar."""
+        """CP-015-07 (US-015 E3).
+
+        Pasada la ventana de confirmación no hay nada que priorizar.
+        """
         fake_vision(Verdict.DIFFERENT_PLACE)
         run(evidence)
 
@@ -393,6 +403,7 @@ class TestVerdicts:
         agent_client,
         in_progress,
     ):
+        """CP-015-08 (US-015 E3)."""
         detail = agent_client.get(f"/api/panel/reports/{in_progress.pk}/").data
         shown = detail["resolution_evidences"][0]["comparison"]
 
@@ -426,6 +437,7 @@ class TestNoEffectOnTheReport:
         in_progress,
         verdict,
     ):
+        """CP-015-09 (US-015 E4)."""
         in_progress.refresh_from_db()
         before = (
             in_progress.status,
@@ -455,6 +467,7 @@ class TestNoEffectOnTheReport:
         settings,
         verdict,
     ):
+        """CP-015-10 (US-015 E4)."""
         settings.RESOLUTION_OBJECTION_MINUTES = 2
         fake_vision(verdict)
         run(evidence)
@@ -494,6 +507,7 @@ class TestServiceFailure:
         in_progress,
         agent_client,
     ):
+        """CP-015-11 (US-015 E5)."""
         settings.RESOLUTION_COMPARISON_MAX_RETRIES = 2
         fake = fake_vision(TransientVisionError("http_503"))
 
@@ -515,6 +529,7 @@ class TestServiceFailure:
         assert shown["verdict"] is None
 
     def test_a_transient_failure_can_recover(self, evidence, fake_vision):
+        """CP-015-12 (US-015 E5)."""
         fake_vision(TransientVisionError("timeout"), Verdict.CONSISTENT)
 
         comparison = run(evidence)
@@ -527,6 +542,7 @@ class TestServiceFailure:
         [InvalidVisionResponseError("schema_mismatch"), VisionError("http_401")],
     )
     def test_a_definitive_failure_is_not_retried(self, evidence, fake_vision, error):
+        """CP-015-13 (US-015 E5)."""
         fake = fake_vision(error)
 
         comparison = run(evidence)
@@ -536,6 +552,7 @@ class TestServiceFailure:
         assert comparison.failure_reason == error.code
 
     def test_an_unexpected_error_does_not_leave_it_pending(self, evidence, fake_vision):
+        """CP-015-14 (US-015 E5)."""
         fake_vision(ZeroDivisionError())
 
         comparison = run(evidence)
@@ -550,6 +567,7 @@ class TestServiceFailure:
         monkeypatch,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-15 (US-015 E5)."""
         def broker_down(*args, **kwargs):
             raise ConnectionError
 
@@ -578,6 +596,7 @@ class TestServiceFailure:
         enqueued,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-16 (US-015 E5)."""
         settings.RESOLUTION_COMPARISON_API_KEY = ""
 
         with django_capture_on_commit_callbacks(execute=True):
@@ -601,6 +620,7 @@ class TestWithoutImage:
         fake_vision,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-17 (US-015 E6)."""
         evidence = closed_with(
             operator_client,
             in_progress,
@@ -621,7 +641,9 @@ class TestWithoutImage:
         enqueued,
         django_capture_on_commit_callbacks,
     ):
-        """Sin material no se encola, y eso se decide al difuminar, no al cerrar.
+        """CP-015-18 (US-015 E6).
+
+        Sin material no se encola, y eso se decide al difuminar, no al cerrar.
 
         Desde US-042 el cierre solo **registra** la comparación: en ese momento
         la foto todavía está entrando a la cola de difuminado y no se puede
@@ -654,6 +676,7 @@ class TestSecondClose:
         agent_client,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-19 (US-015 E7)."""
         first = closed_with(
             operator_client,
             in_progress,
@@ -724,6 +747,7 @@ class TestRestrictedVisibility:
         ids=["author", "citizen", "validator"],
     )
     def test_the_citizen_surface_does_not_carry_it(self, compared, make_user):
+        """CP-015-20 (US-015 E8)."""
         client = APIClient()
         client.force_authenticate(make_user(compared))
 
@@ -733,6 +757,7 @@ class TestRestrictedVisibility:
             assert not contains_key(data, "needs_closure_review")
 
     def test_the_operator_does_not_see_it(self, compared, operator_client):
+        """CP-015-21 (US-015 E8)."""
         for url in (
             f"/api/operator/reports/{compared.pk}/",
             "/api/operator/reports/history/",
@@ -758,6 +783,7 @@ class TestOnlyBlurredImagesLeave:
         fake_vision,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-23 (US-015 E10)."""
         raw = synthetic_photo()
         upload = io.BytesIO(raw)
         upload.name = self.SENSITIVE
@@ -869,6 +895,7 @@ class TestVisionClient:
         )
 
     def test_a_valid_answer_is_parsed(self, respond):
+        """CP-015-29 (US-015 Cliente)."""
         answer = {
             "veredicto": "problema_persistente",
             "explicacion": " Sigue el pozo. ",
@@ -889,6 +916,7 @@ class TestVisionClient:
         respond,
         settings,
     ):
+        """CP-015-30 (US-015 Cliente)."""
         settings.RESOLUTION_COMPARISON_MAX_SIDE_PX = 64
         answer = {"veredicto": "consistente", "explicacion": "Ok."}
         sent = respond(FakeResponse(body=chat_body(json.dumps(answer))))
@@ -922,12 +950,14 @@ class TestVisionClient:
         ids=["text", "unknown-verdict", "missing", "too-long", "list", "fenced"],
     )
     def test_an_answer_outside_the_schema_is_rejected(self, respond, content):
+        """CP-015-31 (US-015 Cliente)."""
         respond(FakeResponse(body=chat_body(content)))
 
         with pytest.raises(InvalidVisionResponseError):
             self.compare()
 
     def test_a_body_that_is_not_json_is_rejected(self, respond):
+        """CP-015-32 (US-015 Cliente)."""
         respond(FakeResponse(body=None))
 
         with pytest.raises(InvalidVisionResponseError):
@@ -935,6 +965,7 @@ class TestVisionClient:
 
     @pytest.mark.parametrize("status", [429, 500, 503])
     def test_rate_limits_and_server_errors_are_transient(self, respond, status):
+        """CP-015-33 (US-015 Cliente)."""
         respond(FakeResponse(status_code=status))
 
         with pytest.raises(TransientVisionError) as caught:
@@ -943,6 +974,7 @@ class TestVisionClient:
 
     @pytest.mark.parametrize("status", [400, 401, 403])
     def test_client_errors_are_definitive(self, respond, status):
+        """CP-015-34 (US-015 Cliente)."""
         respond(FakeResponse(status_code=status))
 
         with pytest.raises(VisionError) as caught:
@@ -954,6 +986,7 @@ class TestVisionClient:
         [(requests.Timeout(), "timeout"), (requests.ConnectionError(), "network")],
     )
     def test_network_failures_are_transient(self, respond, exc, code):
+        """CP-015-35 (US-015 Cliente)."""
         respond(exc=exc)
 
         with pytest.raises(TransientVisionError) as caught:
@@ -961,6 +994,7 @@ class TestVisionClient:
         assert caught.value.code == code
 
     def test_an_unreadable_image_is_definitive(self, respond):
+        """CP-015-36 (US-015 Cliente)."""
         respond(FakeResponse(body=chat_body("{}")))
 
         with pytest.raises(VisionError) as caught:
@@ -980,6 +1014,7 @@ class TestRetryCommand:
         fake_vision,
         django_capture_on_commit_callbacks,
     ):
+        """CP-015-37 (US-015 Reintento)."""
         settings.RESOLUTION_COMPARISON_API_KEY = ""
         evidence = closed_with(
             operator_client,
@@ -1002,7 +1037,10 @@ class TestRetryCommand:
         fake_vision,
         monkeypatch,
     ):
-        """El entorno local propaga las excepciones de Celery en modo eager."""
+        """CP-015-38 (US-015 Reintento).
+
+        El entorno local propaga las excepciones de Celery en modo eager.
+        """
         settings.CELERY_TASK_EAGER_PROPAGATES = True
         monkeypatch.setattr(retry_command.time, "sleep", lambda seconds: None)
         comparison = ResolutionComparisonFactory.create(
@@ -1019,6 +1057,7 @@ class TestRetryCommand:
         assert comparison.attempts == 2  # noqa: PLR2004
 
     def test_a_stale_pending_one_is_picked_up(self, fake_vision):
+        """CP-015-39 (US-015 Reintento)."""
         stale = ResolutionComparisonFactory.create(status=Status.PENDING, verdict="")
         ResolutionComparison.objects.filter(pk=stale.pk).update(
             requested_at=timezone.now() - timedelta(hours=1),
@@ -1036,12 +1075,14 @@ class TestRetryCommand:
         assert fresh.status == Status.PENDING
 
     def test_without_key_it_refuses(self, settings):
+        """CP-015-40 (US-015 Reintento)."""
         settings.RESOLUTION_COMPARISON_API_KEY = ""
 
         with pytest.raises(CommandError):
             call_command("retry_resolution_comparisons")
 
     def test_it_does_not_touch_completed_or_missing_material(self, fake_vision):
+        """CP-015-41 (US-015 Reintento)."""
         done = ResolutionComparisonFactory.create()
         missing = ResolutionComparisonFactory.create(
             status=Status.NO_MATERIAL,

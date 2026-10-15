@@ -83,6 +83,7 @@ class TestFilingAComplaint:
 
     @pytest.mark.parametrize("reason", list(Reason))
     def test_it_is_registered_for_every_reason(self, report, neighbour, reason):
+        """CP-021-01 (US-021 E1)."""
         before = timezone.now()
 
         response = file(
@@ -102,12 +103,14 @@ class TestFilingAComplaint:
         assert complaint.is_pending
 
     def test_the_comment_is_optional(self, report, neighbour):
+        """CP-021-02 (US-021 E1)."""
         response = file(client_for(neighbour), report, reason=Reason.REPORTE_FALSO)
 
         assert response.status_code == HTTP_CREATED
         assert ReportComplaint.objects.get().comment == ""
 
     def test_a_comment_that_is_too_long_is_rejected(self, report, neighbour):
+        """CP-021-03 (US-021 E1)."""
         response = file(
             client_for(neighbour),
             report,
@@ -126,6 +129,7 @@ class TestFilingAComplaint:
         neighbour,
         reason,
     ):
+        """CP-021-04 (US-021 E1)."""
         response = file(client_for(neighbour), report, reason=reason)
 
         assert "municipio" in response.data["detail"]
@@ -136,6 +140,7 @@ class TestFilingAComplaint:
         report,
         neighbour,
     ):
+        """CP-021-05 (US-021 E1)."""
         response = file(client_for(neighbour), report, reason=Reason.DATO_PERSONAL)
 
         assert "24 horas" in response.data["detail"]
@@ -145,6 +150,7 @@ class TestFilingAComplaint:
         report,
         neighbour,
     ):
+        """CP-021-06 (US-021 E1)."""
         file(client_for(neighbour), report, reason=Reason.CONTENIDO_INAPROPIADO)
 
         complaint = ReportComplaint.objects.get()
@@ -153,6 +159,7 @@ class TestFilingAComplaint:
 
     @pytest.mark.parametrize("factory", [ValidatorFactory, MunicipalAgentFactory])
     def test_work_accounts_use_their_personal_account(self, report, factory):
+        """CP-021-07 (US-021 E1)."""
         worker = factory.create(municipality=report.municipality)
 
         response = file(client_for(worker), report, reason=Reason.REPORTE_FALSO)
@@ -161,6 +168,7 @@ class TestFilingAComplaint:
         assert not ReportComplaint.objects.exists()
 
     def test_the_operator_is_rejected(self, report):
+        """CP-021-08 (US-021 E1)."""
         response = file(
             client_for(OperatorFactory.create()),
             report,
@@ -170,6 +178,7 @@ class TestFilingAComplaint:
         assert response.status_code == HTTP_FORBIDDEN
 
     def test_a_report_that_does_not_exist_answers_404(self, neighbour):
+        """CP-021-09 (US-021 E1)."""
         response = client_for(neighbour).post(
             "/api/reports/999999/complaints/",
             {"reason": Reason.REPORTE_FALSO},
@@ -183,6 +192,7 @@ class TestReasonCatalog:
     """Escenario 2: los tres motivos, declarados en un único lugar."""
 
     def test_it_offers_the_three_reasons(self, neighbour):
+        """CP-021-11 (US-021 E2)."""
         response = client_for(neighbour).get("/api/reports/complaint-reasons/")
 
         assert response.status_code == HTTP_OK
@@ -193,6 +203,7 @@ class TestReasonCatalog:
         ]
 
     def test_each_reason_carries_its_recipient(self, neighbour):
+        """CP-021-12 (US-021 E2)."""
         response = client_for(neighbour).get("/api/reports/complaint-reasons/")
 
         assert {row["value"]: row["recipient"] for row in response.data} == {
@@ -202,11 +213,15 @@ class TestReasonCatalog:
         }
 
     def test_every_reason_has_a_recipient(self):
-        """Un motivo nuevo que no se sume al catálogo no puede pasar inadvertido."""
+        """CP-021-13 (US-021 E2).
+
+        Un motivo nuevo que no se sume al catálogo no puede pasar inadvertido.
+        """
         assert set(ReportComplaint.REASON_RECIPIENTS) == set(Reason)
         assert len(reason_catalog()) == len(Reason)
 
     def test_it_requires_a_session(self):
+        """CP-021-14 (US-021 E2)."""
         response = APIClient().get("/api/reports/complaint-reasons/")
 
         assert response.status_code in {401, 403}
@@ -222,6 +237,7 @@ class TestRouting:
         neighbour,
         reason,
     ):
+        """CP-021-15 (US-021 E3)."""
         response = file(client_for(neighbour), report, reason=reason)
 
         complaint = ReportComplaint.objects.get()
@@ -235,6 +251,7 @@ class TestRouting:
         report,
         neighbour,
     ):
+        """CP-021-16 (US-021 E3)."""
         response = file(client_for(neighbour), report, reason=Reason.DATO_PERSONAL)
 
         complaint = ReportComplaint.objects.get()
@@ -248,6 +265,7 @@ class TestRouting:
         report,
         neighbour,
     ):
+        """CP-021-17 (US-021 E3)."""
         file(client_for(neighbour), report, reason=Reason.REPORTE_FALSO)
 
         complaint = ReportComplaint.objects.for_municipal_review().get()
@@ -258,7 +276,10 @@ class TestRouting:
         report,
         neighbour,
     ):
-        """Es el único motivo con efecto inmediato, y lo produce US-043."""
+        """CP-021-18 (US-021 E3).
+
+        Es el único motivo con efecto inmediato, y lo produce US-043.
+        """
         file(client_for(neighbour), report, reason=Reason.DATO_PERSONAL)
 
         complaint = ReportComplaint.objects.get()
@@ -280,6 +301,7 @@ class TestReasonIsRequired:
         neighbour,
         payload,
     ):
+        """CP-021-19 (US-021 E4)."""
         response = file(client_for(neighbour), report, **payload)
 
         assert response.status_code == HTTP_BAD_REQUEST
@@ -289,6 +311,7 @@ class TestReasonIsRequired:
         assert not ReportComplaint.objects.exists()
 
     def test_a_reason_outside_the_catalog_is_rejected(self, report, neighbour):
+        """CP-021-20 (US-021 E4)."""
         response = file(client_for(neighbour), report, reason="spam")
 
         assert response.status_code == HTTP_BAD_REQUEST
@@ -312,16 +335,19 @@ class TestNoAutomaticHiding:
         return report
 
     def test_it_stays_in_the_feed(self, flooded_report):
+        """CP-021-21 (US-021 E5)."""
         response = client_for(UserFactory.create()).get("/api/reports/")
 
         assert flooded_report.pk in listed_ids(response)
 
     def test_it_stays_on_the_map(self, flooded_report):
+        """CP-021-22 (US-021 E5)."""
         response = client_for(UserFactory.create()).get("/api/reports/map/")
 
         assert flooded_report.pk in listed_ids(response)
 
     def test_it_can_still_be_opened_by_id(self, flooded_report):
+        """CP-021-23 (US-021 E5)."""
         response = client_for(UserFactory.create()).get(
             f"/api/reports/{flooded_report.pk}/",
         )
@@ -329,6 +355,7 @@ class TestNoAutomaticHiding:
         assert response.status_code == HTTP_OK
 
     def test_its_status_does_not_change(self, flooded_report):
+        """CP-021-24 (US-021 E5)."""
         history_before = ReportStatusHistory.objects.filter(
             report=flooded_report,
         ).count()
@@ -342,6 +369,7 @@ class TestNoAutomaticHiding:
         )
 
     def test_it_is_not_marked_as_under_review(self, flooded_report):
+        """CP-021-25 (US-021 E5)."""
         response = client_for(flooded_report.author).get(
             f"/api/reports/{flooded_report.pk}/",
         )
@@ -352,6 +380,7 @@ class TestNoAutomaticHiding:
         self,
         flooded_report,
     ):
+        """CP-021-26 (US-021 E5)."""
         assert Report.objects.publicly_visible().filter(pk=flooded_report.pk).exists()
 
 
@@ -365,6 +394,7 @@ class TestDuplicateComplaint:
         neighbour,
         reason,
     ):
+        """CP-021-27 (US-021 E6)."""
         client = client_for(neighbour)
         file(client, report, reason=reason)
 
@@ -375,6 +405,7 @@ class TestDuplicateComplaint:
         assert ReportComplaint.objects.count() == 1
 
     def test_the_same_user_can_file_a_different_reason(self, report, neighbour):
+        """CP-021-28 (US-021 E6)."""
         client = client_for(neighbour)
         file(client, report, reason=Reason.REPORTE_FALSO)
 
@@ -384,6 +415,7 @@ class TestDuplicateComplaint:
         assert ReportComplaint.objects.count() == len(CONTENT_REASONS)
 
     def test_another_user_can_file_the_same_reason(self, report, neighbour):
+        """CP-021-29 (US-021 E6)."""
         file(client_for(neighbour), report, reason=Reason.REPORTE_FALSO)
 
         response = file(
@@ -400,6 +432,7 @@ class TestDuplicateComplaint:
         neighbour,
         active_municipality,
     ):
+        """CP-021-30 (US-021 E6)."""
         other = ReportFactory.create(
             municipality=active_municipality,
             status=Report.Status.REPORTADO,
@@ -416,6 +449,7 @@ class TestDuplicateComplaint:
         report,
         neighbour,
     ):
+        """CP-021-31 (US-021 E6)."""
         ReportComplaintFactory.create(
             report=report,
             reporter=neighbour,
@@ -428,6 +462,7 @@ class TestDuplicateComplaint:
         assert response.status_code == HTTP_CONFLICT
 
     def test_the_database_enforces_it(self, report, neighbour):
+        """CP-021-32 (US-021 E6)."""
         ReportComplaintFactory.create(
             report=report,
             reporter=neighbour,
@@ -452,6 +487,7 @@ class TestOwnReport:
         author,
         reason,
     ):
+        """CP-021-34 (US-021 E7)."""
         response = file(client_for(author), report, reason=reason)
 
         assert response.status_code == HTTP_FORBIDDEN
@@ -473,6 +509,7 @@ class TestFinalStatus:
         final_status,
         reason,
     ):
+        """CP-021-35 (US-021 E8)."""
         report = ReportFactory.create(
             municipality=active_municipality,
             status=final_status,
@@ -489,6 +526,7 @@ class TestFinalStatus:
         report,
         neighbour,
     ):
+        """CP-021-36 (US-021 E8)."""
         Report.objects.filter(pk=report.pk).update(photo_removed_at=timezone.now())
 
         response = file(client_for(neighbour), report, reason=Reason.REPORTE_FALSO)
@@ -511,6 +549,7 @@ class TestFinalStatus:
         neighbour,
         active_status,
     ):
+        """CP-021-37 (US-021 E8)."""
         report = ReportFactory.create(
             municipality=active_municipality,
             status=active_status,
@@ -554,6 +593,7 @@ class TestAnonymity:
         path,
         viewer,
     ):
+        """CP-021-38 (US-021 E9)."""
         user = reported.author if viewer == "author" else UserFactory.create()
 
         response = client_for(user).get(path.format(pk=reported.pk))
@@ -567,12 +607,14 @@ class TestAnonymity:
         assert "denuncia" not in body.lower()
 
     def test_the_author_is_not_told_how_many_complaints_there_are(self, reported):
+        """CP-021-39 (US-021 E9)."""
         response = client_for(reported.author).get(f"/api/reports/{reported.pk}/")
 
         assert not [key for key in response.data if "complaint" in key]
         assert response.data["under_privacy_review"] is False
 
     def test_the_authors_notice_names_nobody(self, reported, reporter):
+        """CP-021-40 (US-021 E9)."""
         notice = Notification.objects.get(recipient=reported.author)
 
         assert notice.actor is None
@@ -584,6 +626,7 @@ class TestAnonymity:
         reported,
         reporter,
     ):
+        """CP-021-41 (US-021 E9)."""
         response = client_for(reported.author).get("/api/notifications/")
 
         assert response.status_code == HTTP_OK
@@ -594,6 +637,7 @@ class TestAnonymity:
         assert self.COMMENT not in body
 
     def test_the_receipt_does_not_carry_the_reporter(self, report, reporter):
+        """CP-021-42 (US-021 E9)."""
         response = file(client_for(reporter), report, reason=Reason.REPORTE_FALSO)
 
         assert "reporter" not in response.data
@@ -613,6 +657,7 @@ class TestNotifications:
         neighbour,
         reason,
     ):
+        """CP-021-10 (US-021 E1)."""
         response = file(client_for(neighbour), report, reason=reason)
 
         (notice,) = notices(neighbour, Notification.Kind.DENUNCIA_RECIBIDA)
@@ -626,6 +671,7 @@ class TestNotifications:
         neighbour,
         reason,
     ):
+        """CP-021-43 (US-021 E9)."""
         file(client_for(neighbour), report, reason=reason)
 
         (notice,) = notices(report.author, Notification.Kind.REPORTE_DENUNCIADO)
@@ -634,7 +680,10 @@ class TestNotifications:
         assert "sigue publicado" in notice.message
 
     def test_the_author_is_told_once_however_many_complaints_arrive(self, report):
-        """Uno por denuncia le diría cuántas hay (escenario 9)."""
+        """CP-021-44 (US-021 E9).
+
+        Uno por denuncia le diría cuántas hay (escenario 9).
+        """
         for reason in CONTENT_REASONS:
             for _ in range(3):
                 file(client_for(UserFactory.create()), report, reason=reason)
@@ -646,6 +695,7 @@ class TestNotifications:
         report,
         neighbour,
     ):
+        """CP-021-45 (US-021 E9)."""
         file(client_for(neighbour), report, reason=Reason.REPORTE_FALSO)
         ReportComplaint.objects.update(status=ReportComplaint.Status.DESESTIMADA)
 
@@ -662,7 +712,10 @@ class TestNotifications:
         report,
         neighbour,
     ):
-        """Un solo aviso al autor, y es el que le explica el ocultamiento."""
+        """CP-021-46 (US-021 E9).
+
+        Un solo aviso al autor, y es el que le explica el ocultamiento.
+        """
         file(client_for(neighbour), report, reason=Reason.DATO_PERSONAL)
 
         kinds = set(
@@ -678,11 +731,13 @@ class TestNotifications:
         [{}, {"reason": "spam"}],
     )
     def test_a_rejected_complaint_notifies_nobody(self, report, neighbour, payload):
+        """CP-021-47 (US-021 E9)."""
         file(client_for(neighbour), report, **payload)
 
         assert not Notification.objects.exists()
 
     def test_a_duplicate_does_not_notify_again(self, report, neighbour):
+        """CP-021-33 (US-021 E6)."""
         client = client_for(neighbour)
         file(client, report, reason=Reason.REPORTE_FALSO)
         before = Notification.objects.count()
@@ -697,6 +752,7 @@ class TestAuthentication:
 
     @pytest.mark.parametrize("reason", list(Reason))
     def test_an_anonymous_visitor_is_denied(self, report, reason):
+        """CP-021-48 (US-021 E10)."""
         response = file(APIClient(), report, reason=reason)
 
         assert response.status_code in {401, 403}
