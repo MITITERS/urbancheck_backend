@@ -1943,6 +1943,23 @@ El worker corre con `--concurrency` de `CELERY_WORKER_CONCURRENCY` (2),
 12 MP llega a 847 MB (C-07). Los límites por tarea son 60 s blando y 90 s duro
 (`config/settings/base.py`).
 
+### `/media/` sin control de acceso: riesgo aceptado (C-25)
+
+nginx sirve `/media/` con un `alias`, sin preguntarle a Django
+(`compose/production/nginx/default.conf`). La regla de visibilidad de los
+reportes vale para la API, no para los archivos: quien tenga la URL de una foto
+la descarga aunque el reporte esté oculto por una denuncia de dato personal,
+descartado por moderación o borrado (N-03 y N-08 del documento de seguridad).
+
+**Decisión del equipo (22/10/2026): se acepta el riesgo.** Las fotos se
+publican recién después de difuminar rostros y patentes (US-041 y US-042), las
+URL no se pueden adivinar y el producto no se despliega en producción. El
+riesgo que queda es justo el caso en que el difuminado falló: una denuncia por
+dato personal oculta el reporte, pero no la foto. Si algún día se despliega, la
+mitigación es servir las fotos de los reportes por Django con el mismo permiso
+que el reporte, y entregarlas con `X-Accel-Redirect` a una `location internal`
+de nginx.
+
 ### Pendiente
 
 - Los identificadores de la app para Universal Links y App Links
