@@ -618,6 +618,24 @@ RESOLUTION_COMPARISON_MODEL = env(
     default="gemini-3.6-flash",
 )
 # Reintentos ante fallos transitorios (timeout, 429, 5xx) antes de darla por no
+# disponible. Una respuesta fuera de formato no se reintenta.
+RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES",
+    default=3,
+)
+# Por debajo del ``CELERY_TASK_SOFT_TIME_LIMIT``: la tarea tiene que poder
+# registrar el fallo antes de que Celery la corte.
+RESOLUTION_COMPARISON_TIMEOUT_SECONDS = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS",
+    default=30,
+)
+# Lado mayor con el que viajan las imágenes. Alcanza para ver un bache y ahorra
+# cuota del plan gratuito.
+RESOLUTION_COMPARISON_MAX_SIDE_PX = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX",
+    default=1024,
+)
+
 # ANONIMIZACIÓN DIFERIDA (US-042)
 # ------------------------------------------------------------------------------
 # Cuántas veces se reintenta una foto cuyo detector falló, y con qué espera
@@ -639,24 +657,6 @@ ANONYMIZATION_STALE_MINUTES = env.int("DJANGO_ANONYMIZATION_STALE_MINUTES", defa
 ANONYMIZATION_REFERENCE_SET = env(
     "DJANGO_ANONYMIZATION_REFERENCE_SET",
     default=str(BASE_DIR / "benchmark_data" / "anonymization"),
-)
-
-# disponible. Una respuesta fuera de formato no se reintenta.
-RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
-    "DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES",
-    default=3,
-)
-# Por debajo del ``CELERY_TASK_SOFT_TIME_LIMIT``: la tarea tiene que poder
-# registrar el fallo antes de que Celery la corte.
-RESOLUTION_COMPARISON_TIMEOUT_SECONDS = env.int(
-    "DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS",
-    default=30,
-)
-# Lado mayor con el que viajan las imágenes. Alcanza para ver un bache y ahorra
-# cuota del plan gratuito.
-RESOLUTION_COMPARISON_MAX_SIDE_PX = env.int(
-    "DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX",
-    default=1024,
 )
 
 # django-allauth

@@ -1,8 +1,10 @@
 """Verificación periódica del archivado por inactividad (US-031).
 
-Se corre a diario. La política vive en ``reports.archival``; esto solo la
-dispara e informa el resultado, para que un cron y una tarea de Celery no sean
-dos implementaciones distintas de la misma regla.
+En producción la dispara Celery beat cada quince minutos
+(``archive_stale_reports`` en ``CELERY_BEAT_SCHEDULE``); este comando es la
+misma verificación a mano. La política vive en ``reports.archival``; esto solo
+la dispara e informa el resultado, para que un cron y una tarea de Celery no
+sean dos implementaciones distintas de la misma regla.
 """
 
 from django.core.management.base import BaseCommand
