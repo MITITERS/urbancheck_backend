@@ -298,7 +298,7 @@ class TestVisibility:
 
         assignments = client.get(url(reported.pk)).data["area_assignments"]
 
-        assert len(assignments) == 2
+        assert len(assignments) == 2  # noqa: PLR2004
         assert assignments[0]["area"]["id"] == destination.pk
         assert assignments[0]["previous_area"]["id"] == area.pk
 

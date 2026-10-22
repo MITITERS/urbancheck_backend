@@ -1,22 +1,23 @@
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from django.core import mail
 from django.test import Client
 
 from urbancheck.users.tests.factories import UserFactory
 
-
 SIGNUP_URL = "/_allauth/app/v1/auth/signup"
 LOGIN_URL = "/_allauth/app/v1/auth/login"
 SESSION_URL = "/_allauth/app/v1/auth/session"
-PASSWORD_REQUEST_URL = "/_allauth/app/v1/auth/password/request"
+PASSWORD_REQUEST_URL = "/_allauth/app/v1/auth/password/request"  # noqa: S105
 
-STRONG_PASSWORD = "Xk7#mP9@qLz2!"
+STRONG_PASSWORD = "Xk7#mP9@qLz2!"  # noqa: S105
 
 
 def json_post(client: Client, url: str, data: dict) -> object:
-    import json
+    import json  # noqa: PLC0415
 
     return client.post(url, json.dumps(data), content_type="application/json")
 
@@ -57,7 +58,7 @@ class TestSignup:
         assert "session_token" in data["meta"]
 
     def test_signup_sets_role_ciudadano(self, client):
-        from urbancheck.users.models import User
+        from urbancheck.users.models import User  # noqa: PLC0415
 
         json_post(
             client,
@@ -121,7 +122,7 @@ class TestLogin:
             LOGIN_URL,
             {"email": "login@example.com", "password": STRONG_PASSWORD},
         )
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         data = res.json()
         assert "session_token" in data["meta"]
 
@@ -153,8 +154,7 @@ class TestLogout:
         assert logout_res.status_code in (204, 401)
 
         # Token should no longer grant access to protected DRF endpoint
-        import json as json_lib
-        from django.test import Client as DjClient
+        from django.test import Client as DjClient  # noqa: PLC0415
 
         c2 = DjClient()
         me_res = c2.get(

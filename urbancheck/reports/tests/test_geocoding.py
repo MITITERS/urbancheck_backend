@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,7 +38,11 @@ def _fake_nominatim(monkeypatch, payload):
 
 
 NOMINATIM_HIT = [
-    {"display_name": "Av. Corrientes 1234, CABA, Argentina", "lat": "-34.6037", "lon": "-58.3816"},
+    {
+        "display_name": "Av. Corrientes 1234, CABA, Argentina",
+        "lat": "-34.6037",
+        "lon": "-58.3816",
+    },
 ]
 
 
@@ -56,7 +61,7 @@ class TestSearchAddresses:
                 "display_name": "Av. Corrientes 1234, CABA, Argentina",
                 "latitude": -34.6037,
                 "longitude": -58.3816,
-            }
+            },
         ]
 
     def test_network_error_returns_empty(self, monkeypatch):
@@ -80,8 +85,8 @@ class TestGeocodeEndpoint:
         client, _ = auth_client
         _fake_nominatim(monkeypatch, NOMINATIM_HIT)
         res = client.get("/api/reports/geocode/?q=Corrientes 1234")
-        assert res.status_code == 200
-        assert res.data["results"][0]["latitude"] == -34.6037
+        assert res.status_code == HTTPStatus.OK
+        assert res.data["results"][0]["latitude"] == -34.6037  # noqa: PLR2004
 
     def test_requires_auth(self, db):
         res = APIClient().get("/api/reports/geocode/?q=Corrientes 1234")
@@ -103,7 +108,7 @@ class TestCreateGeocodeFallback:
             },
             format="multipart",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         report = Report.objects.get(id=res.data["id"])
         assert float(report.latitude) == pytest.approx(-34.6037)
         assert float(report.longitude) == pytest.approx(-58.3816)
@@ -124,7 +129,7 @@ class TestCreateGeocodeFallback:
             },
             format="multipart",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         report = Report.objects.get(id=res.data["id"])
         assert float(report.latitude) == pytest.approx(-34.9)
         getter.assert_not_called()
@@ -142,7 +147,7 @@ class TestCreateGeocodeFallback:
             },
             format="multipart",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         report = Report.objects.get(id=res.data["id"])
         assert report.latitude is None
         assert report.longitude is None

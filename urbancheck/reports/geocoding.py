@@ -25,6 +25,10 @@ _CACHE_PREFIX = "geocode:"
 _TIMEOUT = 5  # segundos
 
 
+#: Por debajo de esto el autocompletado no consulta: tres letras ya acotan
+#: una calle, menos devuelve medio país.
+MIN_QUERY_LENGTH = 3
+
 def search_addresses(query: str, *, limit: int = 5) -> list[dict]:
     """Devuelve sugerencias de direcciones para ``query``.
 
@@ -34,12 +38,16 @@ def search_addresses(query: str, *, limit: int = 5) -> list[dict]:
     flujo de creación de un reporte.
     """
     query = (query or "").strip()
-    if len(query) < 3:
+    if len(query) < MIN_QUERY_LENGTH:
         return []
 
     # Hasheamos la consulta para que la clave no tenga espacios ni acentos (que
-    # rompen backends como memcached).
-    digest = hashlib.sha1(query.lower().encode("utf-8")).hexdigest()
+    # rompen backends como memcached). Es una clave de cache, no un uso de
+    # seguridad: de ahí ``usedforsecurity=False``.
+    digest = hashlib.sha1(
+        query.lower().encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
     cache_key = f"{_CACHE_PREFIX}{limit}:{digest}"
     cached = cache.get(cache_key)
     if cached is not None:
@@ -76,7 +84,7 @@ def search_addresses(query: str, *, limit: int = 5) -> list[dict]:
                     "display_name": item["display_name"],
                     "latitude": float(item["lat"]),
                     "longitude": float(item["lon"]),
-                }
+                },
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -107,7 +115,10 @@ def reverse_geocode(latitude, longitude) -> str:
     if latitude is None or longitude is None:
         return ""
 
-    digest = hashlib.sha1(f"{latitude},{longitude}".encode()).hexdigest()
+    digest = hashlib.sha1(
+        f"{latitude},{longitude}".encode(),
+        usedforsecurity=False,
+    ).hexdigest()
     cache_key = f"{_CACHE_PREFIX}rev:{digest}"
     cached = cache.get(cache_key)
     if cached is not None:

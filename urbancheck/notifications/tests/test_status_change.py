@@ -3,6 +3,7 @@
 import pytest
 
 from urbancheck.notifications.models import Notification
+from urbancheck.notifications.services import notify_new_comment
 from urbancheck.reports.models import Report
 from urbancheck.reports.services import apply_transition
 from urbancheck.reports.state_machine import TRANSITIONS
@@ -18,10 +19,11 @@ pytestmark = pytest.mark.django_db
 
 
 def actor_for(transition):
-    factory = (
-        ValidatorFactory if transition.actor == Actor.VALIDATOR else MunicipalAgentFactory
+    return (
+        ValidatorFactory
+        if transition.actor == Actor.VALIDATOR
+        else MunicipalAgentFactory
     )
-    return factory
 
 
 def run(transition, report, user):
@@ -145,8 +147,6 @@ class TestSocialNotificationsStillWork:
         """Regresión de US-033: los avisos sociales no cambiaron."""
         report = ReportFactory.create()
         comment = CommentFactory.create(report=report)
-
-        from urbancheck.notifications.services import notify_new_comment
 
         notification = notify_new_comment(comment)
 

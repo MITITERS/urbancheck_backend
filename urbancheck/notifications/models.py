@@ -28,6 +28,30 @@ class Notification(models.Model):
         # el ciudadano apela (US-048). Es el único aviso que **no** va al autor
         # del reporte: acá el autor es quien lo dispara.
         APELACION_CIERRE = "apelacion_cierre", "Cierre apelado"
+        # El administrador retiró una foto del reporte porque exponía un dato
+        # personal que el difuminado no detectó (US-043). Le llega al autor,
+        # que es quien ve su reclamo publicado sin imagen.
+        IMAGEN_RETIRADA = "imagen_retirada", "Imagen retirada"
+        # El reporte se ocultó porque alguien denunció un dato personal en su
+        # imagen (US-043). Le llega al autor, salvo que lo haya denunciado él.
+        # No dice quién denunció.
+        REPORTE_EN_REVISION = "reporte_en_revision", "Reporte en revisión"
+        # La denuncia se desestimó y el reporte volvió a publicarse tal cual.
+        REPORTE_RESTITUIDO = "reporte_restituido", "Reporte publicado de nuevo"
+        # El resultado de una denuncia, para quien la presentó: se retiró la
+        # imagen o se desestimó.
+        DENUNCIA_RESUELTA = "denuncia_resuelta", "Denuncia resuelta"
+        # El acuse de una denuncia, para quien la presentó (US-021): queda en
+        # sus avisos que se registró y quién la va a revisar.
+        DENUNCIA_RECIBIDA = "denuncia_recibida", "Denuncia recibida"
+        # Le llega al autor cuando su reporte recibe una denuncia de contenido
+        # (US-021). No dice quién denunció ni cuántas denuncias hay.
+        REPORTE_DENUNCIADO = "reporte_denunciado", "Reporte denunciado"
+        # El difuminado de una imagen falló definitivamente y lo que se cargó
+        # no se publica (US-042). Le llega a quien la subió —el autor del
+        # reporte, el operario que cerró o quien apeló— con la invitación a
+        # volver a cargarla: es el único camino que le queda.
+        IMAGEN_NO_PROCESADA = "imagen_no_procesada", "No pudimos procesar la imagen"
 
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,

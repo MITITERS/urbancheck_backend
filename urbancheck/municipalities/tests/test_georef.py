@@ -4,6 +4,8 @@ Ningún test sale a la red: el conftest la bloquea y cada caso decide qué
 responde el servicio.
 """
 
+from http import HTTPStatus
+
 import pytest
 import requests
 from django.core.cache import cache
@@ -80,7 +82,7 @@ class TestProvinces:
     def test_it_lists_the_provinces_alphabetically(self, admin_client, georef_responds):
         response = admin_client.get(PROVINCES_URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert [p["name"] for p in response.data["results"]] == [
             "Buenos Aires",
             "Córdoba",
@@ -97,7 +99,7 @@ class TestProvinces:
         """El formulario no puede quedar inutilizable por un corte del servicio."""
         response = admin_client.get(PROVINCES_URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert len(response.data["results"]) == len(georef.FALLBACK_PROVINCES)
         assert any(p["name"] == "Córdoba" for p in response.data["results"])
 
@@ -115,7 +117,7 @@ class TestLocalities:
     ):
         response = admin_client.get(f"{PROVINCES_URL}{CORDOBA_ID}/localities/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         bell_ville = response.data["results"][1]
         assert bell_ville["name"] == "Bell Ville"
         assert bell_ville["latitude"] == pytest.approx(-32.6303)
@@ -146,7 +148,7 @@ class TestLocalities:
     def test_an_outage_returns_an_empty_list_instead_of_failing(self, admin_client):
         response = admin_client.get(f"{PROVINCES_URL}{CORDOBA_ID}/localities/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["results"] == []
 
     def test_an_unreadable_response_is_survived(self, admin_client, monkeypatch):
@@ -162,13 +164,13 @@ class TestLocalities:
 
         response = admin_client.get(f"{PROVINCES_URL}{CORDOBA_ID}/localities/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["results"] == []
 
 
 class TestPermissions:
     def test_anonymous_is_denied(self):
-        assert APIClient().get(PROVINCES_URL).status_code == 403
+        assert APIClient().get(PROVINCES_URL).status_code == HTTPStatus.FORBIDDEN
 
 
 def test_a_network_error_never_escapes(monkeypatch):

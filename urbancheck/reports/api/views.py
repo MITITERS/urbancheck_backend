@@ -19,22 +19,40 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.anonymization.pipeline import restart_anonymization
+from urbancheck.anonymization.pipeline import schedule_anonymization
+from urbancheck.common.throttling import ScopedThrottle
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.notifications.services import notify_resolution_appealed
-from urbancheck.reports.collective_validation import evaluate as evaluate_collective_validation
-from urbancheck.reports.map_retention import hide_stale_resolved
+from urbancheck.reports.collective_validation import (
+    evaluate as evaluate_collective_validation,
+)
+from urbancheck.reports.complaints import OwnReportError
+from urbancheck.reports.complaints import ReportNotPublicError
+from urbancheck.reports.complaints import confirmation_for
+from urbancheck.reports.complaints import file_complaint
+from urbancheck.reports.complaints import reason_catalog
+from urbancheck.reports.duplicates import find_duplicate
 from urbancheck.reports.geo import parse_coordinates
 from urbancheck.reports.geocoding import geocode_one
 from urbancheck.reports.geocoding import reverse_geocode
 from urbancheck.reports.geocoding import search_addresses
+from urbancheck.reports.map_retention import hide_stale_resolved
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
+from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.models import on_privacy_hold
+from urbancheck.reports.models import photo_ready
+from urbancheck.reports.privacy import DuplicateComplaintError
+from urbancheck.reports.privacy import NoImageError
+from urbancheck.reports.privacy import describe_window
+from urbancheck.reports.privacy import request_personal_data_review
 from urbancheck.reports.resolution import appeal_resolution
 from urbancheck.reports.services import GuardRejectedError
 from urbancheck.reports.services import TransitionError
@@ -47,19 +65,19 @@ from .permissions import CanDeleteComment
 from .permissions import IsAuthorOrReadOnly
 from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
+from .serializers import ComplaintCreateSerializer
+from .serializers import ComplaintReceiptSerializer
+from .serializers import ExistingReportSerializer
+from .serializers import PrivacyRequestCreateSerializer
+from .serializers import PrivacyRequestReceiptSerializer
 from .serializers import ReportCreateSerializer
 from .serializers import ReportDetailSerializer
 from .serializers import ReportListSerializer
+from .serializers import ReportLocationSerializer
 from .serializers import ReportMapSerializer
 from .serializers import ReportUpdateSerializer
 from .serializers import ResolutionAppealCreateSerializer
 from .transition_responses import transition_error_response
-
-# Estados que dejan de ser visibles en el feed y en el mapa público: el reporte
-# ya no es un problema activo (US-013). El autor sigue viéndolos en "mis
-# reportes" y en el detalle, que es a donde lo lleva la notificación del cambio.
-INACTIVE_PUBLIC_STATUSES = [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
-INACTIVE_MAP_STATUSES = INACTIVE_PUBLIC_STATUSES
 
 # Todo estado distinto de PENDIENTE_VALIDACION se alcanza pasando por un
 # validador —validando o rechazando—, así que el texto vale para todos.
@@ -72,9 +90,27 @@ DELETE_BLOCKED_MESSAGE = "Este reporte ya pasó por un validador y no puede elim
 NOT_THE_AUTHOR_MESSAGE = (
     "Solo el autor del reporte puede objetar el cierre de su reclamo."
 )
+# Respuesta cuando el problema ya está reportado (US-032). El código es lo que
+# el cliente mira para ofrecer sumarse: un ``409`` con otra forma no es esto.
+# El texto evita "duplicado", que al vecino le suena a acusación.
+REPORT_ALREADY_EXISTS_CODE = "report_already_exists"
+REPORT_ALREADY_EXISTS_MESSAGE = (
+    "Este problema ya fue reportado. Podés sumar tu apoyo al reclamo existente."
+)
 APPEAL_WINDOW_CLOSED_MESSAGE = (
     "El plazo para objetar el cierre venció y la resolución quedó confirmada."
 )
+# Respuestas de la denuncia por dato personal (US-043). Los dos son ``409`` y el
+# código es lo que el cliente mira para elegir el mensaje.
+PRIVACY_REQUEST_PENDING_CODE = "privacy_request_pending"
+PRIVACY_REQUEST_PENDING_MESSAGE = (
+    "Ya presentaste una solicitud sobre esta imagen y está en revisión."
+)
+IMAGE_ALREADY_REMOVED_CODE = "image_already_removed"
+IMAGE_ALREADY_REMOVED_MESSAGE = "Esta imagen ya fue retirada."
+# Respuestas del botón *Denunciar* (US-021), también ``409`` con código.
+COMPLAINT_ALREADY_FILED_CODE = "complaint_already_filed"
+REPORT_NOT_PUBLIC_CODE = "report_not_public"
 
 
 class ReportViewSet(
@@ -87,6 +123,9 @@ class ReportViewSet(
 ):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, JSONParser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = Report.objects.none()
 
     def get_permissions(self):
         """Permisos por acción: autoría para editar/borrar, rol para participar.
@@ -106,6 +145,24 @@ class ReportViewSet(
             return [IsAuthenticated(), ExcludesOperator(), ParticipatesAsCitizen()]
         return [IsAuthenticated(), ExcludesOperator()]
 
+    def get_throttles(self):
+        """Límites de tasa por acción (ver ``urbancheck.common.throttling``)."""
+        return [ScopedThrottle(scope) for scope in self._throttle_scopes()]
+
+    def _throttle_scopes(self) -> list[str]:
+        if self.action == "create":
+            return ["reports"]
+        if self.action == "comments" and self.request.method == "POST":
+            return ["comments"]
+        if self.action == "privacy_request":
+            return ["complaints", "privacy_requests"]
+        if self.action == "complaints":
+            reason = self.request.data.get("reason")
+            if reason in ReportComplaint.PLATFORM_REASONS:
+                return ["complaints", "privacy_requests"]
+            return ["complaints"]
+        return []
+
     def _is_citizen_participation(self) -> bool:
         """Si la petición es un aporte de vecino: reportar, comentar o gustar.
 
@@ -118,6 +175,11 @@ class ReportViewSet(
           anterior a esta regla, sin forma de sacarlo.
         """
         if self.action == "create":
+            return True
+        # Denunciar una imagen (US-043) también es participar: una cuenta de
+        # trabajo que ve un rostro sin difuminar lo denuncia con su cuenta
+        # personal, igual que reporta o comenta.
+        if self.action in {"privacy_request", "complaints"}:
             return True
         return self.action in {"like", "comments"} and self.request.method == "POST"
 
@@ -156,30 +218,41 @@ class ReportViewSet(
     def _is_own_listing(self) -> bool:
         return self.request.query_params.get("mine") == "true"
 
+    def _with_counters(self, qs):
+        """Anota lo que las tarjetas de reporte muestran sin una query por fila."""
+        return qs.annotate(
+            like_count=Count("likes", distinct=True),
+            comment_count=Count("comments", distinct=True),
+            is_liked=Exists(
+                Like.objects.filter(report=OuterRef("pk"), user=self.request.user),
+            ),
+            # Alimenta el distintivo de "el municipio respondió" del feed
+            # (US-024) sin traer el hilo entero por fila.
+            official_response_count=Count("official_responses", distinct=True),
+            # La marca de "en revisión por datos personales" que ve el autor
+            # (US-043).
+            privacy_hold=on_privacy_hold(),
+        )
+
     def get_queryset(self):
         user = self.request.user
-        qs = (
-            Report.objects.select_related("author")
-            .prefetch_related("resolution_evidences", "resolution_appeals")
-            .annotate(
-                like_count=Count("likes", distinct=True),
-                comment_count=Count("comments", distinct=True),
-                is_liked=Exists(Like.objects.filter(report=OuterRef("pk"), user=user)),
-                # Alimenta el distintivo de "el municipio respondió" del feed
-                # (US-024) sin traer el hilo entero por fila.
-                official_response_count=Count("official_responses", distinct=True),
-            )
-            .order_by("-created_at")
-        )
+        qs = self._with_counters(
+            Report.objects.select_related("author").prefetch_related(
+                "resolution_evidences",
+                "resolution_appeals",
+            ),
+        ).order_by("-created_at")
         # El validador solo ve su jurisdicción, en todas las acciones: pedir por
         # id un reporte de otro municipio devuelve 404 porque no existe para él.
         if user.sees_only_own_municipality:
             qs = qs.for_user(user)
 
+        # Qué puede ver un tercero lo decide una sola función del queryset
+        # (``publicly_visible`` y ``visible_to``): acá solo se elige cuál.
         if self._is_own_listing():
             qs = qs.filter(author=user)
         elif self.action in {"list", "map"}:
-            qs = qs.exclude(status__in=INACTIVE_PUBLIC_STATUSES)
+            qs = qs.publicly_visible()
             if self._scoping_origin() is not None:
                 # Fuera de toda cobertura no hay municipio al que mirar, y el
                 # feed queda vacío. Se dice explícito y no con
@@ -187,6 +260,30 @@ class ReportViewSet(
                 # sin municipio", que es otra cosa.
                 municipality = self.covering_municipality
                 qs = qs.covered_by(municipality) if municipality else qs.none()
+        elif self.action == "complaints":
+            # Igual que ``privacy_request``, más abajo: un reporte retenido por
+            # protección de datos se deja pasar para que quien ya lo denunció
+            # reciba "ya lo denunciaste" y no un 404. Lo que no se deja pasar
+            # es uno cuya imagen sigue en procesamiento (US-042): para un
+            # tercero todavía no existe, y su autor no puede denunciarlo.
+            qs = qs.filter(photo_ready())
+        elif self.action != "privacy_request":
+            # Detalle, edición, me gusta, comentarios, apelación: un reporte
+            # retenido por protección de datos responde 404 a todos menos al
+            # autor.
+            #
+            # La denuncia se deja pasar a propósito. Quien ya denunció y vuelve
+            # a intentarlo tiene que recibir "ya hay una solicitud en curso"
+            # (escenario 9) y no un 404 que parece que el reporte se borró; y
+            # quien lo vio antes del ocultamiento tiene que poder sumar la suya.
+            qs = qs.visible_to(user)
+            if self.action == "like":
+                # El escenario 7 de US-042 es más estricto que `visible_to`,
+                # que deja pasar al autor: un reporte que nadie ve no recibe
+                # me gusta de nadie, **ni de su autor**. Y como la validación
+                # colectiva de US-040 solo se evalúa desde el like, con esto
+                # tampoco puede alcanzar el umbral ni entrar en la bandeja.
+                qs = qs.filter(photo_ready())
         return apply_report_filters(qs, self.request.query_params, requesting_user=user)
 
     def _coverage_payload(self) -> dict | None:
@@ -234,16 +331,68 @@ class ReportViewSet(
             return ReportDetailSerializer
         return ReportListSerializer
 
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        """Crea el reporte, salvo que el problema ya esté reportado (US-032).
+
+        La verificación corre **antes** de validar la foto: el campo la difumina
+        dentro de ``is_valid()``, y un reporte que no se va a crear no tiene que
+        haber pasado por la anonimización ni dejado nada guardado. Por eso
+        primero se valida solo la ubicación y la categoría.
+
+        Si eso ya es inválido no se decide nada acá: sigue el camino de
+        siempre, que devuelve el ``400`` con todos los errores juntos.
+
+        Carrera aceptada: dos envíos simultáneos del mismo problema pueden
+        crearse los dos. Evitarlo pediría un bloqueo por zona y el costo no se
+        justifica para un caso que la app hace casi imposible.
+        """
+        location = ReportLocationSerializer(data=request.data)
+        if location.is_valid():
+            data = location.validated_data
+            extra, municipality = self._resolve_location(data)
+            latitude = extra.get("latitude", data.get("latitude"))
+            longitude = extra.get("longitude", data.get("longitude"))
+            # Una dirección que no se pudo geocodificar deja el reporte sin
+            # punto: no hay con qué medir cercanía, y se crea como siempre.
+            existing = (
+                find_duplicate(
+                    category=data["category"],
+                    latitude=latitude,
+                    longitude=longitude,
+                    municipality=municipality,
+                    queryset=self._with_counters(Report.objects.select_related("author")),
+                )
+                if latitude is not None and longitude is not None
+                else None
+            )
+            if existing is not None:
+                return Response(
+                    {
+                        "code": REPORT_ALREADY_EXISTS_CODE,
+                        "detail": REPORT_ALREADY_EXISTS_MESSAGE,
+                        "existing_report": ExistingReportSerializer(
+                            existing,
+                            context=self.get_serializer_context(),
+                        ).data,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            self._resolved_location = (extra, municipality)
+        return super().create(request, *args, **kwargs)
+
+    def _resolve_location(self, data) -> tuple[dict, object]:
+        """Completa la ubicación y resuelve la jurisdicción del reporte.
+
+        Devuelve los campos que hay que agregar al guardar y la municipalidad.
+        """
         extra = {}
         # Fallback: si el usuario escribió una dirección a mano pero no eligió una
         # sugerencia (sin coordenadas), la geocodificamos en el servidor para que el
         # reporte tenga lat/lng y pueda ubicarse en el mapa.
         has_coords = (
-            serializer.validated_data.get("latitude") is not None
-            and serializer.validated_data.get("longitude") is not None
+            data.get("latitude") is not None and data.get("longitude") is not None
         )
-        address = serializer.validated_data.get("address", "").strip()
+        address = data.get("address", "").strip()
         if not has_coords and address:
             match = geocode_one(address)
             if match:
@@ -253,19 +402,25 @@ class ReportViewSet(
             # Camino inverso: el reporte llega del GPS, solo con coordenadas. Sin
             # texto de dirección la búsqueda por calle, barrio o localidad
             # (US-020) nunca podría encontrarlo, así que la resolvemos acá.
-            extra["address"] = reverse_geocode(
-                serializer.validated_data["latitude"],
-                serializer.validated_data["longitude"],
-            )
+            extra["address"] = reverse_geocode(data["latitude"], data["longitude"])
 
         # US-034: la jurisdicción se resuelve en el servidor por área de
         # cobertura. Si el cliente mandó una municipalidad, se ignora.
-        latitude = extra.get("latitude", serializer.validated_data.get("latitude"))
-        longitude = extra.get("longitude", serializer.validated_data.get("longitude"))
+        latitude = extra.get("latitude", data.get("latitude"))
+        longitude = extra.get("longitude", data.get("longitude"))
         try:
             municipality = resolve_municipality_for(latitude, longitude)
         except OutOfCoverageError as error:
             raise ValidationError({"location": error.message}) from error
+        return extra, municipality
+
+    def perform_create(self, serializer):
+        # ``create`` ya resolvió la ubicación para buscar el reporte existente;
+        # se reusa para no geocodificar dos veces.
+        resolved = getattr(self, "_resolved_location", None)
+        extra, municipality = resolved or self._resolve_location(
+            serializer.validated_data,
+        )
 
         report = serializer.save(
             author=self.request.user,
@@ -277,12 +432,22 @@ class ReportViewSet(
             status=Report.Status.PENDIENTE_VALIDACION,
             changed_by=self.request.user,
         )
+        # El reporte ya existe; público todavía no. La foto entra a la cola y
+        # el endpoint contesta ahora: bloquear el POST hasta que el difuminado
+        # termine degrada la carga desde el celular sin ganancia (US-042).
+        schedule_anonymization(report)
 
     def perform_update(self, serializer):
         """US-018: editar solo mientras el municipio no tomó el reporte."""
         if not serializer.instance.is_editable:
             raise PermissionDenied(EDIT_BLOCKED_MESSAGE)
-        serializer.save(edited_at=timezone.now())
+        replaced_photo = "photo_pending" in serializer.validated_data
+        report = serializer.save(edited_at=timezone.now())
+        if replaced_photo:
+            # Cambiar la foto **despublica** el reporte hasta que la nueva se
+            # difumine (US-042). Es la misma regla de siempre: no se publica una
+            # imagen sin procesar, y la de reemplazo no es la excepción.
+            restart_anonymization(report)
 
     def perform_destroy(self, instance):
         """US-019: borrado definitivo, y solo si todavía no está en gestión."""
@@ -306,15 +471,14 @@ class ReportViewSet(
         ``status``, ``search``) y, como él, se acota al municipio que cubre la
         ubicación del vecino cuando esta viaja en ``latitude``/``longitude``.
 
-        **El mapa muestra menos que el feed, a propósito.** Además de los estados
-        inactivos, deja de dibujar los reportes resueltos hace más de la ventana
-        de ``map_retention``: siguen existiendo y siguen en el feed, pero el mapa
-        responde qué pasa hoy y una nube de puntos verdes viejos no lo responde.
+        **El mapa muestra menos que el feed, a propósito.** Además de lo que
+        ``publicly_visible`` ya saca, deja de dibujar los reportes resueltos hace
+        más de la ventana de ``map_retention``: siguen existiendo y siguen en el
+        feed, pero el mapa responde qué pasa hoy y una nube de puntos verdes
+        viejos no lo responde.
         """
         qs = hide_stale_resolved(
-            self.get_queryset()
-            .filter(latitude__isnull=False, longitude__isnull=False)
-            .exclude(status__in=INACTIVE_MAP_STATUSES),
+            self.get_queryset().filter(latitude__isnull=False, longitude__isnull=False),
         )
         serializer = ReportMapSerializer(qs, many=True, context={"request": request})
         payload = {"results": serializer.data}
@@ -426,6 +590,119 @@ class ReportViewSet(
         return Response(
             ReportDetailSerializer(report, context={"request": request}).data,
         )
+
+    @action(detail=True, methods=["post"], url_path="privacy-request")
+    def privacy_request(self, request, pk=None):
+        """Denunciar una imagen con un dato personal sin difuminar (US-043).
+
+        Es el motivo "dato personal visible" del botón *Denunciar*. El reporte
+        queda oculto de las vistas públicas en el mismo commit —una sola
+        solicitud, sin umbral— y lo resuelve el administrador de la plataforma
+        dentro del plazo de la RN-12.
+        """
+        report = self.get_object()
+        serializer = PrivacyRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        evidence = appeal = None
+        evidence_id = serializer.validated_data.get("evidence")
+        appeal_id = serializer.validated_data.get("appeal")
+        if evidence_id is not None:
+            evidence = report.resolution_evidences.filter(pk=evidence_id).first()
+            if evidence is None:
+                raise ValidationError(
+                    {"evidence": "La imagen no pertenece a este reporte."},
+                )
+        if appeal_id is not None:
+            appeal = report.resolution_appeals.filter(pk=appeal_id).first()
+            if appeal is None:
+                raise ValidationError(
+                    {"appeal": "La imagen no pertenece a este reporte."},
+                )
+
+        try:
+            complaint = request_personal_data_review(
+                report=report,
+                reporter=request.user,
+                evidence=evidence,
+                appeal=appeal,
+            )
+        except DuplicateComplaintError:
+            return Response(
+                {
+                    "code": PRIVACY_REQUEST_PENDING_CODE,
+                    "detail": PRIVACY_REQUEST_PENDING_MESSAGE,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except NoImageError:
+            return Response(
+                {
+                    "code": IMAGE_ALREADY_REMOVED_CODE,
+                    "detail": IMAGE_ALREADY_REMOVED_MESSAGE,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        payload = PrivacyRequestReceiptSerializer(complaint).data
+        payload["detail"] = (
+            "Recibimos tu solicitud. Ocultamos el reporte mientras revisamos la "
+            f"imagen, y la revisión se hace dentro de las {describe_window()}."
+        )
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"], url_path="complaint-reasons")
+    def complaint_reasons(self, request):
+        """El catálogo de motivos del botón *Denunciar* (US-021, escenario 2).
+
+        Lo sirve el servidor para que la app no tenga una copia: el motivo y su
+        destinatario se declaran una sola vez, en ``ReportComplaint``.
+        """
+        return Response(reason_catalog())
+
+    @action(detail=True, methods=["post"])
+    def complaints(self, request, pk=None):
+        """Denunciar un reporte (US-021).
+
+        Solo registra la denuncia y la deja dirigida a quien la resuelve según
+        su motivo. No cambia el estado ni la visibilidad del reporte, salvo el
+        motivo de dato personal, que entra al circuito de US-043.
+        """
+        report = self.get_object()
+        serializer = ComplaintCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            complaint = file_complaint(
+                report=report,
+                reporter=request.user,
+                reason=serializer.validated_data["reason"],
+                comment=serializer.validated_data.get("comment", ""),
+            )
+        except OwnReportError as error:
+            raise PermissionDenied(str(error)) from error
+        except ReportNotPublicError as error:
+            return Response(
+                {"code": REPORT_NOT_PUBLIC_CODE, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except DuplicateComplaintError as error:
+            return Response(
+                {"code": COMPLAINT_ALREADY_FILED_CODE, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except NoImageError:
+            return Response(
+                {
+                    "code": IMAGE_ALREADY_REMOVED_CODE,
+                    "detail": IMAGE_ALREADY_REMOVED_MESSAGE,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        payload = ComplaintReceiptSerializer(complaint).data
+        payload["detail"] = confirmation_for(complaint)
+        return Response(payload, status=status.HTTP_201_CREATED)
 
     @action(
         detail=True,

@@ -17,8 +17,10 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from urbancheck.anonymization.pipeline import schedule_anonymization
 from urbancheck.reports.geo import haversine_meters
 
+from .comparison import register_comparison
 from .models import Report
 from .models import ResolutionAppeal
 from .models import ResolutionEvidence
@@ -111,7 +113,10 @@ def register_resolution(  # noqa: PLR0913 (cada parámetro es un dato del parte)
     with transaction.atomic():
         evidence = ResolutionEvidence.objects.create(
             report=report,
-            photo=photo,
+            # A `photo_pending`, no a `photo`: la evidencia nace sin imagen
+            # publicada y la recibe cuando la tarea termina (US-042,
+            # escenario 8). El parte de trabajo y la transición sí existen ya.
+            photo_pending=photo,
             description=description,
             operator=operator,
             # El área **al momento del cierre**: un traslado posterior del
@@ -126,6 +131,13 @@ def register_resolution(  # noqa: PLR0913 (cada parámetro es un dato del parte)
             actor=Actor.OPERATOR,
             changed_by=operator,
         )
+        # Después de la transición y dentro de la misma transacción: si el
+        # cierre no llega a existir, tampoco se registra ninguna comparación
+        # (US-015). La comparación **no se encola acá**: la evidencia todavía
+        # no tiene foto publicada, así que se dispara al terminar el difuminado
+        # (ver ``anonymization.pipeline`` y los hooks de ``reports.apps``).
+        register_comparison(evidence)
+        schedule_anonymization(evidence)
     return evidence
 
 
@@ -155,7 +167,9 @@ def appeal_resolution(
             evidence=report.resolution_evidences.order_by("created_at").last(),
             author=author,
             reason=reason,
-            photo=photo,
+            # Mismo circuito que el resto de las fotos (US-042): la apelación
+            # queda registrada ya, la imagen se publica al difuminarse.
+            photo_pending=photo,
         )
         apply_transition(
             report,
@@ -164,6 +178,7 @@ def appeal_resolution(
             changed_by=author,
             reason=reason,
         )
+        schedule_anonymization(appeal)
     return appeal
 
 

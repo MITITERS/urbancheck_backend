@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 import pytest
@@ -49,7 +50,7 @@ class TestUserMePatch:
             data={"name": "Nuevo Nombre"},
             format="multipart",
         )
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         user.refresh_from_db()
         assert user.name == "Nuevo Nombre"
 
@@ -62,6 +63,6 @@ class TestUserMePatch:
             data={"email": "hacker@example.com", "name": user.name},
             format="multipart",
         )
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         user.refresh_from_db()
         assert user.email == original_email

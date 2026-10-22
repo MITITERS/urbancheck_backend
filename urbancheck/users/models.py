@@ -9,11 +9,11 @@ from django.db.models import BooleanField
 from django.db.models import CharField
 from django.db.models import EmailField
 from django.db.models import ForeignKey
-from django.db.models import ImageField
 from django.db.models import TextChoices
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
+from urbancheck.anonymization.fields import MetadataFreeImageField
 from urbancheck.municipalities.models import PHONE_INVALID_MESSAGE
 from urbancheck.municipalities.models import PHONE_REGEX
 
@@ -133,7 +133,9 @@ class User(AbstractUser):
         related_name="operators",
         verbose_name=_("operational area"),
     )
-    avatar = ImageField(upload_to="avatars/", blank=True)
+    # Sin difuminar (es la foto que el usuario eligió mostrar), pero sin GPS ni
+    # ningún otro metadato del teléfono (Sprint 5, punto 5.2).
+    avatar = MetadataFreeImageField(upload_to="avatars/", blank=True)
     # Perfil público: si es False, otros usuarios solo ven nombre y avatar.
     is_public = BooleanField(
         _("public profile"),

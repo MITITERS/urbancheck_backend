@@ -188,9 +188,18 @@ class PublicUserSerializer(serializers.ModelSerializer[User]):
         return obj.date_joined.isoformat()
 
     def get_report_count(self, obj) -> int | None:
+        """Cuenta lo que un tercero puede efectivamente abrir.
+
+        Pasa por la misma función que el feed y el mapa. Contaba todo, y por
+        eso el perfil público delataba reportes que nadie podía ver: los
+        cancelados y archivados, los retenidos y retirados por protección de
+        datos (US-043) y, desde US-042, los que todavía están procesando la
+        imagen. Un número que no coincide con la lista de abajo es, además, la
+        única pista de que hay algo escondido.
+        """
         if not obj.is_public:
             return None
-        return obj.reports.count()
+        return obj.reports.publicly_visible().count()
 
 
 class ValidatorCreateSerializer(PanelUserCreateSerializer):

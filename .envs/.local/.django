@@ -30,6 +30,11 @@ DJANGO_ACTIVE_MUNICIPALITY_ID=1
 # bajarlo a 2 o 3 deja mostrar la validación colectiva sin juntar diez cuentas.
 DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=3
 
+# Radio en metros dentro del cual un reporte activo de la misma categoría se
+# considera duplicado (US-026): el nuevo no se crea y se ofrece sumarse al
+# existente (US-032).
+DJANGO_DUPLICATE_REPORT_RADIUS_METERS=30
+
 # Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
 #
 # Pasado el plazo **solo deja de dibujarse en el mapa**: sigue en el feed, en su
@@ -46,3 +51,29 @@ DJANGO_MAP_RESOLVED_RETENTION_MINUTES=21600
 # desde el alta: un reporte que alguien apoyó hace una semana no está
 # abandonado, por viejo que sea. El aviso al autor sale 7 días antes.
 DJANGO_ARCHIVAL_INACTIVITY_DAYS=90
+
+# Comparación automática del antes y el después de un cierre (US-015).
+#
+# Es informativa: el veredicto se muestra en el panel y no cambia nada del
+# reporte. **Sin clave queda apagada** y cada cierre figura como "comparación no
+# disponible"; el circuito sigue igual.
+#
+# El default es el free tier de Gemini (clave gratis en aistudio.google.com).
+# En ese plan Google puede usar el contenido para mejorar sus productos: solo
+# viajan fotos ya difuminadas (US-041), pero en producción corresponde el plan
+# pago o un proveedor sin retención. Cualquier servicio compatible con la API de
+# chat completions de OpenAI (Groq, OpenRouter, Ollama) sirve cambiando la URL y
+# el modelo.
+# El adaptador de chat completions (ver urbancheck/reports/vision.py). Sin esta
+# línea el proveedor es el nulo y no se compara nada, aunque haya clave.
+DJANGO_VISION_PROVIDER=openai_compatible
+DJANGO_RESOLUTION_COMPARISON_API_KEY=
+# DJANGO_RESOLUTION_COMPARISON_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+# DJANGO_RESOLUTION_COMPARISON_MODEL=gemini-3.6-flash
+# DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES=3
+
+# Anonimización diferida (US-042). Los reintentos se bajan a 1 y la espera a 5 s
+# para poder ver el fallo definitivo y el aviso al autor sin esperar minutos.
+DJANGO_ANONYMIZATION_MAX_RETRIES=1
+DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS=5
+DJANGO_ANONYMIZATION_STALE_MINUTES=5

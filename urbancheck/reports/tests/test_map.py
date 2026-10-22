@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -28,7 +30,7 @@ class TestReportMap:
         client, _ = auth_client
         report = ReportFactory.create(latitude="-34.603722", longitude="-58.381592")
         res = client.get("/api/reports/map/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         marker = next(r for r in res.data["results"] if r["id"] == report.id)
         assert marker["latitude"] is not None
         assert marker["longitude"] is not None
@@ -36,7 +38,9 @@ class TestReportMap:
     def test_marker_payload_supports_popup(self, auth_client):
         """El popup necesita foto en miniatura, categoría y estado (US-010)."""
         client, _ = auth_client
-        ReportFactory.create(category=Report.Category.BACHE, status=Report.Status.REPORTADO)
+        ReportFactory.create(
+            category=Report.Category.BACHE, status=Report.Status.REPORTADO,
+        )
         res = client.get("/api/reports/map/")
         marker = res.data["results"][0]
         assert set(marker) == {
@@ -58,13 +62,16 @@ class TestReportMap:
     def test_excludes_reports_without_coordinates(self, auth_client):
         client, _ = auth_client
         sin_coords = ReportFactory.create(
-            latitude=None, longitude=None, address="Sin geocodificar"
+            latitude=None,
+            longitude=None,
+            address="Sin geocodificar",
         )
         res = client.get("/api/reports/map/")
         assert sin_coords.id not in ids_of(res)
 
     @pytest.mark.parametrize(
-        "inactive_status", [Report.Status.CANCELADO, Report.Status.ARCHIVADO]
+        "inactive_status",
+        [Report.Status.CANCELADO, Report.Status.ARCHIVADO],
     )
     def test_excludes_inactive_reports(self, auth_client, inactive_status):
         client, _ = auth_client
@@ -94,4 +101,4 @@ class TestReportMap:
         ReportFactory.create_batch(25)
         res = client.get("/api/reports/map/")
         assert "count" not in res.data
-        assert len(res.data["results"]) == 25
+        assert len(res.data["results"]) == 25  # noqa: PLR2004

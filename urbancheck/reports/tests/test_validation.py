@@ -1,11 +1,14 @@
 """US-036 y US-037 — validación en terreno y bandeja de pendientes."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.tests.factories import ReportComplaintFactory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import UserFactory
@@ -65,7 +68,7 @@ class TestValidateInPlace:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.status == Report.Status.REPORTADO
         entry = ReportStatusHistory.objects.filter(report=report).first()
@@ -85,7 +88,7 @@ class TestValidateInPlace:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert response.data["code"] == "too_far"
         # El móvil necesita el número para decir "estás a X metros".
         assert response.data["distance_meters"] > response.data["radius_meters"]
@@ -99,9 +102,13 @@ class TestValidateInPlace:
     ):
         report = pending_report(municipality)
 
-        response = validator_client.post(f"{URL}{report.id}/validate/", {}, format="json")
+        response = validator_client.post(
+            f"{URL}{report.id}/validate/",
+            {},
+            format="json",
+        )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         report.refresh_from_db()
         assert report.status == Report.Status.PENDIENTE_VALIDACION
 
@@ -133,7 +140,7 @@ class TestValidateInPlace:
             format="json",
         )
 
-        assert response.status_code == 409
+        assert response.status_code == HTTPStatus.CONFLICT
         report.refresh_from_db()
         assert report.status == status
 
@@ -153,7 +160,7 @@ class TestValidateInPlace:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
 
 
 class TestReject:
@@ -166,7 +173,7 @@ class TestReject:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.status == Report.Status.CANCELADO
 
@@ -183,7 +190,7 @@ class TestReject:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         report.refresh_from_db()
         assert report.status == Report.Status.PENDIENTE_VALIDACION
 
@@ -215,10 +222,12 @@ class TestWhoCanValidate:
         client = APIClient()
         client.force_authenticate(factory.create())
 
-        assert client.get(URL).status_code == 403
+        assert client.get(URL).status_code == HTTPStatus.FORBIDDEN
         assert (
-            client.post(f"{URL}{report.id}/validate/", NEARBY, format="json").status_code
-            == 403
+            client.post(
+                f"{URL}{report.id}/validate/", NEARBY, format="json",
+            ).status_code
+            == HTTPStatus.FORBIDDEN
         )
 
     def test_a_deactivated_validator_is_denied(self, municipality):
@@ -230,7 +239,7 @@ class TestWhoCanValidate:
         client = APIClient()
         client.force_authenticate(validator)
 
-        assert client.get(URL).status_code == 403
+        assert client.get(URL).status_code == HTTPStatus.FORBIDDEN
 
     def test_a_validator_with_a_temporary_password_is_denied(self, municipality):
         validator = ValidatorFactory.create(
@@ -240,7 +249,7 @@ class TestWhoCanValidate:
         client = APIClient()
         client.force_authenticate(validator)
 
-        assert client.get(URL).status_code == 403
+        assert client.get(URL).status_code == HTTPStatus.FORBIDDEN
 
     def test_a_validator_of_another_municipality_cannot_validate(
         self,
@@ -255,7 +264,7 @@ class TestWhoCanValidate:
             format="json",
         )
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
         foreign.refresh_from_db()
         assert foreign.status == Report.Status.PENDIENTE_VALIDACION
 
@@ -297,14 +306,35 @@ class TestPendingInbox:
 
         response = validator_client.get(URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["results"][0]["distance_meters"] is None
 
     def test_an_empty_inbox_is_not_an_error(self, validator_client):
         response = validator_client.get(URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert response.data["count"] == 0
+
+    def test_a_report_held_by_a_privacy_request_leaves_the_inbox(
+        self,
+        validator_client,
+        municipality,
+    ):
+        """US-043: la bandeja muestra la foto denunciada, así que tampoco la lista."""
+        held = pending_report(municipality)
+        ReportComplaintFactory.create(report=held)
+
+        listed = validator_client.get(URL)
+        validated = validator_client.post(
+            f"{URL}{held.id}/validate/",
+            NEARBY,
+            format="json",
+        )
+
+        assert held.id not in {row["id"] for row in listed.data["results"]}
+        assert validated.status_code == 404  # noqa: PLR2004
+        held.refresh_from_db()
+        assert held.status == Report.Status.PENDIENTE_VALIDACION
 
     def test_a_validated_report_leaves_the_inbox(self, validator_client, municipality):
         report = pending_report(municipality)
