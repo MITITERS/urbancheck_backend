@@ -668,6 +668,13 @@ ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 # https://docs.allauth.org/en/latest/account/configuration.html
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
+# Opcional a propósito (C-08, decisión del equipo del 22/10/2026): allauth
+# manda el correo de confirmación, pero no frena el ingreso. Con "mandatory",
+# si el SMTP de producción falla nadie puede registrarse, y el envío recién se
+# configura en C-02 sin un proveedor probado. Pasarlo a obligatorio exige,
+# además, la pantalla "Revisá tu correo" del flujo ``verify_email`` en la app y
+# que las cuentas de trabajo que crea el panel nazcan verificadas. Queda como
+# deuda técnica.
 # https://docs.allauth.org/en/latest/account/configuration.html
 ACCOUNT_EMAIL_VERIFICATION = "optional"
 # https://docs.allauth.org/en/latest/account/configuration.html

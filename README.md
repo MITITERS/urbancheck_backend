@@ -1807,6 +1807,11 @@ completa, con sus defaults, está en `.env.example`.
   inline ni `eval`; Swagger UI llega de jsDelivr y arranca desde un script
   aparte (`SpectacularSwaggerSplitView`). La API y la vista previa de un
   reporte compartido no la llevan. El panel tiene la suya en su nginx.
+- **Verificación de correo opcional (C-08).** `ACCOUNT_EMAIL_VERIFICATION`
+  sigue en `"optional"` por decisión del equipo: con `"mandatory"`, una falla
+  del SMTP de producción dejaría a todos sin poder registrarse. Hacerla
+  obligatoria pide la pantalla "Revisá tu correo" en la app y que las cuentas
+  de trabajo nazcan verificadas; es deuda técnica.
 - **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
   origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
   `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.
