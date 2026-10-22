@@ -1780,6 +1780,29 @@ mantiene así, pero cada asiento de `ReportStatusHistory` guarda en
 `changed_by_role` el rol de `changed_by` en ese momento, y el panel marca los
 cambios del admin. Los asientos anteriores al campo lo tienen vacío.
 
+### Términos y condiciones: el vecino acepta una versión (RN-10, C-23)
+
+- **El texto vive en la base** (`TermsOfService`: versión, texto y fecha de
+  publicación) y se publica desde el admin de Django, sin deploy. La vigente es
+  la última con `published_at` ya cumplida. Una versión publicada no se edita
+  desde el admin: se publica otra.
+- **Mientras no haya ninguna publicada, no se exige nada.** Así nadie queda
+  trabado hasta que el equipo cargue el texto.
+- **Solo el vecino.** Las cuentas de trabajo las da de alta el municipio o la
+  plataforma.
+- **En el registro**, el formulario de allauth pide `accept_terms: true` y
+  `terms_version` igual a la vigente. Pedir la versión cubre el caso en que se
+  publica otra mientras alguien se registra. El usuario guarda
+  `terms_version` y `terms_accepted_at` (migración `users/0011`).
+- **Cuentas existentes y versiones nuevas**: `must_accept_terms` llega en el
+  perfil y en el payload del login, y la app frena al vecino en una pantalla
+  propia hasta que llame a `POST /api/users/me/accept-terms/` con la versión que
+  leyó. `GET /api/terms/current/` devuelve la vigente sin sesión, o `404`.
+- **El servidor no depende de la app**: reportar, comentar y dar me gusta
+  responden `403` mientras falte aceptar (`HasAcceptedTerms`, aparte de
+  `ParticipatesAsCitizen` porque aquella es regla del rol y esta del estado de
+  la cuenta). Leer no se bloquea.
+
 ## Seguridad (Sprint 5, deuda del Sprint 4)
 
 Todo lo de esta sección se configura por variables de entorno; la lista

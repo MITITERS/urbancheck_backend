@@ -68,6 +68,9 @@ class HeadlessAdapter(DefaultHeadlessAdapter):
         # Nulo es la señal de "mostrar el tutorial" (US-051): tiene que llegar
         # aunque el adapter base descarte los vacíos.
         data["onboarding_completed_at"] = user.onboarding_completed_at
+        # La app frena al vecino que no aceptó los términos vigentes (RN-10)
+        # con este dato, igual que con la contraseña temporal.
+        data["must_accept_terms"] = user.must_accept_terms
         data["municipality"] = (
             {
                 "id": municipality.pk,

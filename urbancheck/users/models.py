@@ -11,7 +11,9 @@ from django.db.models import DateTimeField
 from django.db.models import EmailField
 from django.db.models import ForeignKey
 from django.db.models import TextChoices
+from django.db.models import TextField
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from urbancheck.anonymization.fields import MetadataFreeImageField
@@ -118,6 +120,22 @@ class User(AbstractUser):
         null=True,
         blank=True,
         help_text=_("Cuándo terminó u omitió el tutorial de bienvenida."),
+    )
+    # Aceptación de los términos y condiciones (RN-10, C-23). Se guarda qué
+    # versión se aceptó y no solo si se aceptó: cuando se publica una versión
+    # nueva, la cuenta tiene que volver a aceptarla. Vacía es "nunca aceptó".
+    terms_version = CharField(
+        _("terms version"),
+        max_length=20,
+        blank=True,
+        default="",
+        help_text=_("Versión de los términos y condiciones que aceptó."),
+    )
+    terms_accepted_at = DateTimeField(
+        _("terms accepted at"),
+        null=True,
+        blank=True,
+        help_text=_("Cuándo aceptó esa versión de los términos y condiciones."),
     )
     # Teléfono de contacto. Obligatorio en el alta de un operario (US-044) y
     # vacío para el resto: nadie más lo carga hoy, así que el campo es opcional
@@ -366,6 +384,20 @@ class User(AbstractUser):
         """
         return self.is_panel_user and self.is_work_account_active
 
+    @property
+    def must_accept_terms(self) -> bool:
+        """Si tiene que aceptar los términos vigentes antes de participar (RN-10).
+
+        Solo el vecino: es quien se registra solo y publica. Las cuentas de
+        trabajo las da de alta el municipio o la plataforma, que responden por
+        ellas. Sin términos publicados no hay nada que aceptar, así que nadie
+        queda trabado mientras el equipo no cargue el texto.
+        """
+        if self.role != self.Role.CIUDADANO:
+            return False
+        current = TermsOfService.objects.current()
+        return current is not None and self.terms_version != current.version
+
     def get_absolute_url(self) -> str:
         """Get URL for user's detail view.
 
@@ -374,3 +406,34 @@ class User(AbstractUser):
 
         """
         return reverse("users:detail", kwargs={"pk": self.id})
+
+
+class TermsOfServiceQuerySet(models.QuerySet):
+    def current(self) -> TermsOfService | None:
+        """La versión vigente: la última publicada, o ninguna."""
+        published = self.filter(published_at__lte=timezone.now())
+        return published.order_by("-published_at").first()
+
+
+class TermsOfService(models.Model):
+    """Una versión de los términos y condiciones (RN-10, C-23).
+
+    El texto vive en la base y se carga desde el admin: publicar una versión
+    nueva no pide un deploy. Las versiones no se editan una vez aceptadas por
+    alguien —se publica otra—, porque la aceptación guardada en el usuario
+    apunta a la versión por su nombre.
+    """
+
+    version = CharField(_("version"), max_length=20, unique=True)
+    text = TextField(_("text"))
+    published_at = DateTimeField(_("published at"), default=timezone.now)
+
+    objects = TermsOfServiceQuerySet.as_manager()
+
+    class Meta:
+        verbose_name = _("terms of service")
+        verbose_name_plural = _("terms of service")
+        ordering = ["-published_at"]
+
+    def __str__(self) -> str:
+        return self.version

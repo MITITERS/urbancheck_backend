@@ -68,6 +68,7 @@ from urbancheck.users.api.operator_permissions import ExcludesOperator
 
 from .filters import apply_report_filters
 from .permissions import CanDeleteComment
+from .permissions import HasAcceptedTerms
 from .permissions import IsAuthorOrReadOnly
 from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
@@ -151,7 +152,12 @@ class ReportViewSet(
         if self.action in {"update", "partial_update", "destroy"}:
             return [IsAuthenticated(), ExcludesOperator(), IsAuthorOrReadOnly()]
         if self._is_citizen_participation():
-            return [IsAuthenticated(), ExcludesOperator(), ParticipatesAsCitizen()]
+            return [
+                IsAuthenticated(),
+                ExcludesOperator(),
+                ParticipatesAsCitizen(),
+                HasAcceptedTerms(),
+            ]
         return [IsAuthenticated(), ExcludesOperator()]
 
     def get_throttles(self):

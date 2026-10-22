@@ -6,6 +6,7 @@ from urbancheck.municipalities.api.area_serializers import OperationalAreaSerial
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.models import OperationalArea
+from urbancheck.users.models import TermsOfService
 from urbancheck.users.models import User
 
 EMAIL_TAKEN_MESSAGE = "Ya existe un usuario registrado con ese correo."
@@ -22,6 +23,7 @@ class UserSerializer(serializers.ModelSerializer[User]):
     """Perfil propio: incluye datos privados como el email."""
 
     municipality = MunicipalitySerializer(read_only=True)
+    must_accept_terms = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -37,6 +39,12 @@ class UserSerializer(serializers.ModelSerializer[User]):
             # (US-051), igual que con ``must_change_password``: sin una llamada
             # extra. Solo se escribe por ``POST /me/onboarding/``.
             "onboarding_completed_at",
+            # Términos y condiciones (RN-10): la app frena al vecino que no
+            # aceptó la versión vigente. Solo se escribe por
+            # ``POST /me/accept-terms/``.
+            "must_accept_terms",
+            "terms_version",
+            "terms_accepted_at",
             # Lo mira el panel para frenar en la puerta a una cuenta de trabajo
             # dada de baja, en vez de dejarla entrar a una pantalla en la que
             # cada request va a devolver 403.
@@ -52,6 +60,8 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "municipality",
             "must_change_password",
             "onboarding_completed_at",
+            "terms_version",
+            "terms_accepted_at",
             "is_work_account_active",
         ]
 
@@ -420,3 +430,30 @@ class OperatorUpdateSerializer(
         instance.full_clean(exclude=["password"])
         instance.save()
         return instance
+
+
+TERMS_VERSION_MISMATCH_MESSAGE = (
+    "Esa no es la versión vigente de los términos y condiciones. "
+    "Leé la actual y aceptala."
+)
+
+
+class TermsOfServiceSerializer(serializers.ModelSerializer[TermsOfService]):
+    """La versión vigente de los términos, para mostrarla en la app (RN-10)."""
+
+    class Meta:
+        model = TermsOfService
+        fields = ["version", "text", "published_at"]
+        read_only_fields = fields
+
+
+class TermsAcceptanceSerializer(serializers.Serializer):
+    """La versión que el vecino leyó y acepta (RN-10, C-23)."""
+
+    version = serializers.CharField(max_length=20)
+
+    def validate_version(self, value: str) -> str:
+        current = TermsOfService.objects.current()
+        if current is None or current.version != value:
+            raise serializers.ValidationError(TERMS_VERSION_MISMATCH_MESSAGE)
+        return value

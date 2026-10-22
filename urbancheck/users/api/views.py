@@ -1,17 +1,21 @@
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.exceptions import ValidationError
+from rest_framework.generics import RetrieveAPIView
 from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.mixins import UpdateModelMixin
 from rest_framework.parsers import JSONParser
 from rest_framework.parsers import MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.users.models import TermsOfService
 from urbancheck.users.models import User
 
 from .permissions import IsCitizen
@@ -24,6 +28,8 @@ from .serializers import OperatorCreateSerializer
 from .serializers import OperatorSerializer
 from .serializers import OperatorUpdateSerializer
 from .serializers import PublicUserSerializer
+from .serializers import TermsAcceptanceSerializer
+from .serializers import TermsOfServiceSerializer
 from .serializers import UserSerializer
 from .serializers import ValidatorCreateSerializer
 from .serializers import ValidatorSerializer
@@ -184,6 +190,53 @@ class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
         request.user.refresh_from_db(fields=["onboarding_completed_at"])
         serializer = UserSerializer(request.user, context={"request": request})
         return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/accept-terms",
+        permission_classes=[IsAuthenticated, IsCitizen],
+        serializer_class=TermsAcceptanceSerializer,
+    )
+    def accept_terms(self, request):
+        """Registra que el vecino aceptó los términos vigentes (RN-10, C-23).
+
+        Pide la versión que leyó: si se publicó otra mientras tanto, responde
+        ``400`` y la app vuelve a mostrar el texto. Aceptar de nuevo la misma
+        versión no cambia la fecha original.
+        """
+        serializer = TermsAcceptanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.validated_data["version"]
+        pending = User.objects.filter(pk=request.user.pk).exclude(
+            terms_version=version,
+        )
+        pending.update(terms_version=version, terms_accepted_at=timezone.now())
+        request.user.refresh_from_db(fields=["terms_version", "terms_accepted_at"])
+        data = UserSerializer(request.user, context={"request": request}).data
+        return Response(status=status.HTTP_200_OK, data=data)
+
+
+NO_TERMS_MESSAGE = "Todavía no hay términos y condiciones publicados."
+
+
+class CurrentTermsView(RetrieveAPIView):
+    """Los términos y condiciones vigentes (RN-10, C-23).
+
+    Sin sesión: la app los muestra en el registro, antes de que exista la
+    cuenta. ``404`` mientras no haya ninguna versión publicada.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = TermsOfServiceSerializer
+
+    def get_object(self) -> TermsOfService:
+        terms = TermsOfService.objects.current()
+        if terms is None:
+            raise NotFound(NO_TERMS_MESSAGE)
+        return terms
 
 
 class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):

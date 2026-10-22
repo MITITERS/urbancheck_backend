@@ -17,6 +17,7 @@ from urbancheck.reports.api.statistics_views import PanelStatisticsView
 from urbancheck.reports.api.validation_views import ValidationReportViewSet
 from urbancheck.reports.api.views import CommentViewSet
 from urbancheck.reports.api.views import ReportViewSet
+from urbancheck.users.api.views import CurrentTermsView
 from urbancheck.users.api.views import MunicipalAgentViewSet
 from urbancheck.users.api.views import OperatorViewSet
 from urbancheck.users.api.views import UserViewSet
@@ -87,5 +88,7 @@ urlpatterns = [
         PublicReportView.as_view(),
         name="public-report",
     ),
+    # Términos y condiciones vigentes (RN-10): sin sesión, para el registro.
+    path("terms/current/", CurrentTermsView.as_view(), name="terms-current"),
     *router.urls,
 ]
