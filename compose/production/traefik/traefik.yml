@@ -77,6 +77,8 @@ http:
       rule: 'Host(`panel.{{ env "URBANCHECK_DOMAIN" }}`)'
       entryPoints:
         - web-secure
+      middlewares:
+        - panel-hsts
       service: panel
       tls:
         certResolver: letsencrypt
@@ -89,11 +91,21 @@ http:
       rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`) && PathPrefix(`/r/`)'
       entryPoints:
         - web-secure
+      middlewares:
+        - panel-hsts
       service: panel
       tls:
         certResolver: letsencrypt
 
   middlewares:
+    # HSTS del panel (C-05). Django lo manda en sus propias respuestas; las del
+    # panel las sirve su nginx, que no ve el TLS, así que lo agrega Traefik.
+    # Un año, igual que Django. Para el primer despliegue conviene bajarlo
+    # hasta verificar que todo anda por HTTPS: no se deshace en el navegador.
+    panel-hsts:
+      headers:
+        stsSeconds: 31536000
+
     csrf:
       # https://doc.traefik.io/traefik/master/middlewares/http/headers/#hostsproxyheaders
       # https://docs.djangoproject.com/en/dev/ref/csrf/#ajax

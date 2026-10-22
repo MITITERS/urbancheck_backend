@@ -108,3 +108,18 @@ class TestPanelInProduction:
         for line in text.splitlines():
             if "{{" in line:
                 assert line.strip().startswith("rule:"), line
+
+
+class TestPanelHsts:
+    """C-05: el TLS del panel termina en Traefik, así que el HSTS va ahí."""
+
+    def test_the_panel_routers_send_hsts(self):
+        config = traefik()["http"]
+        for name in ("panel-router", "panel-share-router"):
+            middlewares = config["routers"][name].get("middlewares", [])
+            headers = [
+                config["middlewares"][m]["headers"]
+                for m in middlewares
+                if "headers" in config["middlewares"][m]
+            ]
+            assert any(h.get("stsSeconds", 0) >= 31536000 for h in headers), name  # noqa: PLR2004

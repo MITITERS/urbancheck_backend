@@ -1834,6 +1834,9 @@ resto, `/.well-known/` incluido, a Django. En `.envs/.production/.django`,
 `DJANGO_ALLOWED_HOSTS` tiene que incluir `panel.<dominio>` y
 `DJANGO_PUBLIC_REPORT_PAGE_URL` apuntar a `https://panel.<dominio>/reporte/{token}`.
 
+Traefik agrega HSTS de un año a las respuestas del panel (middleware
+`panel-hsts`, C-05); las de Django ya lo traen.
+
 El servicio `django` aplica las migraciones al arrancar (`migrate --noinput`,
 antes de `collectstatic`). Worker, beat y flower no migran (C-03).
 
