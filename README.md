@@ -1797,6 +1797,11 @@ completa, con sus defaults, está en `.env.example`.
   shell). `python manage.py strip_image_metadata [--apply]` sanea las de perfil
   ya guardadas. HEIC no llega al backend: la app reencodea a JPEG antes de
   subir, y Pillow sin `pillow-heif` rechaza un HEIC con `400`.
+- **Sin listado de usuarios (C-01).** `GET /api/users/` no existe: exponía el
+  correo, el rol y la municipalidad de todas las cuentas a cualquier sesión.
+  Quedan `me/`, `me/onboarding/` y el detalle de otro usuario, que usa
+  `PublicUserSerializer` (sin correo). Las cuentas de trabajo se listan en
+  `municipal-agents/`, `validators/` y `operators/`, acotados por rol.
 - **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
   origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
   `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.

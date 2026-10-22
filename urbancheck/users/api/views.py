@@ -110,7 +110,15 @@ def filter_by_state(queryset, query_params):
     return queryset
 
 
-class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
+class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
+    """Perfil propio (``me``) y perfil público de otro usuario.
+
+    No hay listado (C-01): ``GET /api/users/`` devolvía el correo, el rol y la
+    municipalidad de todas las cuentas a cualquier sesión, y ningún cliente lo
+    usaba. Las cuentas de trabajo se listan en sus propios endpoints, acotados
+    por rol y jurisdicción.
+    """
+
     serializer_class = UserSerializer
     queryset = User.objects.all()
     lookup_field = "pk"
