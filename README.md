@@ -544,6 +544,11 @@ El default es **todo activado**: la ausencia de fila en
 `NotificationPreference` significa habilitado, así que un usuario que nunca tocó
 la configuración recibe todo.
 
+`nuevo_like` estaba en el catálogo pero nada lo creaba (C-09). Ahora lo crea
+`notify_new_like` al dar me gusta: al autor, nunca por el propio, y uno solo
+por persona y reporte aunque se quite y se vuelva a dar. Sigue la misma regla
+de preferencias que los demás.
+
 ### Radio de validación (US-036)
 
 `VALIDATION_RADIUS_METERS` (env `DJANGO_VALIDATION_RADIUS_METERS`, default 50)

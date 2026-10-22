@@ -28,6 +28,7 @@ from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
+from urbancheck.notifications.services import notify_new_like
 from urbancheck.notifications.services import notify_resolution_appealed
 from urbancheck.reports.collective_validation import (
     evaluate as evaluate_collective_validation,
@@ -515,7 +516,10 @@ class ReportViewSet(
         """
         report = self.get_object()
         if request.method == "POST":
-            Like.objects.get_or_create(report=report, user=request.user)
+            _, created = Like.objects.get_or_create(report=report, user=request.user)
+            if created:
+                # Al autor, una vez por persona (C-09).
+                notify_new_like(report, request.user)
             liked = True
             code = status.HTTP_201_CREATED
             # US-040: el umbral se evalúa **al persistir el me gusta**, no en un

@@ -41,6 +41,37 @@ def notify_new_comment(comment) -> Notification | None:
     return notification
 
 
+def notify_new_like(report, user) -> Notification | None:
+    """Avisa al autor que alguien apoyó su reporte (C-09).
+
+    Uno solo por persona y reporte: quitar el me gusta y volver a darlo no
+    repite el aviso. Tampoco hay aviso por el me gusta propio. Como cualquier
+    otro, si el autor apagó el tipo en sus preferencias se queda sin push pero
+    lo ve en la bandeja (US-025).
+    """
+    if report.author_id == user.pk:
+        return None
+    already_told = Notification.objects.filter(
+        recipient_id=report.author_id,
+        actor=user,
+        report=report,
+        kind=Notification.Kind.NUEVO_LIKE,
+    ).exists()
+    if already_told:
+        return None
+
+    name = user.name or user.email
+    notification = Notification.objects.create(
+        recipient=report.author,
+        actor=user,
+        kind=Notification.Kind.NUEVO_LIKE,
+        report=report,
+        message=f"{name} apoyó tu reporte.",
+    )
+    deliver_push(notification)
+    return notification
+
+
 def notify_status_change(  # noqa: PLR0913 (cada uno es un dato del aviso)
     report,
     *,
