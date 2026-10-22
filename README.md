@@ -1877,3 +1877,7 @@ El proyecto utiliza Git Flow:
 - `hotfix/<descripcion>`: correcciones urgentes.
 
 Toda funcionalidad debe desarrollarse desde `develop` y mergearse mediante Pull Request.
+## Licencia
+
+Propietaria, todos los derechos reservados: ver [`LICENSE`](LICENSE). Es la
+misma en los tres repositorios de UrbanCheck (C-14).
