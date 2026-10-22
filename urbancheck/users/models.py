@@ -7,6 +7,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import BooleanField
 from django.db.models import CharField
+from django.db.models import DateTimeField
 from django.db.models import EmailField
 from django.db.models import ForeignKey
 from django.db.models import TextChoices
@@ -107,6 +108,16 @@ class User(AbstractUser):
         _("must change password"),
         default=False,
         help_text=_("El usuario todavía usa la contraseña temporal del alta."),
+    )
+    # Cuándo vio el tutorial de bienvenida (US-051). Nulo mientras no lo vio. La
+    # marca vive en la cuenta y no en el dispositivo: reinstalar la app o
+    # cambiar de teléfono no lo vuelve a mostrar. Es una fecha y no un booleano
+    # porque dice cuándo se vio y no cuesta más.
+    onboarding_completed_at = DateTimeField(
+        _("onboarding completed at"),
+        null=True,
+        blank=True,
+        help_text=_("Cuándo terminó u omitió el tutorial de bienvenida."),
     )
     # Teléfono de contacto. Obligatorio en el alta de un operario (US-044) y
     # vacío para el resto: nadie más lo carga hoy, así que el campo es opcional

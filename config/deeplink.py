@@ -31,7 +31,9 @@ def apple_app_site_association(request):
                 "details": [
                     {
                         "appID": settings.IOS_UNIVERSAL_LINK_APP_ID,
-                        "paths": ["/reset-password", "/reset-password/*"],
+                        # «/r/*» es el enlace para compartir un reporte
+                        # (US-030): con la app instalada se abre en ella.
+                        "paths": ["/reset-password", "/reset-password/*", "/r/*"],
                     },
                 ],
             },

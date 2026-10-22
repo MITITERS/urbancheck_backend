@@ -33,6 +33,10 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "role",
             "municipality",
             "must_change_password",
+            # La app decide con este campo si muestra el tutorial de bienvenida
+            # (US-051), igual que con ``must_change_password``: sin una llamada
+            # extra. Solo se escribe por ``POST /me/onboarding/``.
+            "onboarding_completed_at",
             # Lo mira el panel para frenar en la puerta a una cuenta de trabajo
             # dada de baja, en vez de dejarla entrar a una pantalla en la que
             # cada request va a devolver 403.
@@ -47,6 +51,7 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "role",
             "municipality",
             "must_change_password",
+            "onboarding_completed_at",
             "is_work_account_active",
         ]
 

@@ -52,6 +52,13 @@ class Notification(models.Model):
         # reporte, el operario que cerró o quien apeló— con la invitación a
         # volver a cargarla: es el único camino que le queda.
         IMAGEN_NO_PROCESADA = "imagen_no_procesada", "No pudimos procesar la imagen"
+        # El administrador de la plataforma no hizo lugar a la apelación del
+        # autor contra un descarte por moderación (US-049). Si hace lugar, el
+        # aviso es el del cambio de estado: el reporte vuelve a publicarse.
+        APELACION_MODERACION_RECHAZADA = (
+            "apelacion_moderacion_rechazada",
+            "Apelación rechazada",
+        )
 
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,

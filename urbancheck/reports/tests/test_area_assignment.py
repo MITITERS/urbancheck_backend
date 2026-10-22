@@ -11,6 +11,7 @@ from urbancheck.reports.services import AreaRequiredError
 from urbancheck.reports.services import apply_transition
 from urbancheck.reports.state_machine import TRANSITIONS
 from urbancheck.reports.state_machine import Actor
+from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 
@@ -319,6 +320,10 @@ class TestThereIsNoOtherWayIn:
         caso de la apelación de US-048, que reabre conservando el área que el
         reporte ya tenía. Comprobar solo ``requires_area`` dejaría pasar una
         transición nueva desde un estado sin área garantizada.
+
+        La reversión de un descarte por moderación (US-049) sale de *Cancelado*,
+        que no garantiza área, y por eso su guarda la exige: lo cubre
+        ``test_moderation.py`` sobre el servicio.
         """
         # Estados desde los que un reporte ya tiene área sí o sí: se llega a
         # ellos pasando por ``procesar``, que la exige.
@@ -329,7 +334,12 @@ class TestThereIsNoOtherWayIn:
         entries = [t for t in TRANSITIONS if t.target == Report.Status.EN_PROCESO]
 
         assert entries
-        assert all(t.requires_area or t.source in with_area for t in entries)
+        assert all(
+            t.requires_area
+            or t.source in with_area
+            or t.origin == Origin.REVERSION_MODERACION
+            for t in entries
+        )
 
     def test_the_domain_layer_refuses_too(self, municipality, agent, reported):
         """Ni siquiera llamando al servicio directamente desde el shell."""

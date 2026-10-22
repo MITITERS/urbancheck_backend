@@ -11,6 +11,7 @@ from rest_framework import serializers
 from urbancheck.municipalities.api.area_serializers import OperationalAreaSerializer
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.reports.comparison import needs_closure_review
+from urbancheck.reports.models import ModerationDecision
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportAreaAssignment
@@ -20,6 +21,7 @@ from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionComparison
 from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.reports.services import PHOTO_EXEMPT_TARGETS
+from urbancheck.reports.state_machine import MODERATION_ORIGINS
 from urbancheck.reports.state_machine import OFFICIAL_RESPONSE_STATUSES
 from urbancheck.reports.state_machine import VALIDATOR_DECISIONS
 from urbancheck.reports.state_machine import Actor
@@ -165,6 +167,63 @@ class PanelResolutionAppealSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PanelComplaintSerializer(serializers.ModelSerializer):
+    """Una denuncia por contenido, tal como la ve quien la resuelve (US-049).
+
+    Lleva la identidad del denunciante: el agente la necesita para evaluar la
+    denuncia (escenario 1). Es el único lugar donde sale; el serializer público
+    del reporte nunca la expone.
+    """
+
+    reporter = AuthorSerializer(read_only=True)
+    reason_label = serializers.CharField(source="get_reason_display", read_only=True)
+
+    class Meta:
+        model = ReportComplaint
+        fields = [
+            "id",
+            "reason",
+            "reason_label",
+            "comment",
+            "reporter",
+            "status",
+            "created_at",
+            "resolved_at",
+        ]
+        read_only_fields = fields
+
+
+class ModerationAppealSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ResolutionAppeal
+        fields = ["id", "status", "reason", "created_at", "resolved_at"]
+        read_only_fields = fields
+
+
+class PanelModerationSerializer(serializers.ModelSerializer):
+    """El descarte por moderación vigente de un reporte (US-049)."""
+
+    decided_by = AuthorSerializer(read_only=True)
+    appeal = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ModerationDecision
+        fields = [
+            "id",
+            "reason",
+            "previous_status",
+            "decided_by",
+            "created_at",
+            "appeal",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(ModerationAppealSummarySerializer(allow_null=True))
+    def get_appeal(self, obj) -> dict | None:
+        appeal = obj.appeals.first()
+        return ModerationAppealSummarySerializer(appeal).data if appeal else None
+
+
 class PanelAreaAssignmentSerializer(serializers.ModelSerializer):
     """Un asiento del registro de asignaciones de área (US-028)."""
 
@@ -251,6 +310,9 @@ class PanelReportListSerializer(serializers.ModelSerializer):
     # Si el último cierre quedó señalado por la comparación automática y el
     # reporte sigue en la ventana de objeción (US-015, escenario 3).
     needs_closure_review = serializers.SerializerMethodField()
+    # Cuántas denuncias por contenido esperan decisión (US-049, escenario 12):
+    # es lo que señala la fila en el listado.
+    pending_complaint_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
@@ -277,8 +339,20 @@ class PanelReportListSerializer(serializers.ModelSerializer):
             "validation",
             "closure",
             "needs_closure_review",
+            "pending_complaint_count",
         ]
         read_only_fields = fields
+
+    def get_pending_complaint_count(self, obj) -> int:
+        """Usa la anotación del queryset si está, y si no consulta."""
+        annotated = getattr(obj, "pending_complaint_count", None)
+        if annotated is not None:
+            return annotated
+        return (
+            obj.complaints.for_municipal_review()
+            .filter(status=ReportComplaint.Status.PENDIENTE)
+            .count()
+        )
 
     def get_needs_closure_review(self, obj) -> bool:
         """Usa la anotación del queryset si está, y si no consulta.
@@ -411,12 +485,25 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
     # El parte de trabajo del operario y la objeción del ciudadano, con las
     # identidades que el panel sí puede auditar.
     resolution_evidences = PanelResolutionEvidenceSerializer(many=True, read_only=True)
-    resolution_appeals = PanelResolutionAppealSerializer(many=True, read_only=True)
+    # Solo las objeciones de cierre: las apelaciones de moderación comparten
+    # modelo (US-049) pero no son parte del hilo de resolución.
+    resolution_appeals = PanelResolutionAppealSerializer(
+        source="closure_appeals",
+        many=True,
+        read_only=True,
+    )
     objection_deadline = serializers.SerializerMethodField()
+    # Las denuncias por contenido y su estado de resolución (US-049). Las de
+    # dato personal no: las resuelve el administrador desde su bandeja.
+    complaints = serializers.SerializerMethodField()
+    pending_complaint_count = serializers.SerializerMethodField()
+    # El descarte por moderación vigente, si lo hay. El administrador lo
+    # revierte desde acá (escenario 8).
+    moderation = serializers.SerializerMethodField()
     # Si hay una solicitud por dato personal sin resolver (US-043): el reporte
-    # está fuera de las vistas públicas. El agente no la resuelve —es del
-    # administrador de la plataforma— pero tiene que saber por qué el vecino
-    # no lo ve.
+    # está fuera de las vistas públicas. La imagen denunciada se manda igual:
+    # el agente y el admin la ven siempre, sea cual sea el motivo de la
+    # denuncia, para poder resolverla (pedido del usuario del 21/10).
     under_privacy_review = serializers.BooleanField(
         source="is_on_privacy_hold",
         read_only=True,
@@ -463,45 +550,32 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
             "closed_at",
             "objection_deadline",
             "appeal_count",
+            "complaints",
+            "pending_complaint_count",
+            "moderation",
         ]
         read_only_fields = fields
 
-    def to_representation(self, instance):
-        """Sin la imagen que está en revisión por dato personal (US-043).
+    def _content_complaints(self, obj) -> list[ReportComplaint]:
+        cached = getattr(obj, "_content_complaints_cache", None)
+        if cached is None:
+            cached = list(
+                obj.complaints.for_municipal_review().select_related("reporter"),
+            )
+            obj._content_complaints_cache = cached  # noqa: SLF001
+        return cached
 
-        El agente sigue viendo el reporte y sabe por qué el vecino no lo ve
-        (``under_privacy_review``), pero no la foto denunciada: mientras el
-        administrador no la resuelve, puede mostrar un rostro o una patente sin
-        difuminar, y el panel no es la excepción a la regla del punto 6.1. Se
-        retiene solo la imagen denunciada —la del reporte o la de un cierre—,
-        no las demás.
-        """
-        data = super().to_representation(instance)
-        under_review = set(
-            ReportComplaint.objects.filter(
-                report=instance,
-                status=ReportComplaint.Status.PENDIENTE,
-                reason__in=ReportComplaint.HIDING_REASONS,
-            ).values_list("image_name", flat=True),
-        )
-        if not under_review:
-            return data
-        if instance.photo.name in under_review:
-            data["photo"] = None
-        names = {
-            evidence.pk: evidence.photo.name
-            for evidence in instance.resolution_evidences.all()
-        }
-        for evidence in data.get("resolution_evidences", []):
-            if names.get(evidence["id"]) in under_review:
-                evidence["photo"] = None
-        appeals = {
-            appeal.pk: appeal.photo.name for appeal in instance.resolution_appeals.all()
-        }
-        for appeal in data.get("resolution_appeals", []):
-            if appeals.get(appeal["id"]) in under_review:
-                appeal["photo"] = None
-        return data
+    @extend_schema_field(PanelComplaintSerializer(many=True))
+    def get_complaints(self, obj) -> list[dict]:
+        return PanelComplaintSerializer(self._content_complaints(obj), many=True).data
+
+    def get_pending_complaint_count(self, obj) -> int:
+        return sum(1 for c in self._content_complaints(obj) if c.is_pending)
+
+    @extend_schema_field(PanelModerationSerializer(allow_null=True))
+    def get_moderation(self, obj) -> dict | None:
+        decision = obj.active_discard()
+        return PanelModerationSerializer(decision).data if decision else None
 
     def get_objection_deadline(self, obj) -> str | None:
         """Hasta cuándo el autor puede objetar el cierre (US-047).
@@ -604,5 +678,8 @@ class PanelReportDetailSerializer(serializers.ModelSerializer):
                 "requires_area": transition.requires_area,
             }
             for transition in transitions_from(obj.status, Actor.MUNICIPAL_AGENT)
-            if obj.photo_is_ready or transition.target in PHOTO_EXEMPT_TARGETS
+            if (obj.photo_is_ready or transition.target in PHOTO_EXEMPT_TARGETS)
+            # El descarte por moderación se ejecuta desde la bandeja de
+            # denuncias, donde está lo que lo justifica (US-049).
+            and transition.origin not in MODERATION_ORIGINS
         ]

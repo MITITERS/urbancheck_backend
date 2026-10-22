@@ -3,6 +3,7 @@ from functools import cached_property
 from django.db.models import Count
 from django.db.models import Exists
 from django.db.models import OuterRef
+from django.http import Http404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -49,6 +50,10 @@ from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import on_privacy_hold
 from urbancheck.reports.models import photo_ready
+from urbancheck.reports.moderation import ModerationError
+from urbancheck.reports.moderation import NotAuthorError
+from urbancheck.reports.moderation import ReasonRequiredError
+from urbancheck.reports.moderation import appeal_moderation
 from urbancheck.reports.privacy import DuplicateComplaintError
 from urbancheck.reports.privacy import NoImageError
 from urbancheck.reports.privacy import describe_window
@@ -68,6 +73,8 @@ from .serializers import CommentSerializer
 from .serializers import ComplaintCreateSerializer
 from .serializers import ComplaintReceiptSerializer
 from .serializers import ExistingReportSerializer
+from .serializers import ModerationAppealCreateSerializer
+from .serializers import ModerationNoticeSerializer
 from .serializers import PrivacyRequestCreateSerializer
 from .serializers import PrivacyRequestReceiptSerializer
 from .serializers import ReportCreateSerializer
@@ -109,6 +116,7 @@ PRIVACY_REQUEST_PENDING_MESSAGE = (
 IMAGE_ALREADY_REMOVED_CODE = "image_already_removed"
 IMAGE_ALREADY_REMOVED_MESSAGE = "Esta imagen ya fue retirada."
 # Respuestas del botón *Denunciar* (US-021), también ``409`` con código.
+MODERATION_APPEAL_REJECTED_CODE = "moderation_appeal_not_allowed"
 COMPLAINT_ALREADY_FILED_CODE = "complaint_already_filed"
 REPORT_NOT_PUBLIC_CODE = "report_not_public"
 
@@ -531,6 +539,65 @@ class ReportViewSet(
                 "status": report.status,
             },
             status=code,
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        """El detalle; o, si se descartó por moderación, solo el aviso (US-049).
+
+        Un reporte descartado no es visible —``visible_to`` lo deja afuera como
+        a cualquier cancelado—, pero el motivo de la decisión es público
+        (escenario 5). Para un tercero se responde la versión reducida, con el
+        aviso y nada más. Nada de lo que cuelga del detalle se habilita por
+        acá: comentarios, me gusta y denuncias siguen respondiendo ``404``.
+        """
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except Http404:
+            notice = self._moderation_notice(kwargs.get("pk"))
+            if notice is None:
+                raise
+            return Response(
+                ModerationNoticeSerializer(notice, context={"request": request}).data,
+            )
+
+    def _moderation_notice(self, pk) -> Report | None:
+        if not str(pk).isdigit():
+            return None
+        queryset = Report.objects.moderation_notices().filter(pk=int(pk))
+        user = self.request.user
+        if user.sees_only_own_municipality:
+            queryset = queryset.for_user(user)
+        return queryset.first()
+
+    @action(detail=True, methods=["post"], url_path="moderation-appeal")
+    def moderation_appeal(self, request, pk=None):
+        """El autor apela el descarte de su reporte por moderación (US-049).
+
+        Va al administrador de la plataforma, no al municipio que descartó, y
+        el reporte sigue Cancelado mientras se resuelve (escenario 6).
+        """
+        report = self.get_object()
+        serializer = ModerationAppealCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appeal_moderation(
+                report,
+                author=request.user,
+                reason=serializer.validated_data["reason"],
+            )
+        except NotAuthorError as error:
+            raise PermissionDenied(str(error)) from error
+        except ReasonRequiredError as error:
+            raise ValidationError({"reason": [str(error)]}) from error
+        except ModerationError as error:
+            return Response(
+                {"code": MODERATION_APPEAL_REJECTED_CODE, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        report.refresh_from_db()
+        return Response(
+            ReportDetailSerializer(report, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["post"])

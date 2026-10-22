@@ -1,4 +1,5 @@
 from django.db.models import Count
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -9,7 +10,11 @@ from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.services import deactivate_municipality
 from urbancheck.reports.api.panel_filters import PanelReportFilterSet
 from urbancheck.reports.api.panel_serializers import PanelReportListSerializer
+from urbancheck.reports.api.statistics_views import STATISTICS_PARAMETERS
+from urbancheck.reports.api.statistics_views import StatisticsSerializer
+from urbancheck.reports.api.statistics_views import statistics_response
 from urbancheck.reports.models import Report
+from urbancheck.reports.moderation import pending_content_complaints
 from urbancheck.users.api.permissions import IsPlatformAdmin
 
 from .serializers import MunicipalityReportMarkerSerializer
@@ -69,6 +74,7 @@ class MunicipalityViewSet(ModelViewSet):
             .annotate(
                 like_count=Count("likes", distinct=True),
                 official_response_count=Count("official_responses", distinct=True),
+                pending_complaint_count=pending_content_complaints(),
             )
             .order_by("-created_at")
         )
@@ -122,3 +128,17 @@ class MunicipalityViewSet(ModelViewSet):
         )
         serializer = MunicipalityReportMarkerSerializer(queryset, many=True)
         return Response({"results": serializer.data})
+
+    @extend_schema(parameters=STATISTICS_PARAMETERS, responses=StatisticsSerializer)
+    @action(detail=True, methods=["get"])
+    def statistics(self, request, pk=None):
+        """Las estadísticas de esta municipalidad (US-023, escenario 9).
+
+        La misma respuesta y los mismos filtros que ve su agente, acotada al
+        municipio de la ficha.
+        """
+        municipality = self.get_object()
+        return statistics_response(
+            request,
+            Report.objects.filter(municipality=municipality),
+        )

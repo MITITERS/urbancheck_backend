@@ -28,6 +28,10 @@ class Actor(StrEnum):
     OPERATOR = "operario"
     #: El ciudadano autor del reporte. Hoy solo apela un cierre (US-048).
     CITIZEN = "ciudadano"
+    #: El administrador de la plataforma. Hoy solo revierte un descarte por
+    #: moderación municipal (US-049): es el contrapeso de esa facultad, y por
+    #: eso no la ejerce el mismo municipio que descartó.
+    PLATFORM_ADMIN = "admin_plataforma"
     #: La verificación periódica de US-031 y US-047, y la validación colectiva
     #: de US-040. No es un usuario: las transiciones que ejecuta quedan
     #: asentadas con ``changed_by`` nulo, que es como el historial dice "esto no
@@ -57,6 +61,13 @@ class Origin(StrEnum):
     CONFIRMACION_AUTOMATICA = "confirmacion_automatica"
     APELACION_CIUDADANO = "apelacion_ciudadano"
     ARCHIVADO_INACTIVIDAD = "archivado_inactividad"
+    #: El agente descartó el reporte al resolver una denuncia por contenido
+    #: (US-049). Llega a *Cancelado* igual que el rechazo del validador y que la
+    #: cancelación del agente desde *En proceso*, y US-050 los cuenta aparte.
+    MODERACION_MUNICIPAL = "moderacion_municipal"
+    #: El administrador de la plataforma restituyó un reporte descartado por
+    #: moderación, por apelación del autor o de oficio (US-049).
+    REVERSION_MODERACION = "reversion_moderacion"
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,13 @@ class Transition:
     #: vivan en la tabla y no en la vista: si estuvieran en la vista, un segundo
     #: endpoint que llamara a la misma transición se las saltearía.
     guard: Callable[[Report], str | None] | None = None
+    #: Otros actores que también pueden ejecutarla, además de ``actor``. Hoy
+    #: solo la restitución de un descarte, que resuelven el administrador y el
+    #: agente de la jurisdicción (US-049, decisión del usuario).
+    extra_actors: frozenset[Actor] = frozenset()
+
+    def allows(self, actor: Actor) -> bool:
+        return actor == self.actor or actor in self.extra_actors
 
 
 #: Cuántas veces puede el autor apelar el cierre de un mismo reporte (US-048).
@@ -107,6 +125,73 @@ def _within_appeal_limit(report: Report) -> str | None:
     return None
 
 
+#: Estados desde los que el agente puede descartar un reporte por moderación
+#: (US-049): todos los que el vecino ve publicados. Un reporte cancelado o
+#: archivado ya está fuera del feed y del mapa, y no hay nada que descartar.
+MODERATION_SOURCES: tuple[str, ...] = (
+    Report.Status.PENDIENTE_VALIDACION,
+    Report.Status.REPORTADO,
+    Report.Status.EN_PROCESO,
+    Report.Status.RESUELTO_PENDIENTE,
+    Report.Status.RESUELTO,
+)
+
+NO_PENDING_COMPLAINTS_MESSAGE = (
+    "Este reporte no tiene denuncias por contenido pendientes de resolución."
+)
+NO_DISCARD_MESSAGE = "Este reporte no fue descartado por moderación municipal."
+WRONG_RESTORE_TARGET_MESSAGE = (
+    "El reporte se restituye al estado que tenía antes del descarte, no a otro."
+)
+RESTORE_WITHOUT_AREA_MESSAGE = (
+    "El reporte no tiene un área operativa responsable y no puede volver a "
+    "En proceso."
+)
+
+
+def _has_pending_content_complaints(report: Report) -> str | None:
+    """Guarda del descarte: se descarta resolviendo denuncias, no a voluntad.
+
+    Sin esto, el descarte sería una cancelación libre desde cualquier estado
+    —incluso Resuelto— con otro nombre, y el agente tendría un camino para
+    sacar del feed un reclamo incómodo que nadie denunció.
+    """
+    if report.complaints.for_municipal_review().filter(
+        status="pendiente",
+    ).exists():
+        return None
+    return NO_PENDING_COMPLAINTS_MESSAGE
+
+
+def _restores_status(target: str) -> Callable[[Report], str | None]:
+    """Guarda de ``restituir_a_<estado>``: vuelve al estado previo al descarte.
+
+    El estado anterior se persiste al descartar (``ModerationDecision``) y no se
+    asume: un reporte puede haber sido descartado estando En proceso o Resuelto,
+    y devolverlo siempre a Reportado le borraría la gestión que tenía.
+    """
+
+    def guard(report: Report) -> str | None:
+        decision = report.active_discard()
+        if decision is None:
+            return NO_DISCARD_MESSAGE
+        if decision.previous_status != target:
+            return WRONG_RESTORE_TARGET_MESSAGE
+        # Ningún camino a En proceso sin área (US-028). Cancelar no la borra,
+        # así que un reporte descartado estando En proceso la conserva; esto
+        # lo garantiza en vez de suponerlo.
+        if target == Report.Status.EN_PROCESO and report.operational_area_id is None:
+            return RESTORE_WITHOUT_AREA_MESSAGE
+        return None
+
+    return guard
+
+
+def restore_operation(status: str) -> str:
+    """La operación que devuelve un reporte descartado a ``status`` (US-049)."""
+    return f"restituir_a_{status}"
+
+
 TRANSITIONS: tuple[Transition, ...] = (
     # Validación en terreno (US-036), ejecutada desde la app móvil.
     Transition(
@@ -116,12 +201,18 @@ TRANSITIONS: tuple[Transition, ...] = (
         actor=Actor.VALIDATOR,
         origin=Origin.VALIDACION_TERRENO,
     ),
+    # El rechazo también es una decisión en terreno, y lleva el mismo origen
+    # que la validación. Hasta US-049 quedaba en ``manual``: la migración 0008
+    # le había puesto ``validacion_terreno`` a los rechazos viejos, pero cada
+    # rechazo nuevo se asentaba como manual y el panel —que reconoce al
+    # validador por el origen— dejaba de mostrarlo como decisión suya.
     Transition(
         operation="rechazar",
         source=Report.Status.PENDIENTE_VALIDACION,
         target=Report.Status.CANCELADO,
         actor=Actor.VALIDATOR,
         requires_reason=True,
+        origin=Origin.VALIDACION_TERRENO,
     ),
     # Gestión municipal (US-013), ejecutada desde el panel web.
     # US-028 redefinió esta transición: asignar el área **es** procesar el
@@ -227,6 +318,55 @@ TRANSITIONS: tuple[Transition, ...] = (
         actor=Actor.SYSTEM,
         origin=Origin.ARCHIVADO_INACTIVIDAD,
     ),
+    # Moderación municipal de contenido (US-049). El descarte lleva a
+    # *Cancelado* y no a *Archivado*: cancelado significa "no era un problema
+    # real", lo mismo que cuando lo rechaza el validador; archivado significa
+    # "caducó", y es reversible por el municipio. Mezclarlos arruinaría las
+    # métricas del municipio (US-050).
+    #
+    # Es **una sola operación** con una fila por estado de origen: la tabla
+    # sigue teniendo un origen por fila, y ``apply_transition`` elige la que
+    # corresponde al estado del reporte bloqueado.
+    *(
+        Transition(
+            operation="descartar_por_moderacion",
+            source=source,
+            target=Report.Status.CANCELADO,
+            actor=Actor.MUNICIPAL_AGENT,
+            requires_reason=True,
+            origin=Origin.MODERACION_MUNICIPAL,
+            guard=_has_pending_content_complaints,
+        )
+        for source in MODERATION_SOURCES
+    ),
+    # La reversión de un descarte (US-049): una operación por destino, porque
+    # desde *Cancelado* hay que poder volver a cualquiera de los estados del
+    # descarte. La guarda impide elegir uno que no sea el que tenía.
+    #
+    # La ejecuta el administrador —de oficio o al hacer lugar a una
+    # apelación— y también el agente de la jurisdicción al hacer lugar a una
+    # apelación: decisión del usuario del 20/10, contraria a la historia, que
+    # dejaba la apelación solo en manos de la plataforma.
+    *(
+        Transition(
+            operation=restore_operation(status),
+            source=Report.Status.CANCELADO,
+            target=status,
+            actor=Actor.PLATFORM_ADMIN,
+            extra_actors=frozenset({Actor.MUNICIPAL_AGENT}),
+            requires_reason=True,
+            origin=Origin.REVERSION_MODERACION,
+            guard=_restores_status(status),
+        )
+        for status in MODERATION_SOURCES
+    ),
+)
+
+#: Orígenes de las transiciones que el panel **no** ofrece como botón: se
+#: ejecutan desde la bandeja de denuncias o desde la revisión del
+#: administrador, que es donde está el contexto que las justifica.
+MODERATION_ORIGINS = frozenset(
+    {Origin.MODERACION_MUNICIPAL, Origin.REVERSION_MODERACION},
 )
 
 #: Qué decidió el validador, según a dónde mandó el reporte desde
@@ -245,7 +385,9 @@ VALIDATOR_DECISIONS: dict[str, str] = {
     Report.Status.CANCELADO: "rechazado",
 }
 
-#: Estados sin transiciones de salida.
+#: Estados sin transiciones de salida para quien gestiona el reporte. Cancelado
+#: tiene una sola, y no es del municipio: la reversión de un descarte por
+#: moderación, que ejecuta el administrador de la plataforma (US-049).
 FINAL_STATUSES = frozenset({Report.Status.RESUELTO, Report.Status.CANCELADO})
 
 #: Estados en los que el municipio puede publicar una respuesta oficial
@@ -297,11 +439,23 @@ def closing_operation(report: Report) -> str:
         return "registrar_resolucion_definitiva"
     return "registrar_resolucion"
 
-_BY_OPERATION = {transition.operation: transition for transition in TRANSITIONS}
 
 
-def get_transition(operation: str) -> Transition | None:
-    return _BY_OPERATION.get(operation)
+def transitions_for(operation: str) -> tuple[Transition, ...]:
+    """Las filas de una operación: una, o una por estado de origen (US-049)."""
+    return tuple(t for t in TRANSITIONS if t.operation == operation)
+
+
+def get_transition(operation: str, source: str | None = None) -> Transition | None:
+    """La fila de ``operation``; con ``source``, la que sale de ese estado."""
+    return next(
+        (
+            t
+            for t in transitions_for(operation)
+            if source is None or t.source == source
+        ),
+        None,
+    )
 
 
 def transitions_from(status: str, actor: Actor | None = None) -> tuple[Transition, ...]:
@@ -313,7 +467,7 @@ def transitions_from(status: str, actor: Actor | None = None) -> tuple[Transitio
     return tuple(
         transition
         for transition in TRANSITIONS
-        if transition.source == status and (actor is None or transition.actor == actor)
+        if transition.source == status and (actor is None or transition.allows(actor))
     )
 
 
@@ -321,6 +475,6 @@ def is_valid(source: str, target: str, actor: Actor | None = None) -> bool:
     return any(
         transition.source == source
         and transition.target == target
-        and (actor is None or transition.actor == actor)
+        and (actor is None or transition.allows(actor))
         for transition in TRANSITIONS
     )

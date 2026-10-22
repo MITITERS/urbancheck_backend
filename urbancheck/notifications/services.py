@@ -407,3 +407,55 @@ def notify_complaint_resolved(
         deliver_push(notification)
         notifications.append(notification)
     return notifications
+
+
+def notify_content_complaints_resolved(
+    report,
+    *,
+    recipients,
+    discarded: bool,
+) -> list[Notification]:
+    """Le cuenta a quien denunció por contenido qué decidió el municipio (US-049).
+
+    No le dice el motivo del agente ni quiénes más denunciaron: lo primero es
+    público en el reporte si se descartó, y lo segundo no es de nadie.
+    """
+    if discarded:
+        message = (
+            "El municipio revisó el reporte que denunciaste y lo descartó. "
+            "Gracias por avisar."
+        )
+    else:
+        message = (
+            "El municipio revisó el reporte que denunciaste y consideró que es "
+            "un reclamo legítimo, así que sigue publicado."
+        )
+    notifications = []
+    for recipient in recipients:
+        notification = Notification.objects.create(
+            recipient=recipient,
+            actor=None,
+            kind=Notification.Kind.DENUNCIA_RESUELTA,
+            report=report,
+            message=message,
+        )
+        deliver_push(notification)
+        notifications.append(notification)
+    return notifications
+
+
+def notify_moderation_appeal_rejected(appeal) -> Notification:
+    """El administrador no hizo lugar a la apelación del autor (US-049)."""
+    notification = Notification.objects.create(
+        recipient=appeal.author,
+        actor=None,
+        kind=Notification.Kind.APELACION_MODERACION_RECHAZADA,
+        report=appeal.report,
+        message=(
+            "Revisamos tu apelación y el descarte del municipio se mantiene. "
+            "La decisión es definitiva."
+        )[:255],
+        reason=appeal.resolution_reason,
+    )
+    deliver_push(notification)
+    return notification

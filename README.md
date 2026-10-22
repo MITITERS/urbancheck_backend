@@ -1553,6 +1553,217 @@ archivados y los retenidos. Ahora pasa por `publicly_visible()`.
 - Un archivo pendiente puede quedar huérfano si el borrado falla o si el autor
   elimina el reporte mientras se procesa. No afecta lo publicado: es limpieza.
 
+## Decisiones del Sprint 6
+
+### Tutorial de bienvenida: la marca vive en la cuenta (US-051)
+
+- `User.onboarding_completed_at` es una fecha nula por defecto, no un booleano:
+  dice cuándo se vio el tutorial y no cuesta más. La app decide con este campo
+  si muestra el recorrido; vive en la cuenta y no en el dispositivo, así que
+  reinstalar la app o cambiar de teléfono no lo vuelve a mostrar.
+- **La migración `users/0010` marca a todas las cuentas existentes** con la
+  fecha del despliegue. Así los vecinos que ya usaban la app no reciben el
+  tutorial (escenario 9) sin ninguna condición extra en el código: para la app,
+  una cuenta preexistente es una que ya lo vio.
+- El campo viaja en `/api/users/me/` y en la respuesta del login de allauth
+  headless (`HeadlessAdapter.serialize_user`), igual que `must_change_password`.
+  Se agrega **después** del `super()`, porque el adapter base descarta los
+  nulos y acá el nulo es justamente la señal de "mostrar".
+- `POST /api/users/me/onboarding/` lo marca. Es idempotente: el `UPDATE` va
+  condicionado a `onboarding_completed_at IS NULL`, así el reintento de la app
+  tras un error de red no pisa la fecha original. Terminar y omitir llaman a lo
+  mismo. Solo el vecino (`IsCitizen`, que delega en `participates_as_citizen`):
+  las cuentas de trabajo reciben `403`. El `PATCH` de `/me` no lo escribe.
+
+### Moderación de contenido: del agente, con cuatro contrapesos (US-049)
+
+- **No existe un rol moderador.** El agente municipal resuelve las denuncias
+  por contenido (`contenido_inapropiado`, `reporte_falso`) de su jurisdicción,
+  desde `/api/panel/moderation/`, que hereda `JurisdictionScopedMixin`: otra
+  municipalidad responde `404`. La bandeja parte de
+  `ReportComplaint.objects.for_municipal_review()`, así que las de dato
+  personal nunca entran (las resuelve el admin, US-043).
+- **Una decisión por reporte, no por denuncia** (`ModerationDecision`). Descartar
+  (`discard`) o desestimar (`dismiss`) cierra todas las denuncias pendientes de
+  contenido y las enlaza a la decisión. El motivo es obligatorio en los dos
+  sentidos. Toda la operación es una sola transacción
+  (`reports/moderation.py`).
+- **El descarte es una transición de la máquina única**: `descartar_por_moderacion`,
+  con origen `moderacion_municipal`, a *Cancelado* (no a *Archivado*: cancelado
+  es "no era real", archivado es "caducó"). Es **una operación con una fila por
+  estado de origen** —los cinco estados publicados—; `apply_transition` elige la
+  fila sobre el reporte bloqueado. Su guarda exige denuncias de contenido
+  pendientes: sin eso, el descarte sería una cancelación libre desde cualquier
+  estado. No se ofrece como botón del panel (`MODERATION_ORIGINS`), solo desde
+  la bandeja.
+- **Contrapeso 1, el motivo es público.** La visibilidad no cambia: un reporte
+  descartado sale del feed y del mapa por su estado, como cualquier cancelado.
+  Pero `retrieve` de `/api/reports/{id}/`, si el reporte no es visible y tiene un
+  descarte vigente (`Report.objects.moderation_notices()`), responde a un tercero
+  el aviso reducido (`ModerationNoticeSerializer`: número, categoría, estado,
+  fecha y motivo; sin foto, descripción, autor ni denunciantes). **Decisión del
+  usuario (20/10)**. Nada que cuelgue del detalle se habilita: comentarios, me
+  gusta y denuncias siguen en `visible_to` y responden `404`.
+- **Contrapeso 2, la apelación.** **Decisión del usuario (20/10), contraria a
+  la historia**: la resuelven el administrador —todas— y el agente —solo las de
+  su municipalidad—, desde `/api/panel/moderation-appeals/` (`IsPanelUser`,
+  acotada con `Report.objects.for_user`; otra municipalidad responde `404`). La
+  historia la dejaba solo en manos de la plataforma, para que no la decidiera el
+  mismo municipio que descartó: con este cambio, ese control depende de que el
+  administrador también mire las apelaciones. Reutiliza `ResolutionAppeal` con
+  `kind="moderacion"` (sin foto, con `status`, `resolved_by`,
+  `resolution_reason`). Una por descarte (restricción única). El reporte sigue
+  Cancelado mientras se revisa. `Report.closure_appeals` filtra las de cierre
+  para que el hilo de resolución de US-048 no cambie: los serializers exponen
+  `resolution_appeals` desde ahí.
+- **Contrapeso 3, la reversión**: por apelación
+  (`/api/panel/moderation-appeals/{id}/accept|reject/`, admin o agente) o de
+  oficio (`/api/platform/reports/{id}/revert-moderation/`, **solo** el admin).
+  Es `restituir_a_<estado>`, una operación por destino con actor
+  `admin_plataforma`, `extra_actors` con el agente y origen
+  `reversion_moderacion`; su guarda exige que el
+  destino sea el `previous_status` guardado al descartar, y que haya área si
+  vuelve a *En proceso* (ningún camino a En proceso sin área, US-028).
+- **Contrapeso 4**: el origen `moderacion_municipal` es lo que US-050 va a contar
+  aparte de las demás cancelaciones.
+- Avisos: al autor, el cambio de estado con texto propio por origen
+  (`ORIGIN_CHANGE_MESSAGES`); a quienes denunciaron, `denuncia_resuelta` con
+  textos de contenido; al autor, `apelacion_moderacion_rechazada` si la
+  plataforma mantiene el descarte (migración `notifications/0010`).
+- El listado del panel trae `pending_complaint_count` (subconsulta, no join) y
+  el detalle, `complaints` y `moderation`.
+
+### El rechazo del validador vuelve a ser una decisión en terreno
+
+`rechazar` estaba declarada con el origen por defecto (`manual`). La migración
+0008 le había puesto `validacion_terreno` a los rechazos viejos, pero cada rechazo
+posterior quedó como `manual` y el panel —que reconoce al validador por el
+origen— dejó de mostrarlo como decisión suya. Se encontró al preparar US-050.
+`rechazar` ahora lleva `validacion_terreno`, y la migración `reports/0015`
+corrige los asientos que quedaron mal (solo `pendiente_validacion → cancelado`
+con responsable, que nada más pudo producir).
+
+### Estadísticas: un endpoint para toda la sección (US-023)
+
+- `GET /api/panel/statistics/` (agente, `IsMunicipalAgent`, sobre
+  `Report.objects.for_user`) y `GET /api/municipalities/{id}/statistics/`
+  (admin, desde la ficha). Una sola respuesta con el período aplicado, el total y
+  las dos distribuciones; US-050 suma sus indicadores a la misma.
+- **El período**: `?period=7d|30d|12m|custom` (default `30d`), y con `custom`,
+  `start` y `end` en `aaaa-mm-dd`. Se valida en el backend (`reports/statistics.py`,
+  `resolve_window`): inicio posterior al fin o fin en el futuro dan `400` con el
+  motivo en el campo. Las fechas son días calendario de `TIME_ZONE`, ambos
+  incluidos, y se traducen a `[inicio 00:00, fin + 1 00:00)` hora local: un
+  reporte de las 23 del último día cuenta.
+- Cuenta los reportes **creados** en el período, agrupados por categoría y por
+  su **estado actual**, con los siete estados. Tres consultas agregadas, sin
+  traer filas (hay un test con `django_assert_num_queries`). Lo que no tiene
+  reportes vuelve en cero; sin total, el porcentaje es `null` y no `0`.
+- Índice `report_muni_created` (`municipality`, `created_at`), migración `0016`.
+- **Datos para la demo**: `python manage.py seed_statistics` (después de
+  `seed_demo`) agrega 90 reportes por municipio repartidos en 12 meses, con
+  cadenas de historial fechadas y sus orígenes. Es idempotente y determinista.
+  Las transiciones se escriben directo en el historial porque hay que fecharlas
+  en el pasado; un test verifica que cada una sea una de las de la tabla.
+- `seed_demo` estaba roto desde US-042: creaba fotos sin `photo_status`
+  procesado y el modelo las rechaza. Corregido.
+
+### Indicadores de gestión: todo sale del historial (US-050)
+
+- Viajan en `indicators`, dentro de la misma respuesta de estadísticas y sobre
+  el mismo período. Se calculan en `reports/statistics.py` (`indicators`) **sobre
+  `ReportStatusHistory`**, con subconsultas por reporte, restas
+  `ExpressionWrapper(..., DurationField())` y `Avg` en la base: seis consultas en
+  total, tenga los reportes que tenga.
+- Los cortes de cada reloj:
+
+  | Indicador | Desde | Hasta | Sobre |
+  |---|---|---|---|
+  | Validación | creación | primer paso a Reportado | validados en el período, por origen (`validacion_terreno` / `validacion_colectiva`) |
+  | Asignación | primer Reportado | primer En proceso | pasados a En proceso en el período |
+  | Resolución | primer En proceso | **último** cierre `cierre_operario` | con último cierre en el período |
+
+  La resolución termina en el cierre del operario, no en la confirmación: la
+  ventana de objeción es un control, no trabajo municipal. Y toma primer inicio y
+  último cierre, así un reporte reabierto por apelación cuenta lo que esperó el
+  vecino de verdad. Sin casos, el promedio es `null` (no cero).
+- **Abiertos**: foto del presente, sin período: cantidad por estado
+  (pendiente, reportado, en proceso) y desde cuándo espera el más viejo, medido
+  desde que entró en ese estado. No entran en ningún promedio.
+- **Cierres apelados**: se cuentan cierres (no reportes) del período, y cuántos
+  tuvieron una objeción después. El umbral para destacarlo es
+  `DJANGO_STATS_APPEAL_ALERT_PERCENT` (default 20) y viaja en la respuesta.
+- **Cancelaciones por origen**: `validacion_terreno` (rechazo del validador),
+  `moderacion_municipal` (US-049) y `manual` (el agente cancela la intervención).
+  **Archivados por inactividad** (`archivado_inactividad`) van aparte.
+- El origen se lee del campo de la transición, nunca del rol de quien la hizo: la
+  confirmación automática no tiene usuario.
+- Índice `history_report_status_at` (`report`, `status`, `created_at`), migración
+  `0017`.
+
+### Compartir un reporte: un token, una página pública (US-030)
+
+- `Report.share_token` es un UUID v4 aleatorio y único. El enlace se arma con
+  `DJANGO_PUBLIC_REPORT_URL` (default `https://urbancheck.com.ar/r/{token}`) y
+  viaja como `share_url` en el detalle **solo si el reporte es público**. Nunca
+  se usa el id, que es correlativo y permitiría recorrer los reportes.
+- La migración `0018` crea el campo en tres pasos (nulo, un token por fila,
+  único): un `default` en `AddField` se evalúa una vez y les daría a todas las
+  filas el mismo token.
+- `GET /api/public/reports/<token>/` es el **único endpoint sin sesión**
+  (`AllowAny`, límite `public_reports`, 120/hora por IP). Decide con la función
+  única de visibilidad: lo que no es público responde `404` con
+  `code: report_unavailable`, salvo el descarte por moderación (US-049), que
+  además trae el motivo. El serializer público no lleva autor, comentarios ni
+  quién intervino: responde el municipio.
+- AASA suma `/r/*`, para que iOS abra el enlace en la app si está instalada.
+- **Vista previa en redes** (`reports/share_preview.py`): `/r/<token>` lo
+  responde Django, no el panel. WhatsApp, Facebook y X arman la tarjeta con las
+  etiquetas Open Graph del HTML del servidor y no ejecutan JavaScript, así que a
+  una SPA le verían siempre el mismo `index.html`. La vista devuelve un HTML
+  mínimo con `og:title`, `og:description`, `og:image` (la foto **difuminada**,
+  URL absoluta) y `twitter:card`, y una redirección por JavaScript a
+  `DJANGO_PUBLIC_REPORT_PAGE_URL` (default `/reporte/{token}`, la página del
+  panel). El bot se queda con las etiquetas; la persona sigue de largo. Un
+  reporte que ya no es público da una tarjeta genérica, sin foto ni texto.
+- WhatsApp recomienda imágenes de menos de 300 KB para la vista previa; una foto
+  más pesada puede salir sin miniatura. Si pasa, el paso siguiente es servir una
+  miniatura reducida en `og:image`.
+- En producción el nginx del panel manda `/r/` y `/.well-known/` a Django, en el
+  mismo dominio; en desarrollo lo hace el proxy de Vite (`^/r/`).
+
+### El admin lee la bandeja de denuncias (21/10)
+
+Con el selector de municipalidad del panel, el admin de la plataforma ve la
+bandeja de denuncias de la ciudad elegida: `GET /api/panel/moderation/` y
+`count/` aceptan al admin (`IsPanelUser`) con `?municipality=<id>`. Descartar y
+desestimar siguen siendo solo del agente (`IsMunicipalAgent`): el admin recibe
+`403`.
+
+### El agente ve y resuelve las solicitudes por dato personal de su municipio (21/10)
+
+Pedido del usuario, contrario al escenario 10 de US-043: `GET
+/api/platform/privacy-requests/` (lista y detalle) acepta al agente municipal
+(`IsPanelUser`), acotado a su municipalidad con `Report.objects.for_user` —otra
+municipalidad responde `404`—. **También las resuelve** (`remove-image` y
+`dismiss`, pedido del 21/10): el admin las resuelve en todas las
+municipalidades y el agente en la suya. El agente y el admin reciben
+la `image.url` también mientras la solicitud está pendiente (pedido del 21/10):
+sin la foto no se puede juzgar la denuncia.
+
+El panel juntó esta bandeja con la de contenido en una sola pantalla de
+Denuncias, con un filtro por tipo. Para eso `GET /api/panel/moderation/` y su
+`count/` aceptan `?reason=contenido_inapropiado|reporte_falso`: acota los
+reportes a los que tienen denuncias pendientes de ese motivo, y
+`pending_complaint_count` cuenta solo esas. Un motivo que no es de contenido se
+ignora. `GET /api/panel/moderation/resolved/` es el registro de lo resuelto por
+contenido (una fila por `ModerationDecision`, la más reciente primero, mismo
+alcance y mismo `?reason=`), para la pestaña «Resueltas».
+
+El panel ya no retiene la imagen denunciada por dato personal (pedido del
+21/10): el detalle del panel y la bandeja la mandan siempre, porque el agente y
+el admin la necesitan para resolver. Las vistas públicas siguen sin mostrarla.
+
 ## Seguridad (Sprint 5, deuda del Sprint 4)
 
 Todo lo de esta sección se configura por variables de entorno; la lista

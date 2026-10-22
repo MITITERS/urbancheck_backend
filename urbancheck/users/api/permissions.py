@@ -57,3 +57,23 @@ class IsPanelUser(BasePermission):
 
     def has_permission(self, request, view) -> bool:
         return _operates_panel(request)
+
+
+ONBOARDING_CITIZEN_ONLY_MESSAGE = (
+    "El tutorial de bienvenida es solo para cuentas de vecino."
+)
+
+
+class IsCitizen(BasePermission):
+    """Solo la cuenta de vecino (US-051).
+
+    Las cuentas de trabajo tienen capacitación propia y una app recortada a su
+    función: un tutorial que les explique cómo reportar les describiría
+    acciones que tienen prohibidas. Delega en la regla única del modelo.
+    """
+
+    message = ONBOARDING_CITIZEN_ONLY_MESSAGE
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated and user.participates_as_citizen)

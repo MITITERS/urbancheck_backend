@@ -15,10 +15,11 @@ from .models import ReportStatusHistory
 from .signals import report_area_assigned
 from .signals import report_status_changed
 from .state_machine import AREA_REASSIGNMENT_STATUS
+from .state_machine import MODERATION_ORIGINS
 from .state_machine import Actor
 from .state_machine import Origin
 from .state_machine import Transition
-from .state_machine import get_transition
+from .state_machine import transitions_for
 from .state_machine import transitions_from
 
 REASON_REQUIRED_MESSAGE = "Esta acción requiere indicar un motivo."
@@ -85,7 +86,15 @@ class AreaRequiredError(TransitionError):
 
 
 def _unavailable(report: Report, operation: str, actor: Actor) -> TransitionError:
-    available = tuple(t.operation for t in transitions_from(report.status, actor))
+    # Sin repetir —una operación puede tener varias filas— y sin las de
+    # moderación, que el panel no ofrece como botón (US-049).
+    available = tuple(
+        dict.fromkeys(
+            t.operation
+            for t in transitions_from(report.status, actor)
+            if t.origin not in MODERATION_ORIGINS
+        ),
+    )
     return TransitionError(
         f"No se puede ejecutar «{operation}» sobre un reporte en estado "
         f"«{report.get_status_display()}».",
@@ -141,9 +150,14 @@ def apply_transition(  # noqa: PLR0913, C901 (cada parámetro es un requisito di
     un reporte En proceso sin área nunca llega a existir, ni siquiera un
     instante (US-028).
     """
-    transition: Transition | None = get_transition(operation)
-    if transition is None or transition.actor != actor:
+    # Una operación puede tener una fila por estado de origen —el descarte por
+    # moderación de US-049—. Todas comparten actor y requisitos, así que se
+    # validan con la primera; la fila exacta se elige sobre el reporte
+    # bloqueado, que es el único estado del que se puede estar seguro.
+    candidates = transitions_for(operation)
+    if not candidates or not candidates[0].allows(actor):
         raise _unavailable(report, operation, actor)
+    transition: Transition = candidates[0]
 
     reason = (reason or "").strip()
     if transition.requires_reason and not reason:
@@ -168,8 +182,10 @@ def apply_transition(  # noqa: PLR0913, C901 (cada parámetro es un requisito di
     assignment = None
     with transaction.atomic():
         locked = Report.objects.select_for_update().get(pk=report.pk)
-        if locked.status != transition.source:
+        matching = [t for t in candidates if t.source == locked.status]
+        if not matching:
             raise _unavailable(locked, operation, actor)
+        transition = matching[0]
 
         _reject_if_unpublished(locked, transition)
 

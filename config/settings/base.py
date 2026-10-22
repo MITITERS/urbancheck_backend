@@ -523,6 +523,28 @@ RESOLUTION_OBJECTION_MINUTES = env.int(
     default=7 * 24 * 60,
 )
 
+# Estadísticas del panel (US-050): desde qué porcentaje de cierres apelados el
+# panel destaca el indicador. Es configurable porque qué es "mucho" lo decide
+# cada despliegue, no el código.
+STATS_APPEAL_ALERT_PERCENT = env.int("DJANGO_STATS_APPEAL_ALERT_PERCENT", default=20)
+
+# El enlace para compartir un reporte (US-030). Apunta a la ruta pública del
+# panel, ``/r/<token>``, que es también la que abre la app si está instalada.
+# En desarrollo conviene ``http://localhost:5173/r/{token}``.
+PUBLIC_REPORT_URL = env(
+    "DJANGO_PUBLIC_REPORT_URL",
+    default="https://urbancheck.com.ar/r/{token}",
+)
+# A dónde sigue una persona que abre ese enlace: la página pública del panel.
+# ``/r/<token>`` lo responde el backend con las etiquetas de vista previa para
+# las redes (Open Graph) y redirige acá. En producción es la misma raíz, así que
+# alcanza con una ruta relativa; en desarrollo, el panel vive en otro puerto:
+# ``http://localhost:5173/reporte/{token}``.
+PUBLIC_REPORT_PAGE_URL = env(
+    "DJANGO_PUBLIC_REPORT_PAGE_URL",
+    default="/reporte/{token}",
+)
+
 # Con cuánta antelación se le avisa al autor que el plazo está por vencer.
 RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
     "DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES",
@@ -740,6 +762,8 @@ REST_FRAMEWORK = {
         "comments": env("DJANGO_THROTTLE_COMMENTS", default="60/hour"),
         "complaints": env("DJANGO_THROTTLE_COMPLAINTS", default="10/day"),
         "privacy_requests": env("DJANGO_THROTTLE_PRIVACY_REQUESTS", default="5/day"),
+        # La página pública de un reporte compartido (US-030): sin sesión, por IP.
+        "public_reports": env("DJANGO_THROTTLE_PUBLIC_REPORTS", default="120/hour"),
     },
     "NUM_PROXIES": NUM_PROXIES,
 }
@@ -762,6 +786,8 @@ SPECTACULAR_SETTINGS = {
         "ReportStatusEnum": "urbancheck.reports.models.Report.Status",
         "ComplaintStatusEnum": "urbancheck.reports.models.ReportComplaint.Status",
         "ComparisonStatusEnum": "urbancheck.reports.models.ResolutionComparison.Status",
+        "AppealStatusEnum": "urbancheck.reports.models.ResolutionAppeal.Status",
+        "ModerationOutcomeEnum": "urbancheck.reports.models.ModerationDecision.Outcome",
     },
 }
 # Your stuff...

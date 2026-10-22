@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -13,6 +14,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.users.models import User
 
+from .permissions import IsCitizen
 from .permissions import IsPanelUser
 from .permissions import IsPlatformAdmin
 from .serializers import AdminValidatorCreateSerializer
@@ -150,6 +152,28 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
             serializer.is_valid(raise_exception=True)
             serializer.save()
             return Response(status=status.HTTP_200_OK, data=serializer.data)
+        serializer = UserSerializer(request.user, context={"request": request})
+        return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/onboarding",
+        permission_classes=[IsAuthenticated, IsCitizen],
+    )
+    def onboarding(self, request):
+        """Marca el tutorial de bienvenida como visto (US-051).
+
+        Idempotente: la fecha se escribe solo si todavía estaba vacía, en el
+        mismo ``UPDATE``, así una segunda llamada —el reintento de la app tras
+        un error de red, o dos dispositivos a la vez— no pisa la original.
+        Terminar y omitir llaman a lo mismo: el tutorial queda visto igual.
+        """
+        User.objects.filter(
+            pk=request.user.pk,
+            onboarding_completed_at__isnull=True,
+        ).update(onboarding_completed_at=timezone.now())
+        request.user.refresh_from_db(fields=["onboarding_completed_at"])
         serializer = UserSerializer(request.user, context={"request": request})
         return Response(status=status.HTTP_200_OK, data=serializer.data)
 

@@ -15,6 +15,7 @@ from config.deeplink import reset_password_web_fallback
 from urbancheck.municipalities.api.geo_views import LocalityListView
 from urbancheck.municipalities.api.geo_views import ProvinceListView
 from urbancheck.notifications.api.preferences import NotificationPreferenceView
+from urbancheck.reports.share_preview import shared_report_preview
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -30,6 +31,9 @@ urlpatterns = [
     ),
     path(".well-known/assetlinks.json", android_assetlinks),
     path("reset-password", reset_password_web_fallback, name="reset_password"),
+    # El enlace para compartir un reporte (US-030): la vista previa para las
+    # redes y la redirección a la página pública del panel.
+    path("r/<uuid:token>", shared_report_preview, name="shared_report"),
     # Django Admin, use {% url 'admin:index' %}
     path(settings.ADMIN_URL, admin.site.urls),
     # User management

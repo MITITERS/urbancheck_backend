@@ -54,9 +54,10 @@ class HeadlessAdapter(DefaultHeadlessAdapter):
 
     El panel necesita el rol, la municipalidad y el flag de contraseña temporal
     en la respuesta del login para decidir el flujo sin una llamada extra
-    (US-017). El adapter por defecto además descarta las claves con valor vacío
-    o nulo, así que ``municipality`` se agrega después del filtrado: que llegue
-    en ``null`` es información, no ausencia de dato.
+    (US-017); la app, la marca del tutorial de bienvenida (US-051). El adapter
+    por defecto además descarta las claves con valor vacío o nulo, así que
+    ``municipality`` y ``onboarding_completed_at`` se agregan después del
+    filtrado: que lleguen en ``null`` es información, no ausencia de dato.
     """
 
     def serialize_user(self, user) -> dict[str, typing.Any]:
@@ -64,6 +65,9 @@ class HeadlessAdapter(DefaultHeadlessAdapter):
         municipality = getattr(user, "municipality", None)
         data["role"] = user.role
         data["must_change_password"] = user.must_change_password
+        # Nulo es la señal de "mostrar el tutorial" (US-051): tiene que llegar
+        # aunque el adapter base descarte los vacíos.
+        data["onboarding_completed_at"] = user.onboarding_completed_at
         data["municipality"] = (
             {
                 "id": municipality.pk,

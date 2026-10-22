@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.db import transaction
@@ -115,6 +117,29 @@ class ReportQuerySet(models.QuerySet):
             models.Q(author_id=user.pk) | publicly_visible_condition(),
         )
 
+    def moderation_notices(self) -> ReportQuerySet:
+        """Reportes descartados por moderación municipal, vigente el descarte.
+
+        No son visibles: salen del feed y del mapa por su estado, como
+        cualquier cancelado. Pero el motivo del descarte es público (US-049,
+        escenario 5) —es el contrapeso de que el municipio pueda ocultar
+        reclamos—, así que el detalle se puede abrir por id para leerlo, y
+        **solo** eso: el serializer reducido no lleva foto, descripción ni
+        denunciantes. Nada que cuelgue del detalle —comentarios, me gusta,
+        denuncias— se habilita por acá: esas vistas siguen en ``visible_to``.
+        """
+        return self.filter(
+            status=Report.Status.CANCELADO,
+        ).filter(
+            models.Exists(
+                ModerationDecision.objects.filter(
+                    report=models.OuterRef("pk"),
+                    outcome=ModerationDecision.Outcome.DESCARTADO,
+                    reverted_at__isnull=True,
+                ),
+            ),
+        )
+
 
 def publishable_condition() -> models.Q:
     """La imagen se puede mostrar: difuminada, sin revisión en curso, no retirada.
@@ -225,6 +250,10 @@ class Report(PendingPhotoMixin, models.Model):
     # instancia leída antes del alta lo rebobina, y el número se repite en
     # silencio hasta chocar contra la restricción de unicidad.
     number = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    # El identificador del enlace para compartir (US-030). Aleatorio y no el id:
+    # el id es correlativo, y con él cualquiera podría recorrer los reportes
+    # cambiando un número en la URL.
+    share_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     # Obligatoria al crear —lo exige el serializer de alta—, pero puede quedar
     # vacía: el administrador la elimina si expone un dato personal (US-043).
     photo = models.ImageField(upload_to="reports/%Y/%m/", blank=True)
@@ -332,6 +361,12 @@ class Report(PendingPhotoMixin, models.Model):
             ),
         ]
         indexes = [
+            # Estadísticas del panel (US-023): todo filtra por municipio y por
+            # fecha de creación dentro del período.
+            models.Index(
+                fields=["municipality", "created_at"],
+                name="report_muni_created",
+            ),
             # Búsqueda de duplicados (US-026): las igualdades primero y la
             # latitud después, así la caja de ``find_duplicate`` se resuelve
             # dentro del índice. Es parcial porque los cerrados, que con el
@@ -410,6 +445,37 @@ class Report(PendingPhotoMixin, models.Model):
             return annotated
         return Report.objects.filter(pk=self.pk).filter(on_privacy_hold()).exists()
 
+    def active_discard(self) -> ModerationDecision | None:
+        """El descarte por moderación vigente, si lo hay (US-049).
+
+        Es el que hay que revertir y el que el vecino puede apelar. Uno
+        revertido ya no cuenta: si el agente vuelve a descartar el reporte
+        restituido, es una decisión nueva con su propia apelación.
+        """
+        return (
+            self.moderation_decisions.filter(
+                outcome=ModerationDecision.Outcome.DESCARTADO,
+                reverted_at__isnull=True,
+            )
+            .order_by("-created_at", "-pk")
+            .first()
+        )
+
+    @property
+    def closure_appeals(self) -> list[ResolutionAppeal]:
+        """Las objeciones a un cierre (US-048), sin las apelaciones de moderación.
+
+        Las dos comparten modelo (US-049 lo reutiliza con un tipo), pero solo
+        las de cierre forman parte del hilo de resolución que muestran el panel
+        y la app. Se filtra en Python sobre ``resolution_appeals.all()`` para
+        aprovechar el ``prefetch_related`` que ya traen las vistas.
+        """
+        return [
+            appeal
+            for appeal in self.resolution_appeals.all()
+            if appeal.kind == ResolutionAppeal.Kind.CIERRE
+        ]
+
     def confirmation_count(self) -> int:
         """Me gusta que **cuentan como confirmación** de que el problema existe.
 
@@ -486,6 +552,14 @@ class ReportStatusHistory(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            # Indicadores de US-050: cada uno busca, por reporte, la primera o
+            # la última vez que pasó por un estado.
+            models.Index(
+                fields=["report", "status", "created_at"],
+                name="history_report_status_at",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.report_id}: {self.previous_status or '—'} → {self.status}"
@@ -690,14 +764,32 @@ class ResolutionComparison(models.Model):
 
 
 class ResolutionAppeal(PendingPhotoMixin, models.Model):
-    """La objeción del autor a un cierre que no resolvió el problema (US-048).
+    """La apelación del autor a una decisión sobre su reporte.
 
-    Es el control humano sobre el cierre: el operario certifica su propio
-    trabajo, y esto es lo que impide que esa certificación sea la única palabra.
+    Dos tipos, un solo mecanismo (US-049 pide no crear un segundo):
 
-    Se conserva junto con la evidencia que objeta —no la reemplaza— para que el
-    operario y el agente puedan comparar el antes y el después.
+    - **De cierre** (US-048): la objeción a un cierre que no resolvió el
+      problema. Es el control humano sobre el cierre: el operario certifica su
+      propio trabajo, y esto es lo que impide que esa certificación sea la
+      única palabra. Se conserva junto con la evidencia que objeta para que el
+      operario y el agente puedan comparar el antes y el después. Reabre el
+      reporte en el acto; no hay nadie que la "resuelva".
+    - **De moderación** (US-049): contra el descarte por moderación municipal.
+      No cambia el estado —el reporte sigue Cancelado mientras se revisa— y la
+      resuelve el administrador de la plataforma, nunca el municipio que
+      descartó. Va sin foto. Una sola por descarte.
     """
+
+    class Kind(models.TextChoices):
+        CIERRE = "cierre", "Objeción del cierre"
+        MODERACION = "moderacion", "Apelación de moderación"
+
+    class Status(models.TextChoices):
+        """Solo para las de moderación. Las de cierre no se resuelven: reabren."""
+
+        PENDIENTE = "pendiente", "Pendiente"
+        ACEPTADA = "aceptada", "Aceptada"
+        RECHAZADA = "rechazada", "Rechazada"
 
     report = models.ForeignKey(
         Report,
@@ -718,8 +810,29 @@ class ResolutionAppeal(PendingPhotoMixin, models.Model):
         on_delete=models.CASCADE,
         related_name="resolution_appeals",
     )
+    kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.CIERRE)
+    # El descarte apelado. Solo en las de moderación.
+    moderation_decision = models.ForeignKey(
+        "ModerationDecision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="appeals",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_appeals",
+    )
+    # Por qué el administrador hizo lugar o no. Le llega al autor.
+    resolution_reason = models.TextField(blank=True)
     reason = models.TextField()
-    # Obligatoria al apelar —lo exige el serializer—, pero el campo admite
+    # Obligatoria al apelar una objeción de cierre —lo exige el serializer—;
+    # la de moderación no lleva. El campo admite
     # vacío: con la publicación diferida (US-042) la apelación nace sin foto y
     # la recibe recién cuando la tarea termina de difuminarla.
     photo = models.ImageField(upload_to="appeals/%Y/%m/", blank=True)
@@ -740,10 +853,31 @@ class ResolutionAppeal(PendingPhotoMixin, models.Model):
                 | models.Q(photo_status=PhotoStatus.PROCESADA),
                 name="appeal_photo_only_when_processed",
             ),
+            # Una sola apelación por descarte (US-049, escenario 7): si el
+            # administrador la rechaza, el reporte queda Cancelado y no admite
+            # otra. Si la acepta, un descarte nuevo es otra decisión.
+            models.UniqueConstraint(
+                fields=["moderation_decision"],
+                condition=models.Q(kind="moderacion"),
+                name="one_appeal_per_moderation_decision",
+            ),
+            # Las de moderación siempre apuntan a un descarte; las de cierre
+            # nunca.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(kind="moderacion", moderation_decision__isnull=False)
+                    | models.Q(kind="cierre", moderation_decision__isnull=True)
+                ),
+                name="appeal_kind_matches_decision",
+            ),
         ]
 
     def __str__(self) -> str:
-        return f"{self.report_id}: apelación de {self.author}"
+        return f"{self.report_id}: apelación de {self.author} ({self.kind})"
+
+    @property
+    def is_pending(self) -> bool:
+        return self.status == self.Status.PENDIENTE
 
 
 class OfficialResponse(models.Model):
@@ -919,6 +1053,10 @@ class ReportComplaint(models.Model):
         PENDIENTE = "pendiente", "Pendiente"
         IMAGEN_ELIMINADA = "imagen_eliminada", "Imagen eliminada"
         DESESTIMADA = "desestimada", "Desestimada"
+        #: El agente le dio la razón al denunciante y descartó el reporte
+        #: (US-049). ``desestimada`` cubre el caso contrario en los dos
+        #: circuitos.
+        REPORTE_DESCARTADO = "reporte_descartado", "Reporte descartado"
 
     #: **El catálogo de motivos**: cada uno con su destinatario (US-021,
     #: escenario 3). El enrutamiento se deriva de acá —``PLATFORM_REASONS``,
@@ -989,6 +1127,15 @@ class ReportComplaint(models.Model):
         blank=True,
         related_name="resolved_complaints",
     )
+    # La decisión de moderación que la resolvió (US-049). Varias denuncias
+    # sobre un mismo reporte se resuelven en **una** decisión (escenario 2).
+    moderation_decision = models.ForeignKey(
+        "ModerationDecision",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="complaints",
+    )
 
     objects = ReportComplaintQuerySet.as_manager()
 
@@ -1056,3 +1203,62 @@ class ReportComplaint(models.Model):
     def recipient(self) -> str:
         """A quién va dirigida, según el catálogo."""
         return self.REASON_RECIPIENTS[self.reason]
+
+
+class ModerationDecision(models.Model):
+    """Lo que decidió el agente municipal sobre las denuncias de un reporte (US-049).
+
+    Una fila por decisión, no por denuncia: varias denuncias sobre un mismo
+    reporte se resuelven juntas (escenario 2) y todas apuntan acá.
+
+    La moderación de contenido es del agente municipal —no existe un rol
+    moderador—, y darle al municipio la facultad de ocultar reclamos tiene
+    contrapesos que viven en esta fila:
+
+    - el ``reason`` es **público** en el detalle del reporte descartado;
+    - ``previous_status`` permite que el administrador restituya el reporte al
+      estado exacto que tenía, sin asumir que era Reportado;
+    - ``reverted_at`` / ``reverted_by`` registran esa reversión, por apelación o
+      de oficio.
+    """
+
+    class Outcome(models.TextChoices):
+        DESCARTADO = "descartado", "Reporte descartado"
+        DESESTIMADO = "desestimado", "Denuncias desestimadas"
+
+    report = models.ForeignKey(
+        Report,
+        on_delete=models.CASCADE,
+        related_name="moderation_decisions",
+    )
+    outcome = models.CharField(max_length=20, choices=Outcome.choices)
+    reason = models.TextField()
+    # El estado del reporte al descartarlo. Vacío al desestimar, que no lo
+    # mueve.
+    previous_status = models.CharField(max_length=40, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="moderation_decisions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    reverted_at = models.DateTimeField(null=True, blank=True)
+    reverted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reverted_moderation_decisions",
+    )
+    revert_reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-pk"]
+
+    def __str__(self) -> str:
+        return f"{self.report_id}: {self.outcome}"
+
+    @property
+    def is_active_discard(self) -> bool:
+        return self.outcome == self.Outcome.DESCARTADO and self.reverted_at is None

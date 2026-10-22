@@ -158,19 +158,22 @@ class TestTheAppealPhoto:
         assert row["photo_removed_at"] is not None
 
 
-class TestThePanelDoesNotShowTheImageUnderReview:
-    def test_the_report_photo_is_withheld_while_under_review(self, report):
-        """CP-VIS-02: el agente ve el reporte retenido, sin la foto denunciada."""
+class TestThePanelShowsTheImageUnderReview:
+    """Pedido del usuario del 21/10: el agente y el admin ven siempre la imagen
+    denunciada, sea cual sea el motivo, porque la resuelven."""
+
+    def test_the_report_photo_is_shown_while_under_review(self, report):
+        """CP-VIS-02: el agente ve el reporte retenido, con la foto denunciada."""
         ReportComplaintFactory.create(report=report)
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
 
         data = client_for(agent).get(f"/api/panel/reports/{report.pk}/").data
 
         assert data["under_privacy_review"] is True
-        assert data["photo"] is None
+        assert data["photo"]
 
-    def test_only_the_reported_image_is_withheld(self, report, appeal):
-        """CP-VIS-03: se retiene la imagen denunciada, no las demás."""
+    def test_the_reported_appeal_photo_is_shown_too(self, report, appeal):
+        """CP-VIS-03: también la de una objeción denunciada."""
         ReportComplaintFactory.create(
             report=report,
             resolution_appeal=appeal,
@@ -182,7 +185,7 @@ class TestThePanelDoesNotShowTheImageUnderReview:
 
         assert data["photo"]
         [row] = data["resolution_appeals"]
-        assert row["photo"] is None
+        assert row["photo"]
 
     def test_once_dismissed_the_photo_is_back(self, report):
         """CP-VIS-04: desestimada la solicitud, el panel vuelve a mostrarla."""
