@@ -6,6 +6,7 @@ from pathlib import Path
 
 import environ
 from celery.schedules import crontab
+from django.utils.csp import CSP
 
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 # urbancheck/
@@ -158,6 +159,8 @@ MIDDLEWARE = [
     "urbancheck.common.security.HeadlessLockoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # ``SECURE_CSP`` solo en el admin y en Swagger (C-05).
+    "urbancheck.common.security.AdminAndDocsCSPMiddleware",
     "allauth.account.middleware.AccountMiddleware",
 ]
 
@@ -262,6 +265,26 @@ SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#x-frame-options
 X_FRAME_OPTIONS = "DENY"
+# Política de contenido de Django 6.0 (C-05). La aplica
+# ``AdminAndDocsCSPMiddleware`` solo al admin y a Swagger, las dos pantallas
+# HTML de administración: la API responde JSON, el panel tiene la suya en su
+# nginx y la vista previa de un reporte compartido redirige con un script
+# inline. Swagger UI llega del CDN de jsDelivr (default de drf-spectacular) y
+# arranca desde un script aparte (``SpectacularSwaggerSplitView``); los estilos
+# admiten inline porque Swagger UI los inyecta al dibujar.
+# https://docs.djangoproject.com/en/6.0/ref/csp/
+SWAGGER_CDN = "https://cdn.jsdelivr.net"
+SECURE_CSP = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF, SWAGGER_CDN],
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE, SWAGGER_CDN],
+    "img-src": [CSP.SELF, "data:", SWAGGER_CDN],
+    "connect-src": [CSP.SELF],
+    "object-src": [CSP.NONE],
+    "frame-ancestors": [CSP.NONE],
+    "base-uri": [CSP.SELF],
+    "form-action": [CSP.SELF],
+}
 
 # EMAIL
 # ------------------------------------------------------------------------------

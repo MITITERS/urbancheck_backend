@@ -1802,6 +1802,11 @@ completa, con sus defaults, está en `.env.example`.
   Quedan `me/`, `me/onboarding/` y el detalle de otro usuario, que usa
   `PublicUserSerializer` (sin correo). Las cuentas de trabajo se listan en
   `municipal-agents/`, `validators/` y `operators/`, acotados por rol.
+- **Política de contenido (C-05).** `SECURE_CSP` de Django 6.0, aplicada por
+  `AdminAndDocsCSPMiddleware` solo al admin y a `/api/docs/`: sin scripts
+  inline ni `eval`; Swagger UI llega de jsDelivr y arranca desde un script
+  aparte (`SpectacularSwaggerSplitView`). La API y la vista previa de un
+  reporte compartido no la llevan. El panel tiene la suya en su nginx.
 - **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
   origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
   `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.

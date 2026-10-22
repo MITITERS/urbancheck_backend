@@ -6,7 +6,7 @@ from django.urls import path
 from django.views import defaults as default_views
 from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView
-from drf_spectacular.views import SpectacularSwaggerView
+from drf_spectacular.views import SpectacularSwaggerSplitView
 from rest_framework.authtoken.views import obtain_auth_token
 
 from config.deeplink import android_assetlinks
@@ -66,7 +66,9 @@ urlpatterns += [
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path(
         "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="api-schema"),
+        # La variante que sirve el script de arranque aparte, no inline: es la
+        # que admite la política de contenido del admin y Swagger (C-05).
+        SpectacularSwaggerSplitView.as_view(url_name="api-schema"),
         name="api-docs",
     ),
 ]
