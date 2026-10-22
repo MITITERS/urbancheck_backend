@@ -5,6 +5,10 @@ set -o pipefail
 set -o nounset
 
 
+# Las migraciones se aplican acá y solo acá (C-03): worker, beat y flower usan
+# la misma imagen pero no migran, para que dos procesos no corran la misma
+# migración a la vez. Si falla, errexit corta antes de levantar gunicorn.
+python /app/manage.py migrate --noinput
 python /app/manage.py collectstatic --noinput
 
 exec gunicorn config.wsgi --bind 0.0.0.0:5000 --chdir=/app

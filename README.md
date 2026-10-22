@@ -1820,6 +1820,9 @@ The following details how to deploy this application.
 
 See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
 
+El servicio `django` aplica las migraciones al arrancar (`migrate --noinput`,
+antes de `collectstatic`). Worker, beat y flower no migran (C-03).
+
 ## Flujo de trabajo
 
 El proyecto utiliza Git Flow:
