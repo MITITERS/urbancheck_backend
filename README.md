@@ -1805,6 +1805,8 @@ completa, con sus defaults, está en `.env.example`.
 - **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
   origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
   `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.
+  El SMTP sale de `EMAIL_HOST` (obligatoria), `EMAIL_PORT` (587),
+  `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` y `EMAIL_USE_TLS` (True) (C-02).
 - **CI** (`.github/workflows/ci.yml`): ruff, Bandit (falla desde severidad
   media), pip-audit, gitleaks (binario con checksum fijo; excepciones
   revisadas en `.gitleaksignore`), pytest y `makemigrations --check`. Dependabot

@@ -103,6 +103,21 @@ EMAIL_SUBJECT_PREFIX = env(
     default="[UrbanCheck] ",
 )
 ACCOUNT_EMAIL_SUBJECT_PREFIX = EMAIL_SUBJECT_PREFIX
+# El servidor SMTP (C-02). Sin esto producción mandaba a ``localhost:25``, sin
+# credenciales, y no salían ni la verificación ni el restablecimiento de
+# contraseña. El servidor es obligatorio: un despliegue sin él tiene que
+# fallar al arrancar, no al primer correo. Los nombres son los que ya usa
+# ``local.py``; la contraseña va solo en ``.envs/.production/.django``.
+# https://docs.djangoproject.com/en/dev/ref/settings/#email-host
+EMAIL_HOST = env("EMAIL_HOST")
+# https://docs.djangoproject.com/en/dev/ref/settings/#email-port
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+# https://docs.djangoproject.com/en/dev/ref/settings/#email-host-user
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+# https://docs.djangoproject.com/en/dev/ref/settings/#email-host-password
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+# https://docs.djangoproject.com/en/dev/ref/settings/#email-use-tls
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 
 # ADMIN
 # ------------------------------------------------------------------------------
