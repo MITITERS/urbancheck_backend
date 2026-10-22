@@ -425,12 +425,19 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-result_serializer
 CELERY_RESULT_SERIALIZER = "json"
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-time-limit
-# TODO: set to whatever value is adequate in your circumstances
-CELERY_TASK_TIME_LIMIT = 5 * 60
+# Límites por ejecución de una tarea (C-07). Las dos que pesan son el
+# difuminado (US-041/US-042), alrededor de 1,1 s por foto, y un intento de
+# comparación de cierres (US-015), que espera hasta
+# ``RESOLUTION_COMPARISON_TIMEOUT_SECONDS`` (30 s) al proveedor. Cada reintento
+# de la comparación es una ejecución nueva, así que el límite cubre un intento,
+# no la suma. El corte blando, al doble de ese timeout, deja margen para bajar
+# las imágenes y registrar el fallo; el duro llega 30 s después y mata a un
+# proceso trabado antes de que siga reteniendo memoria (847 MB en el pico de
+# una foto de 12 MP).
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-soft-time-limit
-# TODO: set to whatever value is adequate in your circumstances
 CELERY_TASK_SOFT_TIME_LIMIT = 60
+# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-time-limit
+CELERY_TASK_TIME_LIMIT = 90
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 # https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html

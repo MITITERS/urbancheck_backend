@@ -1845,6 +1845,11 @@ ssh -N -L 5555:127.0.0.1:5555 <usuario>@<servidor>
 Traefik agrega HSTS de un año a las respuestas del panel (middleware
 `panel-hsts`, C-05); las de Django ya lo traen.
 
+El worker de Celery corre con `--concurrency` de `CELERY_WORKER_CONCURRENCY`
+(2), `--prefetch-multiplier=1` y `--max-tasks-per-child=20`: difuminar una foto
+de 12 MP llega a 847 MB (C-07). Los límites por tarea son 60 s blando y 90 s
+duro (`config/settings/base.py`).
+
 El servicio `django` aplica las migraciones al arrancar (`migrate --noinput`,
 antes de `collectstatic`). Worker, beat y flower no migran (C-03).
 

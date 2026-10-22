@@ -5,4 +5,13 @@ set -o pipefail
 set -o nounset
 
 
-exec celery -A config.celery_app worker -l INFO
+# Dimensionado por memoria (C-07): difuminar una foto de 12 MP llega a 847 MB.
+# - Concurrencia configurable, 2 por defecto: dos fotos a la vez son ~1,7 GB.
+# - Un mensaje por proceso: con el prefetch de fábrica (4) un proceso se
+#   reserva fotos que otro, libre, podría estar procesando.
+# - Cada proceso se recicla cada 20 tareas, que devuelve al sistema la memoria
+#   que Pillow y OpenCV dejan fragmentada.
+exec celery -A config.celery_app worker -l INFO \
+    --concurrency="${CELERY_WORKER_CONCURRENCY:-2}" \
+    --prefetch-multiplier=1 \
+    --max-tasks-per-child=20

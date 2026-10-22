@@ -141,3 +141,19 @@ class TestFlowerIsNotPublic:
         ports = compose()["services"]["flower"].get("ports", [])
 
         assert ports == ["127.0.0.1:5555:5555"]
+
+
+class TestCeleryWorker:
+    """C-07: un difuminado de 12 MP llega a 847 MB; el worker se dimensiona."""
+
+    def worker(self) -> str:
+        return " ".join(commands(DJANGO / "celery" / "worker" / "start"))
+
+    def test_the_concurrency_comes_from_the_environment(self):
+        assert '--concurrency="${CELERY_WORKER_CONCURRENCY:-2}"' in self.worker()
+
+    def test_one_task_at_a_time_per_process(self):
+        assert "--prefetch-multiplier=1" in self.worker()
+
+    def test_processes_are_recycled(self):
+        assert re.search(r"--max-tasks-per-child=\S+", self.worker())
