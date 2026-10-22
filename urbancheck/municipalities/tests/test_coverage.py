@@ -4,6 +4,7 @@ Es la regla que evita que la capital de Córdoba vea los reportes de Villa Marí
 """
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -29,7 +30,7 @@ def active_municipality(db):
     tenga que pensar en coordenadas — justo lo contrario de lo que este módulo
     necesita, que es controlar el mapa de cobertura entero.
     """
-    return None
+    return
 
 # Están a ~113 km una de la otra.
 VILLA_MARIA = (-32.4103, -63.2400)
@@ -222,7 +223,7 @@ class TestReportCreation:
             format="multipart",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         assert Report.objects.get(pk=response.data["id"]).municipality == villa_maria
 
     def test_a_report_outside_every_area_is_refused(self, two_cities):
@@ -241,7 +242,7 @@ class TestReportCreation:
             format="multipart",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "location" in response.data
         assert not Report.objects.filter(description__contains="océano").exists()
 

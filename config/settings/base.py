@@ -95,6 +95,7 @@ LOCAL_APPS = [
     "urbancheck.users",
     "urbancheck.reports",
     "urbancheck.notifications",
+    "urbancheck.anonymization",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -150,6 +151,11 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Registro de seguridad (401, 403, 429 y el contexto de ``log_event``).
+    # El de allauth va después: tiene que corregir el ``400`` del bloqueo de
+    # login a ``429`` antes de que el registro mire la respuesta.
+    "urbancheck.common.security.SecurityContextMiddleware",
+    "urbancheck.common.security.HeadlessLockoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
@@ -175,6 +181,38 @@ STATICFILES_FINDERS = [
 MEDIA_ROOT = str(APPS_DIR / "media")
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
+
+# Dónde espera la foto original hasta que la tarea la difumina (US-042). Fuera
+# de MEDIA_ROOT a propósito: `/media/` se sirve entero, y ahí adentro estaría
+# publicada la foto sin difuminar. Ver `urbancheck/anonymization/storage.py`.
+PENDING_PHOTO_ROOT = env(
+    "DJANGO_PENDING_PHOTO_ROOT",
+    default=str(BASE_DIR / "pending_media"),
+)
+# https://docs.djangoproject.com/en/dev/ref/settings/#storages
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+    # La ubicación no viaja en OPTIONS: el storage la lee de
+    # `PENDING_PHOTO_ROOT` en cada uso, y así se puede redirigir sin recrear
+    # nada. Sin `base_url`: `photo_pending.url` levanta ValueError, y exponer
+    # la original por descuido falla en vez de filtrarla.
+    "pending_photos": {
+        "BACKEND": "urbancheck.anonymization.storage.PendingPhotoStorage",
+    },
+}
+
+# La foto sube sin pasar por un temporal a disco (US-041), que es lo que Django
+# hace por defecto con todo archivo de más de 2,5 MB: de ahí no la borra nadie.
+# https://docs.djangoproject.com/en/dev/ref/settings/#file-upload-handlers
+FILE_UPLOAD_HANDLERS = ["urbancheck.anonymization.uploads.MemoryOnlyUploadHandler"]
+PHOTO_MAX_UPLOAD_BYTES = env.int("DJANGO_PHOTO_MAX_UPLOAD_MB", default=15) * 1024 * 1024
+# El cuerpo entero del request: la foto más los campos de texto que la acompañan.
+FILE_UPLOAD_MAX_MEMORY_SIZE = PHOTO_MAX_UPLOAD_BYTES + 1024 * 1024
 
 # TEMPLATES
 # ------------------------------------------------------------------------------
@@ -252,6 +290,44 @@ DJANGO_ADMIN_FORCE_ALLAUTH = env.bool("DJANGO_ADMIN_FORCE_ALLAUTH", default=Fals
 # https://docs.djangoproject.com/en/dev/ref/settings/#logging
 # See https://docs.djangoproject.com/en/dev/topics/logging for
 # more details on how to customize your logging configuration.
+# Registro de eventos de seguridad (logger ``security``, ver
+# ``urbancheck/common/security.py``): logins, bloqueos, cambios de contraseña,
+# altas de cuentas de trabajo, denuncias y respuestas 401/403/429. Va a un
+# archivo propio con rotación por tamaño, además de la consola. Vacío
+# desactiva el archivo y deja solo la consola.
+SECURITY_LOG_FILE = env(
+    "DJANGO_SECURITY_LOG_FILE",
+    default=str(BASE_DIR / "logs" / "security.log"),
+)
+SECURITY_LOG_MAX_BYTES = env.int("DJANGO_SECURITY_LOG_MAX_MB", default=10) * 1024 * 1024
+SECURITY_LOG_BACKUP_COUNT = env.int("DJANGO_SECURITY_LOG_BACKUP_COUNT", default=10)
+
+
+def security_logging(log_file: str) -> tuple[dict, dict]:
+    """Handlers y logger de ``security``, para sumar a cualquier ``LOGGING``.
+
+    Es una función porque ``production.py`` arma su propio ``LOGGING`` y el
+    registro de seguridad no puede faltar en ninguno de los dos.
+    """
+    handlers: dict = {}
+    names = ["console"]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers["security_file"] = {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": log_file,
+            "maxBytes": SECURITY_LOG_MAX_BYTES,
+            "backupCount": SECURITY_LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
+            "formatter": "security",
+        }
+        names.append("security_file")
+    logger = {"handlers": names, "level": "INFO", "propagate": False}
+    return handlers, logger
+
+
+_security_handlers, _security_logger = security_logging(SECURITY_LOG_FILE)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -259,6 +335,7 @@ LOGGING = {
         "verbose": {
             "format": "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s",
         },
+        "security": {"format": "%(asctime)s %(levelname)s %(message)s"},
     },
     "handlers": {
         "console": {
@@ -266,12 +343,38 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        **_security_handlers,
     },
     "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {"security": _security_logger},
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
 REDIS_SSL = REDIS_URL.startswith("rediss://")
+
+# CACHES
+# ------------------------------------------------------------------------------
+# Compartido sobre Redis en todos los entornos: los contadores de los límites
+# de allauth y de DRF viven acá, y con un cache por proceso cada worker de
+# gunicorn llevaría su propia cuenta y el límite real se multiplicaría por la
+# cantidad de workers.
+# https://docs.djangoproject.com/en/dev/topics/cache/#redis
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env("DJANGO_CACHE_URL", default=REDIS_URL),
+    },
+}
+
+# PROXIES DE CONFIANZA
+# ------------------------------------------------------------------------------
+# Cuántos proxies propios (Nginx, Traefik) hay delante de Django. Con cero se
+# ignora ``X-Forwarded-For`` y la IP es la de la conexión; detrás de un proxy
+# hay que poner 1, o todos los límites por IP contarían la IP del proxy y un
+# solo cliente agotaría el cupo de todos. Lo leen DRF (``NUM_PROXIES``),
+# allauth (``ALLAUTH_TRUSTED_PROXY_COUNT``) y el registro de seguridad.
+NUM_PROXIES = env.int("DJANGO_NUM_PROXIES", default=0)
+ALLAUTH_TRUSTED_PROXY_COUNT = NUM_PROXIES
 
 # Celery
 # ------------------------------------------------------------------------------
@@ -335,6 +438,13 @@ CELERY_BEAT_SCHEDULE = {
         # dejaría la confirmación automática sin poder demostrarse.
         "schedule": crontab(minute="*/15"),
     },
+    "requeue-stale-pending-photos": {
+        "task": "urbancheck.anonymization.tasks.requeue_stale_pending_photos",
+        # El seguro contra el mensaje que el broker perdió (US-042). En la
+        # práctica no encuentra nada; el día que encuentre algo, es un reporte
+        # que no se habría publicado nunca.
+        "schedule": crontab(minute="*/15"),
+    },
 }
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
 CELERY_WORKER_SEND_TASK_EVENTS = True
@@ -352,6 +462,17 @@ ACTIVE_MUNICIPALITY_ID = env.int("DJANGO_ACTIVE_MUNICIPALITY_ID", default=None)
 # (US-036). Es un único parámetro y no una constante repartida por el código;
 # la verificación se hace siempre en el servidor, nunca en el dispositivo.
 VALIDATION_RADIUS_METERS = env.int("DJANGO_VALIDATION_RADIUS_METERS", default=50)
+
+# Radio dentro del cual un reporte activo de la misma categoría se considera el
+# mismo problema (US-026) y el nuevo no se crea (US-032). Absorbe el error del
+# GPS de un teléfono en la calle (10 a 20 m) sin unificar dos baches distintos
+# de la misma cuadra. Como el radio de US-036 y el umbral de US-040, es un
+# único parámetro y se lee en cada evaluación. El criterio completo vive en
+# ``urbancheck.reports.duplicates``.
+DUPLICATE_REPORT_RADIUS_METERS = env.int(
+    "DJANGO_DUPLICATE_REPORT_RADIUS_METERS",
+    default=30,
+)
 
 # Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
 # validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
@@ -408,6 +529,82 @@ RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
     default=24 * 60,
 )
 
+# Plazo para resolver una solicitud de revisión por dato personal visible
+# (US-043, RN-12). Corre desde la **recepción** de la solicitud; pasado el plazo
+# la bandeja del administrador la señala como fuera de plazo.
+#
+# **En minutos y no en horas**, por lo mismo que la ventana de objeción: el
+# default son 24 horas y una demostración necesita ver vencer una solicitud.
+PERSONAL_DATA_REVIEW_MINUTES = env.int(
+    "DJANGO_PERSONAL_DATA_REVIEW_MINUTES",
+    default=24 * 60,
+)
+
+# Comparación automática del antes y el después de un cierre (US-015).
+#
+# El cliente habla el dialecto de chat completions de OpenAI, que ofrecen Gemini,
+# Groq, OpenRouter y Ollama: cambiar de proveedor es cambiar estas variables. El
+# default es el free tier de Gemini en Google AI Studio.
+#
+# **Sin clave, la función queda apagada**: cada cierre se registra como
+# "comparación no disponible" y el circuito sigue igual. Es informativa y nunca
+# puede bloquear un cierre.
+# Qué servicio de visión se usa (ver ``urbancheck/reports/vision.py``). Vacío
+# es el proveedor nulo: no se compara nada y ninguna foto sale del servidor.
+# ``openai_compatible`` es el adaptador de chat completions (Gemini, Groq,
+# OpenRouter, Ollama), que usa las variables de abajo.
+VISION_PROVIDER = env("DJANGO_VISION_PROVIDER", default="")
+RESOLUTION_COMPARISON_API_KEY = env("DJANGO_RESOLUTION_COMPARISON_API_KEY", default="")
+RESOLUTION_COMPARISON_BASE_URL = env(
+    "DJANGO_RESOLUTION_COMPARISON_BASE_URL",
+    default="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+RESOLUTION_COMPARISON_MODEL = env(
+    "DJANGO_RESOLUTION_COMPARISON_MODEL",
+    default="gemini-3.6-flash",
+)
+# Reintentos ante fallos transitorios (timeout, 429, 5xx) antes de darla por no
+# ANONIMIZACIÓN DIFERIDA (US-042)
+# ------------------------------------------------------------------------------
+# Cuántas veces se reintenta una foto cuyo detector falló, y con qué espera
+# inicial entre intentos (se duplica en cada uno). Un fallo permanente —un
+# archivo que no se puede abrir— no se reintenta ninguna vez.
+ANONYMIZATION_MAX_RETRIES = env.int("DJANGO_ANONYMIZATION_MAX_RETRIES", default=3)
+ANONYMIZATION_RETRY_BASE_SECONDS = env.int(
+    "DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS",
+    default=30,
+)
+# A partir de cuánto una foto en cola se considera perdida y se reencola. Cubre
+# el mensaje que el broker nunca entregó: sin esto el reporte queda invisible
+# para siempre y ni siquiera falló, así que su autor no recibe ningún aviso.
+ANONYMIZATION_STALE_MINUTES = env.int("DJANGO_ANONYMIZATION_STALE_MINUTES", default=30)
+# Carpeta **no versionada** con el set de referencia de US-041: fotos reales con
+# rostros y patentes y su ``manifest.json`` de etiquetas. La leen el comando
+# ``benchmark_anonymization`` y los tests de detección, que se saltean si falta.
+# Nunca va dentro del control de versiones ni de la imagen de Docker.
+ANONYMIZATION_REFERENCE_SET = env(
+    "DJANGO_ANONYMIZATION_REFERENCE_SET",
+    default=str(BASE_DIR / "benchmark_data" / "anonymization"),
+)
+
+# disponible. Una respuesta fuera de formato no se reintenta.
+RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES",
+    default=3,
+)
+# Por debajo del ``CELERY_TASK_SOFT_TIME_LIMIT``: la tarea tiene que poder
+# registrar el fallo antes de que Celery la corte.
+RESOLUTION_COMPARISON_TIMEOUT_SECONDS = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS",
+    default=30,
+)
+# Lado mayor con el que viajan las imágenes. Alcanza para ver un bache y ahorra
+# cuota del plan gratuito.
+RESOLUTION_COMPARISON_MAX_SIDE_PX = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX",
+    default=1024,
+)
+
 # django-allauth
 # ------------------------------------------------------------------------------
 ACCOUNT_ALLOW_REGISTRATION = env.bool("DJANGO_ACCOUNT_ALLOW_REGISTRATION", True)
@@ -428,6 +625,30 @@ ACCOUNT_SIGNUP_FORM_CLASS = "urbancheck.users.signup_forms.HeadlessUserSignupFor
 SOCIALACCOUNT_ADAPTER = "urbancheck.users.adapters.SocialAccountAdapter"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
 SOCIALACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSocialSignupForm"}
+# Límites de intentos (deuda de seguridad del Sprint 4). Formato de allauth:
+# ``cantidad/período/clave``, varios separados por coma; ``key`` es la cuenta
+# (el correo) e ``ip`` la IP del cliente. La ventana es deslizante: allauth
+# guarda la marca de cada intento en el cache y cuenta los del período.
+# https://docs.allauth.org/en/latest/account/rate_limits.html
+ACCOUNT_RATE_LIMITS = {
+    # 5 fallidos por cuenta cada 15 minutos, más un tope por IP contra quien
+    # prueba muchas cuentas a la vez. Un login correcto no borra el contador.
+    "login_failed": env(
+        "DJANGO_RATELIMIT_LOGIN_FAILED",
+        default="10/m/ip,5/15m/key",
+    ),
+    "reset_password": env(
+        "DJANGO_RATELIMIT_RESET_PASSWORD",
+        default="20/m/ip,3/h/key",
+    ),
+    # Reenvío del correo de confirmación: conserva la espera de 3 minutos
+    # entre envíos que trae allauth y le suma el tope por hora.
+    "confirm_email": env(
+        "DJANGO_RATELIMIT_CONFIRM_EMAIL",
+        default="1/3m/key,3/h/key",
+    ),
+    "signup": env("DJANGO_RATELIMIT_SIGNUP", default="20/h/ip"),
+}
 
 # django-allauth headless
 # -------------------------------------------------------------------------------
@@ -510,6 +731,17 @@ REST_FRAMEWORK = {
     # activan explícitamente con ``filter_backends``. El feed ciudadano sigue
     # resolviendo sus filtros a mano (ver urbancheck/reports/api/filters.py).
     "DEFAULT_FILTER_BACKENDS": [],
+    # El ``429`` en castellano y con código estable (``throttled``).
+    "EXCEPTION_HANDLER": "urbancheck.common.throttling.api_exception_handler",
+    # Límites por acción: las vistas eligen alcance en ``get_throttles`` (ver
+    # ``urbancheck.common.throttling``). Por usuario; sin sesión, por IP.
+    "DEFAULT_THROTTLE_RATES": {
+        "reports": env("DJANGO_THROTTLE_REPORTS", default="20/hour"),
+        "comments": env("DJANGO_THROTTLE_COMMENTS", default="60/hour"),
+        "complaints": env("DJANGO_THROTTLE_COMPLAINTS", default="10/day"),
+        "privacy_requests": env("DJANGO_THROTTLE_PRIVACY_REQUESTS", default="5/day"),
+    },
+    "NUM_PROXIES": NUM_PROXIES,
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup
@@ -523,6 +755,14 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "SCHEMA_PATH_PREFIX": "/api/",
+    # Nombres propios para los catálogos que comparten nombre de campo
+    # (``status``) o se usan en más de uno (``previous_status``): sin esto el
+    # generador inventa nombres como ``Status614Enum``.
+    "ENUM_NAME_OVERRIDES": {
+        "ReportStatusEnum": "urbancheck.reports.models.Report.Status",
+        "ComplaintStatusEnum": "urbancheck.reports.models.ReportComplaint.Status",
+        "ComparisonStatusEnum": "urbancheck.reports.models.ResolutionComparison.Status",
+    },
 }
 # Your stuff...
 # ------------------------------------------------------------------------------

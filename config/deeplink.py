@@ -49,7 +49,9 @@ def android_assetlinks(request):
                 "target": {
                     "namespace": "android_app",
                     "package_name": settings.ANDROID_APP_PACKAGE,
-                    "sha256_cert_fingerprints": settings.ANDROID_SHA256_CERT_FINGERPRINTS,
+                    "sha256_cert_fingerprints": (
+                        settings.ANDROID_SHA256_CERT_FINGERPRINTS
+                    ),
                 },
             },
         ],

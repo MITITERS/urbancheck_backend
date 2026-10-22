@@ -260,6 +260,93 @@ class TestDeactivation:
         assert client.delete(detail(area.pk)).status_code == HTTP_METHOD_NOT_ALLOWED
 
 
+class TestReactivationNeedsAnActiveMunicipality:
+    """Un área no vuelve a operar mientras su municipalidad esté dada de baja.
+
+    Espejo de la regla de las cuentas de trabajo: si la baja del municipio
+    arrastra a sus áreas, reactivar un área sin reactivar el municipio dejaría
+    justo el estado que esa cascada existe para evitar —una dependencia
+    ofreciéndose para asignar reportes a nombre de un municipio cerrado—.
+    """
+
+    def test_it_is_rejected_while_the_municipality_is_down(
+        self,
+        client,
+        municipality,
+    ):
+        area = OperationalAreaFactory.create(municipality=municipality, is_active=False)
+        municipality.is_active = False
+        municipality.save(update_fields=["is_active"])
+
+        response = client.post(detail(area.pk, "activate/"))
+
+        # 400 y no 403: no le falta permiso a quien la ejecuta, le falta una
+        # condición al dato.
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert "dada de baja" in response.data["detail"]
+        area.refresh_from_db()
+        assert area.is_active is False
+
+    def test_reviving_the_municipality_makes_it_reactivable_again(
+        self,
+        client,
+        municipality,
+    ):
+        """Lo que desbloquea la reactivación es dar de alta el municipio."""
+        area = OperationalAreaFactory.create(municipality=municipality, is_active=False)
+        municipality.is_active = False
+        municipality.save(update_fields=["is_active"])
+        assert client.post(detail(area.pk, "activate/")).status_code == (
+            HTTP_BAD_REQUEST
+        )
+
+        municipality.is_active = True
+        municipality.save(update_fields=["is_active"])
+
+        response = client.post(detail(area.pk, "activate/"))
+
+        assert response.status_code == HTTP_OK
+        assert response.data["is_active"] is True
+
+    def test_reviving_the_municipality_does_not_reactivate_it_by_itself(
+        self,
+        client,
+        municipality,
+    ):
+        """No hay inverso automático: se reactiva una por una, como el personal."""
+        area = OperationalAreaFactory.create(municipality=municipality, is_active=False)
+        municipality.is_active = False
+        municipality.save(update_fields=["is_active"])
+
+        municipality.is_active = True
+        municipality.save(update_fields=["is_active"])
+
+        area.refresh_from_db()
+        assert area.is_active is False
+
+    def test_deactivating_is_always_allowed(self, client, municipality):
+        """La guarda es de la reactivación: bajar un área nunca deja peor estado."""
+        area = OperationalAreaFactory.create(municipality=municipality)
+        municipality.is_active = False
+        municipality.save(update_fields=["is_active"])
+
+        response = client.post(detail(area.pk, "deactivate/"))
+
+        assert response.status_code == HTTP_OK
+        assert response.data["is_active"] is False
+
+    def test_the_rule_lives_in_the_model(self, municipality):
+        """Vale desde cualquier lugar, no solo desde el endpoint."""
+        area = OperationalAreaFactory.create(municipality=municipality)
+        assert area.can_be_reactivated is True
+
+        municipality.is_active = False
+        municipality.save(update_fields=["is_active"])
+        area.refresh_from_db()
+
+        assert area.can_be_reactivated is False
+
+
 class TestAccess:
     def test_another_municipality_answers_404(self, client):
         """Escenario 10: misma respuesta que US-034, no un 403."""

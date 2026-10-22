@@ -67,6 +67,9 @@ class OperatorReportViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
     """
 
     permission_classes = [IsAuthenticated, CanWorkAsOperator]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = Report.objects.none()
     pagination_class = PanelPagination
     # El cierre sube una foto: la acción necesita ``multipart``. El resto de la
     # superficie sigue aceptando JSON, que es lo que usa la lista.

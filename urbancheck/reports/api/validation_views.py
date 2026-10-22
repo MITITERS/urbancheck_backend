@@ -46,7 +46,18 @@ class ValidationReportViewSet(
     queryset = Report.objects.select_related("author", "municipality")
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        # Un reporte retenido por una denuncia de dato personal (US-043) sale
+        # también de acá, en todas las acciones. La bandeja muestra la foto, y
+        # el detalle de la app ya le respondía 404 al validador: la fila quedaba
+        # listada sin poder abrirse. Validarlo espera a que se resuelva la
+        # denuncia, que tiene plazo de horas.
+        #
+        # Lo mismo para un reporte retirado (US-043: sin foto no hay nada que
+        # ir a comparar al lugar) y para uno en procesamiento o fallido (US-042,
+        # escenario 7: la bandeja mostraría una foto que todavía no existe).
+        # Las tres condiciones son las de la visibilidad pública, y por eso se
+        # piden a la función única y no se repiten acá.
+        queryset = super().get_queryset().publishable()
         if self.action == "list":
             queryset = queryset.filter(status=Report.Status.PENDIENTE_VALIDACION)
         return self._with_distance(queryset)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from http import HTTPStatus
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -47,7 +48,7 @@ class TestReportCreate:
             },
             format="multipart",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         report = Report.objects.get(id=res.data["id"])
         assert report.author == user
         assert report.status == Report.Status.PENDIENTE_VALIDACION
@@ -64,9 +65,9 @@ class TestReportCreate:
             },
             format="multipart",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         assert ReportStatusHistory.objects.filter(
-            report_id=res.data["id"], status="pendiente_validacion"
+            report_id=res.data["id"], status="pendiente_validacion",
         ).exists()
 
     def test_create_without_photo_returns_400(self, auth_client):
@@ -80,7 +81,7 @@ class TestReportCreate:
             },
             format="multipart",
         )
-        assert res.status_code == 400
+        assert res.status_code == HTTPStatus.BAD_REQUEST
 
     def test_create_without_location_returns_400(self, auth_client):
         client, _ = auth_client
@@ -93,7 +94,7 @@ class TestReportCreate:
             },
             format="multipart",
         )
-        assert res.status_code == 400
+        assert res.status_code == HTTPStatus.BAD_REQUEST
 
     def test_create_anonymous_returns_401_or_403(self, db):
         client = APIClient()
@@ -116,15 +117,15 @@ class TestReportList:
         client, _ = auth_client
         ReportFactory.create_batch(3)
         res = client.get("/api/reports/")
-        assert res.status_code == 200
-        assert res.data["count"] >= 3
+        assert res.status_code == HTTPStatus.OK
+        assert res.data["count"] >= 3  # noqa: PLR2004
 
     def test_mine_filter(self, auth_client):
         client, user = auth_client
         ReportFactory.create(author=user)
         ReportFactory.create()  # another user's report
         res = client.get("/api/reports/?mine=true")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         for r in res.data["results"]:
             assert r["author"]["id"] == user.id
 
@@ -135,10 +136,10 @@ class TestReportDetail:
         client, _ = auth_client
         report = ReportFactory.create()
         ReportStatusHistory.objects.create(
-            report=report, status="reportado", changed_by=report.author
+            report=report, status="reportado", changed_by=report.author,
         )
         res = client.get(f"/api/reports/{report.id}/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert len(res.data["status_history"]) >= 1
 
     def test_detail_is_liked_false_by_default(self, auth_client):
@@ -154,7 +155,7 @@ class TestLike:
         client, user = auth_client
         report = ReportFactory.create()
         res = client.post(f"/api/reports/{report.id}/like/")
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         assert Like.objects.filter(report=report, user=user).exists()
         # ``status`` viaja desde US-040: el me gusta puede haber disparado la
         # validación colectiva, y el cliente tiene que poder refrescar.
@@ -169,7 +170,7 @@ class TestLike:
         report = ReportFactory.create()
         LikeFactory.create(report=report, user=user)
         res = client.delete(f"/api/reports/{report.id}/like/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert not Like.objects.filter(report=report, user=user).exists()
         assert res.data == {
             "liked": False,
@@ -185,11 +186,11 @@ class TestLike:
         assert Like.objects.filter(report=report, user=user).count() == 1
 
     def test_like_count_reflects_other_users(self, auth_client):
-        client, user = auth_client
+        client, _user = auth_client
         report = ReportFactory.create()
         LikeFactory.create(report=report)  # like de otro usuario
         res = client.post(f"/api/reports/{report.id}/like/")
-        assert res.data["like_count"] == 2
+        assert res.data["like_count"] == 2  # noqa: PLR2004
 
     def test_is_liked_present_without_annotation(self, auth_client):
         """El campo no debe desaparecer si el queryset no anota ``is_liked``.
@@ -197,9 +198,11 @@ class TestLike:
         Un campo declarativo de solo lectura se omite en silencio cuando falta el
         atributo, y el cliente se quedaría sin el estado del botón de like.
         """
-        from rest_framework.test import APIRequestFactory
+        from rest_framework.test import APIRequestFactory  # noqa: PLC0415
 
-        from urbancheck.reports.api.serializers import ReportDetailSerializer
+        from urbancheck.reports.api.serializers import (  # noqa: PLC0415
+            ReportDetailSerializer,
+        )
 
         _, user = auth_client
         report = ReportFactory.create()
@@ -231,7 +234,7 @@ class TestComments:
             data={"text": "Buen reporte"},
             format="json",
         )
-        assert res.status_code == 201
+        assert res.status_code == HTTPStatus.CREATED
         assert res.data["author"]["id"] == user.id
 
     def test_list_comments(self, auth_client):
@@ -239,8 +242,8 @@ class TestComments:
         report = ReportFactory.create()
         CommentFactory.create_batch(3, report=report)
         res = client.get(f"/api/reports/{report.id}/comments/")
-        assert res.status_code == 200
-        assert len(res.data) >= 3
+        assert res.status_code == HTTPStatus.OK
+        assert len(res.data) >= 3  # noqa: PLR2004
 
     def test_anonymous_comment_returns_401_or_403(self, db):
         report = ReportFactory.create()
@@ -278,7 +281,7 @@ class TestGpsPrecision:
             format="multipart",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         report = Report.objects.get(pk=response.data["id"])
         assert str(report.latitude) == "-32.410314"
         assert str(report.longitude) == "-63.240093"
@@ -299,5 +302,5 @@ class TestGpsPrecision:
             format="multipart",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "latitude" in response.data

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -25,7 +27,7 @@ class TestNotificationList:
         mine = NotificationFactory.create(recipient=user)
         NotificationFactory.create()  # de otro usuario
         res = client.get("/api/notifications/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert {n["id"] for n in res.data["results"]} == {mine.id}
 
     def test_newest_first(self, auth_client):
@@ -67,7 +69,7 @@ class TestNotificationRead:
         client, user = auth_client
         notification = NotificationFactory.create(recipient=user, is_read=False)
         res = client.post(f"/api/notifications/{notification.id}/read/")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["is_read"] is True
         notification.refresh_from_db()
         assert notification.is_read is True
@@ -86,11 +88,11 @@ class TestNotificationRead:
         client, _ = auth_client
         other = NotificationFactory.create()
         res = client.post(f"/api/notifications/{other.id}/read/")
-        assert res.status_code == 404
+        assert res.status_code == HTTPStatus.NOT_FOUND
 
     def test_delete_own_notification(self, auth_client):
         client, user = auth_client
         notification = NotificationFactory.create(recipient=user)
         res = client.delete(f"/api/notifications/{notification.id}/")
-        assert res.status_code == 204
+        assert res.status_code == HTTPStatus.NO_CONTENT
         assert not Notification.objects.filter(id=notification.id).exists()

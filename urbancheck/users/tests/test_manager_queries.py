@@ -91,7 +91,7 @@ class TestValidationCount:
         annotated = User.objects.with_validation_count().get(pk=validator.pk)
 
         # Validar y rechazar son las dos caras del mismo trabajo de terreno.
-        assert annotated.validation_count == 2
+        assert annotated.validation_count == 2  # noqa: PLR2004
 
     def test_a_panel_transition_is_not_a_validation(self):
         agent = MunicipalAgentFactory.create()
@@ -143,7 +143,7 @@ class TestManagementCount:
 
         annotated = User.objects.with_management_count().get(pk=agent.pk)
 
-        assert annotated.management_count == 2
+        assert annotated.management_count == 2  # noqa: PLR2004
 
     def test_a_field_validation_is_not_a_management(self):
         """Las validaciones tienen su propia columna y su propio rol.

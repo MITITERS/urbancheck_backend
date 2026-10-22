@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from django.db import IntegrityError
 
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
 from urbancheck.reports.models import Report
@@ -24,6 +25,8 @@ class TestReport:
             author=UserFactory.create(),
             municipality=active_municipality,
             photo="reports/2026/07/test.jpg",
+            # Publicada: el modelo rechaza una foto sin difuminar (US-042).
+            photo_status=PhotoStatus.PROCESADA,
             description="Bache en la esquina",
             category=Report.Category.BACHE,
             latitude="-34.6",
@@ -65,10 +68,10 @@ class TestReportStatusHistory:
     def test_ordering_newest_first(self):
         report = ReportFactory.create(with_history=False)
         first = ReportStatusHistory.objects.create(
-            report=report, status=Report.Status.PENDIENTE_VALIDACION
+            report=report, status=Report.Status.PENDIENTE_VALIDACION,
         )
         second = ReportStatusHistory.objects.create(
-            report=report, status=Report.Status.REPORTADO
+            report=report, status=Report.Status.REPORTADO,
         )
         assert list(report.status_history.all()) == [second, first]
 
@@ -98,7 +101,7 @@ class TestLike:
         user = UserFactory.create()
         LikeFactory.create(user=user)
         LikeFactory.create(user=user)
-        assert user.likes.count() == 2
+        assert user.likes.count() == 2  # noqa: PLR2004
 
     def test_deleting_report_deletes_likes(self):
         like = LikeFactory.create()

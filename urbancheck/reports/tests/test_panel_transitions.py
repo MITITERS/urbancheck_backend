@@ -1,5 +1,7 @@
 """US-013 — actualizar el estado de un reporte desde el panel."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -84,7 +86,7 @@ class TestValidTransitions:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.status == target
         assert response.data["status"] == target
@@ -96,7 +98,11 @@ class TestValidTransitions:
             with_history=False,
         )
 
-        agent_client.post(url(report.id, "process/"), body("process", report), format="json")
+        agent_client.post(
+            url(report.id, "process/"),
+            body("process", report),
+            format="json",
+        )
 
         entry = ReportStatusHistory.objects.get(report=report)
         assert entry.changed_by == agent
@@ -124,7 +130,7 @@ class TestInvalidTransitions:
             format="json",
         )
 
-        assert response.status_code == 409
+        assert response.status_code == HTTPStatus.CONFLICT
         assert response.data["current_status"] == wrong
         report.refresh_from_db()
         assert report.status == wrong
@@ -148,11 +154,13 @@ class TestInvalidTransitions:
                 format="json",
             )
 
-            assert response.status_code == 409
+            assert response.status_code == HTTPStatus.CONFLICT
             report.refresh_from_db()
             assert report.status == final
 
-    def test_the_panel_cannot_validate_a_pending_report(self, agent_client, municipality):
+    def test_the_panel_cannot_validate_a_pending_report(
+        self, agent_client, municipality,
+    ):
         """Pendiente → Reportado es de la app móvil (US-036), no del panel."""
         report = ReportFactory.create(
             municipality=municipality,
@@ -165,7 +173,7 @@ class TestInvalidTransitions:
             format="json",
         )
 
-        assert response.status_code == 409
+        assert response.status_code == HTTPStatus.CONFLICT
         assert response.data["available_transitions"] == []
 
 
@@ -178,7 +186,7 @@ class TestReason:
 
         response = agent_client.post(url(report.id, "cancel/"), {}, format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         report.refresh_from_db()
         assert report.status == Report.Status.EN_PROCESO
 
@@ -222,7 +230,7 @@ class TestReason:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
 
 
 class TestJurisdiction:
@@ -245,7 +253,7 @@ class TestJurisdiction:
             format="json",
         )
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
         foreign.refresh_from_db()
         assert foreign.status == source
 
@@ -293,13 +301,15 @@ class TestDetail:
             status=Report.Status.REPORTADO,
             with_history=False,
         )
-        agent_client.post(url(report.id, "process/"), body("process", report), format="json")
+        agent_client.post(
+            url(report.id, "process/"), body("process", report), format="json",
+        )
         agent_client.post(url(report.id, "archive/"), format="json")
 
         response = agent_client.get(url(report.id, ""))
 
         history = response.data["status_history"]
-        assert len(history) == 2
+        assert len(history) == 2  # noqa: PLR2004
         assert history[0]["status"] == Report.Status.ARCHIVADO
         assert history[-1]["status"] == Report.Status.EN_PROCESO
 
@@ -343,7 +353,7 @@ class TestPublicVisibility:
         detail = client.get(f"/api/reports/{report.id}/")
 
         assert report.id in {row["id"] for row in own.data["results"]}
-        assert detail.status_code == 200
+        assert detail.status_code == HTTPStatus.OK
 
 
 class TestThePlatformAdminCanAlsoTransition:
@@ -380,7 +390,7 @@ class TestThePlatformAdminCanAlsoTransition:
             body(operation, report),
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         report.refresh_from_db()
         assert report.status == target
 
@@ -396,7 +406,7 @@ class TestThePlatformAdminCanAlsoTransition:
             body("process", elsewhere),
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         elsewhere.refresh_from_db()
         assert elsewhere.status == Report.Status.EN_PROCESO
 
