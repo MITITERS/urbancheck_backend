@@ -73,7 +73,8 @@ class Notification(models.Model):
         blank=True,
         related_name="notifications_sent",
     )
-    kind = models.CharField(max_length=30, choices=Kind.choices)
+    # 50 y no 30 (C-12): ``apelacion_moderacion_rechazada`` ya ocupaba los 30.
+    kind = models.CharField(max_length=50, choices=Kind.choices)
     report = models.ForeignKey(
         "reports.Report",
         on_delete=models.CASCADE,
@@ -125,7 +126,8 @@ class NotificationPreference(models.Model):
         on_delete=models.CASCADE,
         related_name="notification_preferences",
     )
-    kind = models.CharField(max_length=30, choices=Notification.Kind.choices)
+    # El mismo catálogo que ``Notification.kind``, con el mismo largo (C-12).
+    kind = models.CharField(max_length=50, choices=Notification.Kind.choices)
     enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 

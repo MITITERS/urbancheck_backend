@@ -544,6 +544,9 @@ El default es **todo activado**: la ausencia de fila en
 `NotificationPreference` significa habilitado, así que un usuario que nunca tocó
 la configuración recibe todo.
 
+`Notification.kind` y `NotificationPreference.kind` miden 50 (C-12): con 30,
+`apelacion_moderacion_rechazada` ya ocupaba todo el campo.
+
 `nuevo_like` estaba en el catálogo pero nada lo creaba (C-09). Ahora lo crea
 `notify_new_like` al dar me gusta: al autor, nunca por el propio, y uno solo
 por persona y reporte aunque se quite y se vuelva a dar. Sigue la misma regla
