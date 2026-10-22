@@ -1772,6 +1772,14 @@ El panel ya no retiene la imagen denunciada por dato personal (pedido del
 21/10): el detalle del panel y la bandeja la mandan siempre, porque el agente y
 el admin la necesitan para resolver. Las vistas públicas siguen sin mostrarla.
 
+### El historial guarda con qué rol se actuó (C-15)
+
+El administrador de la plataforma ejecuta las acciones del panel con las mismas
+reglas que el agente (`Actor.MUNICIPAL_AGENT`). Por decisión del equipo se
+mantiene así, pero cada asiento de `ReportStatusHistory` guarda en
+`changed_by_role` el rol de `changed_by` en ese momento, y el panel marca los
+cambios del admin. Los asientos anteriores al campo lo tienen vacío.
+
 ## Seguridad (Sprint 5, deuda del Sprint 4)
 
 Todo lo de esta sección se configura por variables de entorno; la lista

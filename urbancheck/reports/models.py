@@ -532,6 +532,12 @@ class ReportStatusHistory(models.Model):
         null=True,
         blank=True,
     )
+    # Con qué rol actuó ``changed_by``, tal como era en ese momento (C-15). El
+    # administrador de la plataforma ejecuta las acciones del panel con las
+    # reglas del agente municipal: sin esto, el asiento no distingue quién de
+    # los dos lo hizo una vez que la cuenta cambia de rol o se borra. Vacío en
+    # los asientos anteriores a C-15 y en los automáticos, sin usuario.
+    changed_by_role = models.CharField(max_length=30, blank=True, default="")
     # Obligatorio en las transiciones que lo exigen (cancelar, rechazar).
     reason = models.TextField(blank=True, default="")
     # De dónde salió la transición, más allá de a qué estado llegó. Dos caminos

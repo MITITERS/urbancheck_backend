@@ -239,6 +239,8 @@ def apply_transition(  # noqa: PLR0913, C901 (cada parámetro es un requisito di
             status=transition.target,
             previous_status=previous_status,
             changed_by=changed_by,
+            # El rol real, para auditoría (C-15): el admin actúa como agente.
+            changed_by_role=getattr(changed_by, "role", ""),
             reason=reason,
             # El origen sale de la tabla, no de quien invoca.
             origin=transition.origin,

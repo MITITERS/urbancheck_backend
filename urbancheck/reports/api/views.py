@@ -440,6 +440,7 @@ class ReportViewSet(
             report=report,
             status=Report.Status.PENDIENTE_VALIDACION,
             changed_by=self.request.user,
+            changed_by_role=self.request.user.role,
         )
         # El reporte ya existe; público todavía no. La foto entra a la cola y
         # el endpoint contesta ahora: bloquear el POST hasta que el difuminado

@@ -432,6 +432,9 @@ class PanelStatusHistorySerializer(serializers.ModelSerializer):
             "previous_status",
             "status",
             "changed_by",
+            # Con qué rol actuó (C-15): el admin ejecuta las acciones del panel
+            # con las reglas del agente, y el historial lo deja a la vista.
+            "changed_by_role",
             "reason",
             # De dónde salió la transición: es lo que deja distinguir una
             # validación en terreno de una colectiva, o un cierre de operario de

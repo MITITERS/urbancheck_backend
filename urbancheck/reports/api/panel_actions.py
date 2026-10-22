@@ -78,6 +78,8 @@ class ReportTransitionActionsMixin:
     def _run_transition(self, request, operation: str, *, operational_area=None):
         report = self.get_object()
         try:
+            # El admin de la plataforma también llega acá y actúa con las
+            # reglas del agente; el historial guarda su rol real (C-15).
             apply_transition(
                 report,
                 operation,
