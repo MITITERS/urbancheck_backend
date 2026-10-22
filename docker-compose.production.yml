@@ -43,8 +43,13 @@ services:
     image: urbancheck_production_traefik
     depends_on:
       - django
+      - panel
     volumes:
       - production_traefik:/etc/traefik/acme
+    environment:
+      # El dominio de todo el despliegue (C-04): traefik.yml arma con él las
+      # reglas de ruteo y los certificados. Sin valor, Compose no arranca.
+      URBANCHECK_DOMAIN: ${URBANCHECK_DOMAIN:?Definí URBANCHECK_DOMAIN, por ejemplo urbancheck.com.ar}
     ports:
       - '0.0.0.0:80:80'
       - '0.0.0.0:443:443'
@@ -81,3 +86,17 @@ services:
       - django
     volumes:
       - production_django_media:/usr/share/nginx/media:ro
+
+  # El panel municipal (C-04): el bundle de React servido por su nginx, que
+  # también hace de proxy de /api, /_allauth, /media, /r y /.well-known a
+  # Django. Se construye desde el repositorio del panel clonado al lado de este
+  # (../urbanchech_frontend), en la versión que se quiera desplegar.
+  panel:
+    build:
+      context: ../urbanchech_frontend
+      target: runtime
+    image: urbancheck_production_panel
+    environment:
+      API_UPSTREAM: http://django:5000
+    depends_on:
+      - django

@@ -537,9 +537,11 @@ PUBLIC_REPORT_URL = env(
 )
 # A dónde sigue una persona que abre ese enlace: la página pública del panel.
 # ``/r/<token>`` lo responde el backend con las etiquetas de vista previa para
-# las redes (Open Graph) y redirige acá. En producción es la misma raíz, así que
-# alcanza con una ruta relativa; en desarrollo, el panel vive en otro puerto:
-# ``http://localhost:5173/reporte/{token}``.
+# las redes (Open Graph) y redirige acá. En producción el panel vive en
+# ``panel.<dominio>`` (C-04), así que va la URL absoluta
+# ``https://panel.<dominio>/reporte/{token}``; en desarrollo, en otro puerto:
+# ``http://localhost:5173/reporte/{token}``. El default relativo solo sirve si
+# el panel se sirve en la misma raíz que Django.
 PUBLIC_REPORT_PAGE_URL = env(
     "DJANGO_PUBLIC_REPORT_PAGE_URL",
     default="/reporte/{token}",

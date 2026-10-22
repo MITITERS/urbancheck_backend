@@ -1820,6 +1820,15 @@ The following details how to deploy this application.
 
 See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
 
+El panel es el servicio `panel` (C-04): se construye desde
+`../urbanchech_frontend` (target `runtime`), así que el servidor necesita los
+dos repositorios clonados uno al lado del otro. `URBANCHECK_DOMAIN` define el
+dominio: `panel.<dominio>` va al panel, `<dominio>/r/` también (el enlace para
+compartir, que su nginx le pasa a Django), `<dominio>/media/` a nginx y el
+resto, `/.well-known/` incluido, a Django. En `.envs/.production/.django`,
+`DJANGO_ALLOWED_HOSTS` tiene que incluir `panel.<dominio>` y
+`DJANGO_PUBLIC_REPORT_PAGE_URL` apuntar a `https://panel.<dominio>/reporte/{token}`.
+
 El servicio `django` aplica las migraciones al arrancar (`migrate --noinput`,
 antes de `collectstatic`). Worker, beat y flower no migran (C-03).
 

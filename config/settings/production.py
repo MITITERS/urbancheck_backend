@@ -62,10 +62,15 @@ SECURE_CONTENT_TYPE_NOSNIFF = env.bool(
 
 # CORS Y ORÍGENES DE CONFIANZA
 # ------------------------------------------------------------------------------
-# El panel llega por el mismo origen: su nginx hace de proxy de /api y
-# /_allauth (ver urbanchech_frontend/compose/nginx). Por eso el default es
-# **ninguno**: un origen solo se agrega si el panel pasa a servirse desde otro
-# dominio. La app móvil no es un navegador y CORS no la alcanza.
+# El panel se sirve en ``panel.<dominio>`` (C-04, ``traefik.yml``), pero el
+# navegador nunca le habla a Django desde otro origen: el nginx del panel hace
+# de proxy de /api, /_allauth, /media, /r y /.well-known en su mismo dominio
+# (ver urbanchech_frontend/compose/nginx). Por eso el default es **ninguno**:
+# un origen solo se agrega si el panel deja de pasar por su nginx. Lo que sí
+# hace falta es que ``DJANGO_ALLOWED_HOSTS`` incluya ``panel.<dominio>``, porque
+# ese proxy reenvía el ``Host`` original. ``/.well-known/`` del dominio
+# principal lo sigue respondiendo Django directo, que es donde lo buscan iOS y
+# Android. La app móvil no es un navegador y CORS no la alcanza.
 # https://github.com/adamchainz/django-cors-headers#configuration
 CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS", default=[])
 CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=[])

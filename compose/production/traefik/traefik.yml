@@ -28,10 +28,23 @@ certificatesResolvers:
       httpChallenge:
         entryPoint: web
 
+# El dominio no está decidido: sale de URBANCHECK_DOMAIN, que Compose le pasa
+# al contenedor, y las reglas lo leen con la función `env` de las plantillas
+# de Go del proveedor `file` (con las funciones de sprig). Ojo: Traefik
+# interpreta la plantilla en todo el archivo, comentarios incluidos, así que
+# acá no se pueden escribir llaves dobles fuera de una regla.
+#
+# Ruteo (C-04). Entre reglas del mismo dominio gana la más larga, que es la
+# prioridad por defecto de Traefik:
+#   panel.<dominio>        -> panel
+#   <dominio> + /r/        -> panel (enlace para compartir, US-030; su nginx
+#                             se lo pasa a Django)
+#   <dominio> + /media/    -> nginx
+#   <dominio>              -> django (API, admin y /.well-known/)
 http:
   routers:
     web-secure-router:
-      rule: 'Host(`urbancheck.com.ar`)'
+      rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`)'
       entryPoints:
         - web-secure
       middlewares:
@@ -42,7 +55,7 @@ http:
         certResolver: letsencrypt
 
     flower-secure-router:
-      rule: 'Host(`urbancheck.com.ar`)'
+      rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`)'
       entryPoints:
         - flower
       service: flower
@@ -51,12 +64,32 @@ http:
         certResolver: letsencrypt
 
     web-media-router:
-      rule: 'Host(`urbancheck.com.ar`) && PathPrefix(`/media/`)'
+      rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`) && PathPrefix(`/media/`)'
       entryPoints:
         - web-secure
       middlewares:
         - csrf
       service: django-media
+      tls:
+        certResolver: letsencrypt
+
+    panel-router:
+      rule: 'Host(`panel.{{ env "URBANCHECK_DOMAIN" }}`)'
+      entryPoints:
+        - web-secure
+      service: panel
+      tls:
+        certResolver: letsencrypt
+
+    # La página pública del reporte compartido (US-030). El enlace que arma
+    # DJANGO_PUBLIC_REPORT_URL es <dominio>/r/{token}: el nginx del panel se lo
+    # pasa a Django, que responde la vista previa para las redes y redirige a
+    # DJANGO_PUBLIC_REPORT_PAGE_URL (panel.<dominio>/reporte/{token}).
+    panel-share-router:
+      rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`) && PathPrefix(`/r/`)'
+      entryPoints:
+        - web-secure
+      service: panel
       tls:
         certResolver: letsencrypt
 
@@ -82,6 +115,11 @@ http:
       loadBalancer:
         servers:
           - url: http://nginx:80
+
+    panel:
+      loadBalancer:
+        servers:
+          - url: http://panel:80
 
 providers:
   # https://doc.traefik.io/traefik/master/providers/file/
