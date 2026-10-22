@@ -1836,7 +1836,8 @@ completa, con sus defaults, está en `.env.example`.
 - **CI** (`.github/workflows/ci.yml`): ruff, Bandit (falla desde severidad
   media), pip-audit, gitleaks (binario con checksum fijo; excepciones
   revisadas en `.gitleaksignore`), pytest y `makemigrations --check`. Dependabot
-  semanal para uv, Docker, Docker Compose y GitHub Actions.
+  semanal para uv, Docker, Docker Compose y GitHub Actions, con los PR contra
+  `develop` (C-16).
 
 ## Deployment
 
