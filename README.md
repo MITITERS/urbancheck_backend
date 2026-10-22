@@ -1834,6 +1834,14 @@ resto, `/.well-known/` incluido, a Django. En `.envs/.production/.django`,
 `DJANGO_ALLOWED_HOSTS` tiene que incluir `panel.<dominio>` y
 `DJANGO_PUBLIC_REPORT_PAGE_URL` apuntar a `https://panel.<dominio>/reporte/{token}`.
 
+Flower no se publica (C-06): escucha solo en el `127.0.0.1:5555` del servidor
+y se entra por túnel SSH, con su usuario y contraseña de siempre:
+
+```bash
+ssh -N -L 5555:127.0.0.1:5555 <usuario>@<servidor>
+# y en el navegador: http://localhost:5555
+```
+
 Traefik agrega HSTS de un año a las respuestas del panel (middleware
 `panel-hsts`, C-05); las de Django ya lo traen.
 

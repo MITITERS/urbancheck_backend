@@ -53,7 +53,6 @@ services:
     ports:
       - '0.0.0.0:80:80'
       - '0.0.0.0:443:443'
-      - '0.0.0.0:5555:5555'
 
   redis:
     image: docker.io/redis:7.2
@@ -76,6 +75,11 @@ services:
     <<: *django
     image: urbancheck_production_flower
     command: /start-flower
+    # Solo en la interfaz local del servidor (C-06): se entra por túnel SSH,
+    # `ssh -N -L 5555:127.0.0.1:5555 <usuario>@<servidor>`, y se abre
+    # http://localhost:5555. Sigue pidiendo usuario y contraseña.
+    ports:
+      - '127.0.0.1:5555:5555'
 
   nginx:
     build:

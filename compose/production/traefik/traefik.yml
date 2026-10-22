@@ -15,8 +15,8 @@ entryPoints:
     # https
     address: ':443'
 
-  flower:
-    address: ':5555'
+  # Flower no tiene entrada pública (C-06): escucha en el 127.0.0.1:5555 del
+  # servidor y se entra por túnel SSH (ver el README).
 
 certificatesResolvers:
   letsencrypt:
@@ -52,15 +52,6 @@ http:
       service: django
       tls:
         # https://doc.traefik.io/traefik/routing/routers/#certresolver
-        certResolver: letsencrypt
-
-    flower-secure-router:
-      rule: 'Host(`{{ env "URBANCHECK_DOMAIN" }}`)'
-      entryPoints:
-        - flower
-      service: flower
-      tls:
-        # https://doc.traefik.io/traefik/master/routing/routers/#certresolver
         certResolver: letsencrypt
 
     web-media-router:
@@ -117,11 +108,6 @@ http:
       loadBalancer:
         servers:
           - url: http://django:5000
-
-    flower:
-      loadBalancer:
-        servers:
-          - url: http://flower:5555
 
     django-media:
       loadBalancer:

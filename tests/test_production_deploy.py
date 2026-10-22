@@ -123,3 +123,21 @@ class TestPanelHsts:
                 if "headers" in config["middlewares"][m]
             ]
             assert any(h.get("stsSeconds", 0) >= 31536000 for h in headers), name  # noqa: PLR2004
+
+
+class TestFlowerIsNotPublic:
+    """C-06: Flower solo por túnel SSH al 127.0.0.1:5555 del servidor."""
+
+    def test_traefik_does_not_publish_it(self):
+        config = traefik()
+        assert "flower" not in config["entryPoints"]
+        assert not any(
+            r["service"] == "flower" for r in config["http"]["routers"].values()
+        )
+        ports = compose()["services"]["traefik"]["ports"]
+        assert not any("5555" in port for port in ports)
+
+    def test_flower_listens_only_on_the_loopback(self):
+        ports = compose()["services"]["flower"].get("ports", [])
+
+        assert ports == ["127.0.0.1:5555:5555"]
