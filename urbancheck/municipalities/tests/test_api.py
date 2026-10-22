@@ -1,10 +1,13 @@
 """US-017 — alta, edición, baja y cobertura de municipalidades."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import PlatformAdminFactory
 from urbancheck.users.tests.factories import UserFactory
@@ -51,7 +54,7 @@ class TestCreateMunicipality:
     def test_platform_admin_can_register_a_municipality(self, admin_client):
         response = admin_client.post(URL, payload(), format="json")
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         assert Municipality.objects.filter(
             city="Villa María",
             province="Córdoba",
@@ -83,7 +86,7 @@ class TestCreateMunicipality:
 
         response = admin_client.post(URL, body, format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert missing in response.data
 
     @pytest.mark.parametrize(
@@ -93,14 +96,18 @@ class TestCreateMunicipality:
             pytest.param([[-32.4, -63.2], [-32.5, -63.3]], id="only_two_points"),
             pytest.param("no soy un polígono", id="not_a_list"),
             pytest.param([[-32.4, -63.2], [-32.5], [-32.6, -63.4]], id="short_point"),
-            pytest.param([[-32.4, -63.2], ["x", "y"], [-32.6, -63.4]], id="not_numbers"),
-            pytest.param([[-95, -63.2], [-32.5, -63.3], [-32.6, -63.4]], id="off_globe"),
+            pytest.param(
+                [[-32.4, -63.2], ["x", "y"], [-32.6, -63.4]], id="not_numbers",
+            ),
+            pytest.param(
+                [[-95, -63.2], [-32.5, -63.3], [-32.6, -63.4]], id="off_globe",
+            ),
         ],
     )
     def test_an_invalid_boundary_is_rejected(self, admin_client, invalid):
         response = admin_client.post(URL, payload(boundary=invalid), format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "boundary" in response.data
 
     def test_a_boundary_with_too_many_points_is_rejected(self, admin_client):
@@ -109,7 +116,7 @@ class TestCreateMunicipality:
 
         response = admin_client.post(URL, payload(boundary=huge), format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "boundary" in response.data
 
     def test_duplicate_is_rejected_as_a_field_error(self, admin_client):
@@ -117,7 +124,7 @@ class TestCreateMunicipality:
 
         response = admin_client.post(URL, payload(), format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         # El panel lo muestra debajo del input, no como toast genérico.
         assert "city" in response.data
 
@@ -130,7 +137,7 @@ class TestCreateMunicipality:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
 
     def test_the_same_city_in_another_province_is_allowed(self, admin_client):
         MunicipalityFactory.create(city="San Martín", province="Córdoba")
@@ -141,7 +148,7 @@ class TestCreateMunicipality:
             format="json",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
 
 
 class TestCoordinatePrecision:
@@ -153,7 +160,7 @@ class TestCoordinatePrecision:
             format="json",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         municipality = Municipality.objects.get(pk=response.data["id"])
         assert str(municipality.latitude) == "-32.630314"
         assert str(municipality.longitude) == "-62.688793"
@@ -161,7 +168,7 @@ class TestCoordinatePrecision:
     def test_a_coordinate_off_the_planet_is_still_rejected(self, admin_client):
         response = admin_client.post(URL, payload(latitude=91), format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "latitude" in response.data
 
 
@@ -180,7 +187,7 @@ class TestEditMunicipality:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         municipality.refresh_from_db()
         assert municipality.boundary == BOUNDARY
         assert municipality.contains(-32.4103, -63.2400) is True
@@ -195,12 +202,14 @@ class TestEditMunicipality:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "city" in response.data
 
     def test_a_municipality_can_keep_its_own_name_while_editing(self, admin_client):
         """El chequeo de duplicado no se puede disparar contra uno mismo."""
-        municipality = MunicipalityFactory.create(city="Villa María", province="Córdoba")
+        municipality = MunicipalityFactory.create(
+            city="Villa María", province="Córdoba",
+        )
 
         response = admin_client.patch(
             f"{URL}{municipality.pk}/",
@@ -208,7 +217,7 @@ class TestEditMunicipality:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
 
 
 class TestDeleteMunicipality:
@@ -218,7 +227,7 @@ class TestDeleteMunicipality:
 
         response = admin_client.delete(f"{URL}{municipality.pk}/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         municipality.refresh_from_db()
         assert municipality.is_active is False
 
@@ -232,7 +241,7 @@ class TestDeleteMunicipality:
 
     def test_registering_it_again_revives_it_with_its_history(self, admin_client):
         """Sin esto la ciudad quedaría bloqueada para siempre por la constraint."""
-        from urbancheck.reports.tests.factories import ReportFactory
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
 
         municipality = MunicipalityFactory.create(
             city="Villa María",
@@ -243,7 +252,7 @@ class TestDeleteMunicipality:
 
         response = admin_client.post(URL, payload(), format="json")
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         assert response.data["id"] == municipality.pk
         municipality.refresh_from_db()
         assert municipality.is_active is True
@@ -350,9 +359,107 @@ class TestDeactivationCascadesToStaff:
         assert staffed["agent"].id in {row["id"] for row in archived}
 
 
+class TestDeactivationCascadesToOperationalAreas:
+    """La baja del municipio también arrastra a sus áreas operativas (US-039).
+
+    Por lo mismo que al personal: una dependencia activa de un municipio cerrado
+    seguiría ofreciéndose en el desplegable de asignación de US-028, y un
+    reporte podría entrar en gestión a nombre de un municipio que ya no opera.
+    """
+
+    @pytest.fixture
+    def municipality(self):
+        return MunicipalityFactory.create()
+
+    def test_its_areas_are_deactivated(self, admin_client, municipality):
+        obras = OperationalAreaFactory.create(
+            municipality=municipality,
+            name="Obras Públicas",
+        )
+        alumbrado = OperationalAreaFactory.create(
+            municipality=municipality,
+            name="Alumbrado",
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        for area in (obras, alumbrado):
+            area.refresh_from_db()
+            assert area.is_active is False
+
+    def test_the_response_says_how_many_areas_fell(self, admin_client, municipality):
+        """La consecuencia no se ve desde la pantalla de municipios."""
+        OperationalAreaFactory.create_batch(2, municipality=municipality)
+
+        response = admin_client.delete(f"{URL}{municipality.pk}/")
+
+        assert response.data["deactivated_areas"] == 2  # noqa: PLR2004
+
+    def test_an_already_inactive_area_is_not_counted_twice(
+        self,
+        admin_client,
+        municipality,
+    ):
+        OperationalAreaFactory.create(municipality=municipality)
+        OperationalAreaFactory.create(municipality=municipality, is_active=False)
+
+        response = admin_client.delete(f"{URL}{municipality.pk}/")
+
+        assert response.data["deactivated_areas"] == 1
+
+    def test_the_areas_keep_their_reports(self, admin_client, municipality):
+        """La baja es lógica: no se pierde qué dependencia se hizo cargo."""
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
+
+        area = OperationalAreaFactory.create(municipality=municipality)
+        report = ReportFactory.create(
+            municipality=municipality,
+            operational_area=area,
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        report.refresh_from_db()
+        assert report.operational_area_id == area.pk
+
+    def test_areas_of_other_municipalities_are_untouched(
+        self,
+        admin_client,
+        municipality,
+    ):
+        foreign = OperationalAreaFactory.create(
+            municipality=MunicipalityFactory.create(),
+        )
+
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        foreign.refresh_from_db()
+        assert foreign.is_active is True
+
+    def test_reviving_the_municipality_does_not_reactivate_them(
+        self,
+        admin_client,
+        municipality,
+    ):
+        """Mismo criterio que el personal: se reactivan de a una, a mano."""
+        area = OperationalAreaFactory.create(municipality=municipality)
+        admin_client.delete(f"{URL}{municipality.pk}/")
+
+        admin_client.post(
+            URL,
+            payload(city=municipality.city, province=municipality.province),
+            format="json",
+        )
+
+        municipality.refresh_from_db()
+        assert municipality.is_active is True
+        area.refresh_from_db()
+        assert area.is_active is False
+
+
 class TestListing:
     def test_each_row_carries_its_counters(self, admin_client):
-        from urbancheck.reports.tests.factories import ReportFactory
+        from urbancheck.reports.tests.factories import ReportFactory  # noqa: PLC0415
 
         municipality = MunicipalityFactory.create()
         ReportFactory.create_batch(3, municipality=municipality)
@@ -376,9 +483,15 @@ class TestMunicipalityPermissions:
         client = APIClient()
         client.force_authenticate(factory.create())
 
-        assert client.get(URL).status_code == 403
-        assert client.post(URL, payload(), format="json").status_code == 403
-        assert client.delete(f"{URL}{municipality.pk}/").status_code == 403
+        assert client.get(URL).status_code == HTTPStatus.FORBIDDEN
+        assert (
+            client.post(URL, payload(), format="json").status_code
+            == HTTPStatus.FORBIDDEN
+        )
+        assert (
+            client.delete(f"{URL}{municipality.pk}/").status_code
+            == HTTPStatus.FORBIDDEN
+        )
 
     def test_anonymous_is_denied(self):
-        assert APIClient().get(URL).status_code == 403
+        assert APIClient().get(URL).status_code == HTTPStatus.FORBIDDEN

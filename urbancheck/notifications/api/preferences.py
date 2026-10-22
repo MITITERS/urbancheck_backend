@@ -29,6 +29,18 @@ GROUPS = {
     # Este no le llega al vecino sino al personal municipal: es trabajo, no
     # avance de un reclamo propio.
     Notification.Kind.APELACION_CIERRE: "trabajo",
+    Notification.Kind.IMAGEN_RETIRADA: "estado",
+    Notification.Kind.REPORTE_EN_REVISION: "estado",
+    Notification.Kind.REPORTE_RESTITUIDO: "estado",
+    # El resultado de algo que hizo quien lo recibe, sobre un reporte que
+    # puede no ser suyo: es participación, como comentar.
+    Notification.Kind.DENUNCIA_RESUELTA: "social",
+    Notification.Kind.DENUNCIA_RECIBIDA: "social",
+    # Algo que le pasa al reporte propio y que el municipio va a revisar.
+    Notification.Kind.REPORTE_DENUNCIADO: "estado",
+    # Le llega a quien subió la foto y le dice que lo que cargó no se publicó:
+    # es el avance —o la falta de avance— de su propio trámite.
+    Notification.Kind.IMAGEN_NO_PROCESADA: "estado",
 }
 
 INVALID_PAYLOAD_MESSAGE = (
@@ -53,6 +65,27 @@ DESCRIPTIONS = {
     Notification.Kind.APELACION_CIERRE: (
         "Cuando un vecino objeta el cierre de un reporte de tu área."
     ),
+    Notification.Kind.IMAGEN_RETIRADA: (
+        "Cuando se retira una foto de tu reporte porque mostraba un dato personal."
+    ),
+    Notification.Kind.REPORTE_EN_REVISION: (
+        "Cuando tu reporte se oculta mientras se revisa una denuncia sobre su imagen."
+    ),
+    Notification.Kind.REPORTE_RESTITUIDO: (
+        "Cuando tu reporte vuelve a publicarse porque la denuncia se desestimó."
+    ),
+    Notification.Kind.DENUNCIA_RESUELTA: (
+        "Cuando se resuelve una imagen que denunciaste por mostrar un dato personal."
+    ),
+    Notification.Kind.DENUNCIA_RECIBIDA: (
+        "Cuando registramos una denuncia que presentaste sobre un reporte."
+    ),
+    Notification.Kind.REPORTE_DENUNCIADO: (
+        "Cuando otro vecino denuncia uno de tus reportes."
+    ),
+    Notification.Kind.IMAGEN_NO_PROCESADA: (
+        "Cuando no pudimos procesar una foto que subiste y no llegó a publicarse."
+    ),
 }
 
 
@@ -68,6 +101,8 @@ class NotificationPreferenceView(APIView):
     """``GET`` devuelve el catálogo completo; ``PATCH`` cambia un tipo."""
 
     permission_classes = [IsAuthenticated]
+    # Solo para el esquema OpenAPI: la vista arma la respuesta a mano.
+    serializer_class = NotificationPreferenceSerializer
 
     def get(self, request):
         stored = {

@@ -1,5 +1,7 @@
 """US-025 — preferencias de notificaciones."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -40,7 +42,7 @@ class TestCatalog:
         """La pantalla se arma sola: si aparece un tipo nuevo, aparece acá."""
         response = client.get(URL)
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert {row["kind"] for row in response.data} == set(Notification.Kind.values)
 
     def test_a_user_without_preferences_has_everything_enabled(self, client):
@@ -51,7 +53,9 @@ class TestCatalog:
     def test_each_row_carries_a_label_and_a_group(self, client):
         response = client.get(URL)
 
-        row = next(r for r in response.data if r["kind"] == Notification.Kind.CAMBIO_ESTADO)
+        row = next(
+            r for r in response.data if r["kind"] == Notification.Kind.CAMBIO_ESTADO
+        )
         assert row["label"]
         assert row["description"]
         assert row["group"] == "estado"
@@ -65,9 +69,10 @@ class TestUpdating:
             format="json",
         )
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         assert (
-            NotificationPreference.is_enabled(user, Notification.Kind.NUEVO_LIKE) is False
+            NotificationPreference.is_enabled(user, Notification.Kind.NUEVO_LIKE)
+            is False
         )
 
     def test_disabling_one_kind_leaves_the_others_untouched(self, client, user):
@@ -78,7 +83,9 @@ class TestUpdating:
         )
 
         assert NotificationPreference.is_enabled(user, Notification.Kind.CAMBIO_ESTADO)
-        assert NotificationPreference.is_enabled(user, Notification.Kind.NUEVO_COMENTARIO)
+        assert NotificationPreference.is_enabled(
+            user, Notification.Kind.NUEVO_COMENTARIO,
+        )
 
     def test_reenabling_restores_it(self, client, user):
         kind = Notification.Kind.CAMBIO_ESTADO
@@ -95,7 +102,7 @@ class TestUpdating:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
 
 
 class TestFiltering:
@@ -175,7 +182,7 @@ class TestFiltering:
 
 class TestPermissions:
     def test_anonymous_is_denied(self):
-        assert APIClient().get(URL).status_code == 403
+        assert APIClient().get(URL).status_code == HTTPStatus.FORBIDDEN
 
     def test_preferences_are_per_user(self, client, user):
         other = UserFactory.create()

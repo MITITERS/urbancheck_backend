@@ -12,3 +12,11 @@ venv
 .envs/
 .venv/
 **/__pycache__/
+
+# US-042: originales a la espera del difuminado. Nunca se versionan ni se copian a la imagen.
+pending_media/
+
+# US-041: el set de referencia del benchmark no viaja en la imagen. En
+# desarrollo llega por el bind mount del compose.
+benchmark_data/
+logs/

@@ -7,6 +7,7 @@ from urbancheck.municipalities.api.views import MunicipalityViewSet
 from urbancheck.notifications.api.views import NotificationViewSet
 from urbancheck.reports.api.operator_views import OperatorReportViewSet
 from urbancheck.reports.api.panel_views import PanelReportViewSet
+from urbancheck.reports.api.privacy_views import PrivacyRequestViewSet
 from urbancheck.reports.api.validation_views import ValidationReportViewSet
 from urbancheck.reports.api.views import CommentViewSet
 from urbancheck.reports.api.views import ReportViewSet
@@ -43,6 +44,14 @@ router.register(
     "operator/reports",
     OperatorReportViewSet,
     basename="operator-report",
+)
+# Solicitudes por dato personal visible (US-043): las resuelve el administrador
+# de la plataforma, de todas las municipalidades, fuera de la capa de
+# jurisdicción.
+router.register(
+    "platform/privacy-requests",
+    PrivacyRequestViewSet,
+    basename="privacy-request",
 )
 router.register("comments", CommentViewSet, basename="comment")
 router.register("notifications", NotificationViewSet, basename="notification")

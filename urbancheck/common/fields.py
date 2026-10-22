@@ -4,6 +4,7 @@ from decimal import ROUND_HALF_UP
 from decimal import Decimal
 from decimal import InvalidOperation
 
+from django.conf import settings
 from rest_framework import serializers
 
 #: Precisión con la que se guardan las coordenadas: ~11 cm. Más que suficiente
@@ -61,3 +62,36 @@ class LatitudeField(CoordinateField):
 class LongitudeField(CoordinateField):
     def __init__(self, **kwargs):
         super().__init__(limits=LONGITUDE_RANGE, **kwargs)
+
+
+class PendingPhotoField(serializers.ImageField):
+    """Foto que entra a la cola de difuminado: valida, no publica (US-042).
+
+    Es el único punto por el que una foto subida por la API llega a un modelo
+    (RN-11). Hasta US-041 el difuminado pasaba acá mismo, dentro de
+    ``is_valid()``, y lo que devolvía era la versión ya anonimizada. Con la
+    publicación diferida el campo solo valida —que sea una imagen y que entre en
+    el tope de tamaño— y devuelve el archivo tal cual, que el modelo guarda en
+    ``photo_pending``, en el storage privado. El difuminado lo hace después la
+    tarea, y recién entonces se escribe ``photo``.
+
+    Por qué se movió: difuminar tarda varios segundos y bloquear el POST hasta
+    que termine degrada la carga desde el celular sin ganancia, y además un
+    fallo del detector devolvía un 400 y perdía el reporte en el acto, sin
+    ningún reintento.
+
+    Lo que **no** cambió: toda foto nueva que acepte la API tiene que declararse
+    con este campo, y hay un test que recorre los serializers para que no
+    aparezca ninguna que no lo haga.
+    """
+
+    default_error_messages = {
+        "too_large": "La foto no puede superar los {max_mb} MB.",
+    }
+
+    def to_internal_value(self, data):
+        file = super().to_internal_value(data)
+        max_bytes = settings.PHOTO_MAX_UPLOAD_BYTES
+        if file.size > max_bytes:
+            self.fail("too_large", max_mb=max_bytes // (1024 * 1024))
+        return file

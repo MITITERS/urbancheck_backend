@@ -1,79 +1,93 @@
 name: CI
 
-# Enable Buildkit and let compose use it to speed up image building
+# Etapas de seguridad del Sprint 5 (deuda del Sprint 4). Corre en cada pull
+# request, contra cualquier rama, y en cada push a develop y main.
+on:
+  pull_request:
+  push:
+    branches: ['develop', 'main']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1
-
-on:
-  pull_request:
-    branches: ['main']
-    paths-ignore: ['docs/**']
-
-  push:
-    branches: ['main']
-    paths-ignore: ['docs/**']
-
-concurrency:
-  group: ${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  UV_PYTHON: '3.14'
 
 jobs:
-  linter:
+  ruff:
+    name: Ruff
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Misma versión que fija pyproject.toml, para que local y CI coincidan.
+      - run: uvx ruff@0.15.13 check .
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+  bandit:
+    name: Bandit (falla con severidad media o superior)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Los tests quedan afuera: los `assert` y las contraseñas de prueba son lo
+      # esperable ahí, y no se despliegan.
+      - run: >-
+          uvx bandit==1.9.4 -r urbancheck config
+          -x '*/tests/*,*/migrations/*'
+          --severity-level medium
+
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Las versiones exactas del uv.lock, incluidas las de desarrollo.
+      # pip-audit no informa la severidad, así que falla ante cualquier
+      # vulnerabilidad conocida: es más estricto que "altas o críticas". Una
+      # excepción revisada se agrega con `--ignore-vuln <ID>` y su motivo.
+      - run: uv export --frozen --no-hashes --no-emit-project --format requirements-txt -o requirements-audit.txt
+      - run: uvx pip-audit==2.10.1 -r requirements-audit.txt --no-deps --disable-pip
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.28.0
+      GITLEAKS_SHA256: a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+    steps:
+      - uses: actions/checkout@v7
         with:
-          python-version-file: '.python-version'
-      - name: Run pre-commit
-        uses: pre-commit/action@v3.0.1
+          # El historial entero: un secreto borrado en un commit posterior sigue
+          # publicado en el anterior.
+          fetch-depth: 0
+      # El binario y no la acción oficial, que pide licencia en repos de una
+      # organización. El checksum está fijado acá y no se baja del mismo lugar.
+      - name: Instalar gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+      # Las excepciones revisadas viven en .gitleaksignore.
+      - run: ./gitleaks git . --redact --verbose
 
-  # With no caching at all the entire ci process takes 3m to complete!
   pytest:
+    name: pytest y migraciones
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and cache local backend
-        uses: docker/bake-action@v6
-        with:
-          push: false
-          load: true
-          files: docker-compose.local.yml
-          targets: django
-          set: |
-            django.cache-from=type=gha,scope=django-cached-tests
-            django.cache-to=type=gha,scope=django-cached-tests,mode=max
-            postgres.cache-from=type=gha,scope=postgres-cached-tests
-            postgres.cache-to=type=gha,scope=postgres-cached-tests,mode=max
-
-      - name: Build and cache docs
-        uses: docker/bake-action@v6
-        with:
-          push: false
-          load: true
-          files: docker-compose.docs.yml
-          set: |
-            docs.cache-from=type=gha,scope=cached-docs
-            docs.cache-to=type=gha,scope=cached-docs,mode=max
-
-      - name: Check DB Migrations
-        run: docker compose -f docker-compose.local.yml run --rm django python manage.py makemigrations --check
-
-      - name: Run DB Migrations
-        run: docker compose -f docker-compose.local.yml run --rm django python manage.py migrate
-
-      - name: Run Django Tests
-        run: docker compose -f docker-compose.local.yml run django pytest
-
-      - name: Tear down the Stack
-        run: docker compose -f docker-compose.local.yml down
+      - uses: actions/checkout@v7
+      - name: Construir la imagen
+        run: docker compose -f docker-compose.local.yml build django
+      - name: Migraciones pendientes
+        run: docker compose -f docker-compose.local.yml run --rm django python manage.py makemigrations --check --dry-run
+      - name: Tests
+        run: docker compose -f docker-compose.local.yml run --rm django pytest -p no:cacheprovider
+      - name: Bajar el stack
+        if: always()
+        run: docker compose -f docker-compose.local.yml down -v

@@ -22,8 +22,8 @@ from PIL import Image
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.models import OperationalArea
 from urbancheck.reports.models import Report
-from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.reports.models import ReportStatusHistory
+from urbancheck.reports.models import ResolutionEvidence
 from urbancheck.users.models import User
 
 DEFAULT_PASSWORD = "Urbancheck2026!"  # noqa: S105
@@ -188,7 +188,12 @@ class Command(BaseCommand):
             operational_area=area,
         )
 
-        created = self._seed_reports(citizen, municipality, area=area, operator=operator)
+        created = self._seed_reports(
+            citizen,
+            municipality,
+            area=area,
+            operator=operator,
+        )
         created += self._seed_reports(
             citizen,
             other,
@@ -255,7 +260,7 @@ class Command(BaseCommand):
         user.save(update_fields=["password"])
         return user
 
-    def _seed_reports(  # noqa: PLR0913 (un parámetro por dato del alta)
+    def _seed_reports(
         self,
         author,
         municipality,

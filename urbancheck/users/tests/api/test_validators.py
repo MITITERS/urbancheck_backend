@@ -1,5 +1,7 @@
 """US-035 — gestión de validadores, por el agente municipal y por el admin."""
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -14,7 +16,7 @@ from urbancheck.users.tests.factories import UserFactory
 from urbancheck.users.tests.factories import ValidatorFactory
 
 URL = "/api/validators/"
-TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"
+TEMPORARY_PASSWORD = "Xk7#mP9@qLz2!"  # noqa: S105
 
 pytestmark = pytest.mark.django_db
 
@@ -41,10 +43,12 @@ def payload(**overrides) -> dict:
 
 
 class TestCreateValidator:
-    def test_validator_lands_in_the_municipality_of_the_agent(self, agent_client, agent):
+    def test_validator_lands_in_the_municipality_of_the_agent(
+        self, agent_client, agent,
+    ):
         response = agent_client.post(URL, payload(), format="json")
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         validator = User.objects.get(email="validador@muni.gob.ar")
         assert validator.role == User.Role.VALIDADOR
         assert validator.municipality == agent.municipality
@@ -141,14 +145,16 @@ class TestDeactivation:
 
         response = agent_client.post(f"{URL}{validator.id}/deactivate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         validator.refresh_from_db()
         assert validator.can_validate is False
         # Conserva el acceso como ciudadano común.
         assert validator.is_active is True
         assert validator.role == User.Role.VALIDADOR
 
-    def test_the_validation_history_survives_the_deactivation(self, agent_client, agent):
+    def test_the_validation_history_survives_the_deactivation(
+        self, agent_client, agent,
+    ):
         validator = ValidatorFactory.create(
             municipality=agent.municipality,
             must_change_password=False,
@@ -179,7 +185,7 @@ class TestDeactivation:
 
         response = agent_client.post(f"{URL}{validator.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         validator.refresh_from_db()
         assert validator.can_validate is True
 
@@ -189,7 +195,7 @@ class TestDeactivation:
 
         response = agent_client.post(f"{URL}{foreign.id}/deactivate/")
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
         foreign.refresh_from_db()
         assert foreign.is_work_account_active is True
 
@@ -231,8 +237,11 @@ class TestValidatorPermissions:
         client = APIClient()
         client.force_authenticate(factory.create())
 
-        assert client.get(URL).status_code == 403
-        assert client.post(URL, payload(), format="json").status_code == 403
+        assert client.get(URL).status_code == HTTPStatus.FORBIDDEN
+        assert (
+            client.post(URL, payload(), format="json").status_code
+            == HTTPStatus.FORBIDDEN
+        )
 
 
 class TestPlatformAdminManagesValidators:
@@ -253,7 +262,7 @@ class TestPlatformAdminManagesValidators:
             format="json",
         )
 
-        assert response.status_code == 201
+        assert response.status_code == HTTPStatus.CREATED
         validator = User.objects.get(email="validador@muni.gob.ar")
         assert validator.role == User.Role.VALIDADOR
         assert validator.municipality == municipality
@@ -262,7 +271,7 @@ class TestPlatformAdminManagesValidators:
         """Sin jurisdicción propia de la cual derivarla, no hay default posible."""
         response = admin_client.post(URL, payload(), format="json")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "municipality_id" in response.data
 
     def test_an_unknown_municipality_is_rejected(self, admin_client):
@@ -272,7 +281,7 @@ class TestPlatformAdminManagesValidators:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         assert "municipality_id" in response.data
 
     def test_the_new_validator_must_change_the_password(self, admin_client):
@@ -322,7 +331,7 @@ class TestPlatformAdminManagesValidators:
 
         response = admin_client.post(f"{URL}{validator.id}/deactivate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         validator.refresh_from_db()
         assert validator.is_work_account_active is False
 
@@ -344,10 +353,13 @@ class TestTheAgentIsUnaffected:
             format="json",
         )
 
-        assert response.status_code == 201
-        assert User.objects.get(
-            email="validador@muni.gob.ar",
-        ).municipality == agent.municipality
+        assert response.status_code == HTTPStatus.CREATED
+        assert (
+            User.objects.get(
+                email="validador@muni.gob.ar",
+            ).municipality
+            == agent.municipality
+        )
 
     def test_the_agent_still_sees_only_its_own(self, agent_client, agent):
         mine = ValidatorFactory.create(municipality=agent.municipality)
@@ -363,7 +375,7 @@ class TestTheAgentIsUnaffected:
 
         response = agent_client.post(f"{URL}{theirs.id}/deactivate/")
 
-        assert response.status_code == 404
+        assert response.status_code == HTTPStatus.NOT_FOUND
 
 
 class TestArchivedListing:
@@ -441,9 +453,10 @@ class TestArchivedListing:
 
         response = agent_client.post(f"{URL}{validator.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         active = agent_client.get(URL, {"state": "active"}).data["results"]
         assert validator.id in {row["id"] for row in active}
+
 
 class TestMunicipalityFilterIsForgiving:
     def test_a_municipality_that_is_not_an_id_is_ignored(self):
@@ -457,7 +470,7 @@ class TestMunicipalityFilterIsForgiving:
 
         response = client.get(URL, {"municipality": "villa maria"})
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
 
 
 class TestValidatorReactivationNeedsAnActiveMunicipality:
@@ -473,7 +486,7 @@ class TestValidatorReactivationNeedsAnActiveMunicipality:
 
         response = agent_client.post(f"{URL}{validator.id}/activate/")
 
-        assert response.status_code == 400
+        assert response.status_code == HTTPStatus.BAD_REQUEST
         validator.refresh_from_db()
         assert validator.is_work_account_active is False
 
@@ -485,6 +498,6 @@ class TestValidatorReactivationNeedsAnActiveMunicipality:
 
         response = agent_client.post(f"{URL}{validator.id}/activate/")
 
-        assert response.status_code == 200
+        assert response.status_code == HTTPStatus.OK
         validator.refresh_from_db()
         assert validator.is_work_account_active is True

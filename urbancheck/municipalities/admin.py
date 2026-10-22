@@ -29,7 +29,13 @@ class OperationalAreaAdmin(admin.ModelAdmin):
     borrable desde acá abriría por atrás justo lo que la API cierra.
     """
 
-    list_display = ["name", "municipality", "contact_email", "contact_phone", "is_active"]
+    list_display = [
+        "name",
+        "municipality",
+        "contact_email",
+        "contact_phone",
+        "is_active",
+    ]
     list_filter = ["is_active", "municipality"]
     search_fields = ["name", "contact_email"]
 

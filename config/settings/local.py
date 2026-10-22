@@ -16,18 +16,15 @@ SECRET_KEY = env(
 # Override via DJANGO_ALLOWED_HOSTS env (comma-separated), e.g. for LAN device testing
 ALLOWED_HOSTS = env.list(
     "DJANGO_ALLOWED_HOSTS",
-    default=["localhost", "0.0.0.0", "127.0.0.1"],  # noqa: S104
+    # Es el nombre de host aceptado en desarrollo, no una dirección en la que
+    # se escuche: Bandit (B104) y ruff (S104) lo confunden con un bind.
+    default=["localhost", "0.0.0.0", "127.0.0.1"],  # noqa: S104  # nosec B104
 )
 
 # CACHES
 # ------------------------------------------------------------------------------
-# https://docs.djangoproject.com/en/dev/ref/settings/#caches
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "",
-    },
-}
+# El de ``base.py``, sobre el Redis del compose: los límites de intentos tienen
+# que poder probarse en local igual que en producción.
 
 # EMAIL
 # ------------------------------------------------------------------------------
@@ -67,9 +64,10 @@ if env("USE_DOCKER") == "yes":
     INTERNAL_IPS += [".".join([*ip.split(".")[:-1], "1"]) for ip in ips]
     # RunServerPlus
     # ------------------------------------------------------------------------------
-    # This is a custom setting for RunServerPlus to fix reloader issue in Windows docker environment
+    # This is a custom setting for RunServerPlus to fix reloader issue in Windows
+    # docker environment
     # Werkzeug reloader type [auto, watchdog, or stat]
-    RUNSERVERPLUS_POLLER_RELOADER_TYPE = 'stat'
+    RUNSERVERPLUS_POLLER_RELOADER_TYPE = "stat"
     # If you have CPU and IO load issues, you can increase this poller interval e.g) 5
     RUNSERVERPLUS_POLLER_RELOADER_INTERVAL = 1
 

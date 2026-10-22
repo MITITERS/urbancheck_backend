@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -34,7 +36,7 @@ class TestCategoryAndStatusFilters:
         bache = ReportFactory.create(category=Report.Category.BACHE)
         ReportFactory.create(category=Report.Category.BASURA)
         res = client.get("/api/reports/?category=bache")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert ids_of(res) == {bache.id}
 
     def test_filter_by_several_categories(self, auth_client):
@@ -71,8 +73,8 @@ class TestCategoryAndStatusFilters:
         client, _ = auth_client
         ReportFactory.create_batch(2)
         res = client.get("/api/reports/?category=noexiste")
-        assert res.status_code == 200
-        assert res.data["count"] == 2
+        assert res.status_code == HTTPStatus.OK
+        assert res.data["count"] == 2  # noqa: PLR2004
 
 
 @pytest.mark.django_db
@@ -108,7 +110,7 @@ class TestSearch:
         client, _ = auth_client
         ReportFactory.create(description="Bache en la vereda")
         res = client.get("/api/reports/?search=zzzznoexiste")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["count"] == 0
         assert res.data["results"] == []
 
@@ -129,19 +131,19 @@ class TestSearchEdgeCases:
         client, _ = _client()
         ReportFactory.create_batch(3)
         res = client.get("/api/reports/?search=a")
-        assert res.data["count"] == 3
+        assert res.data["count"] == 3  # noqa: PLR2004
 
     def test_empty_search_returns_the_whole_feed(self):
         client, _ = _client()
         ReportFactory.create_batch(3)
         res = client.get("/api/reports/?search=")
-        assert res.data["count"] == 3
+        assert res.data["count"] == 3  # noqa: PLR2004
 
     def test_whitespace_only_search_is_ignored(self):
         client, _ = _client()
         ReportFactory.create_batch(2)
         res = client.get("/api/reports/?search=%20%20")
-        assert res.data["count"] == 2
+        assert res.data["count"] == 2  # noqa: PLR2004
 
     def test_search_is_case_insensitive(self):
         client, _ = _client()
@@ -179,7 +181,7 @@ class TestSearchEdgeCases:
         client, _ = _client()
         ReportFactory.create_batch(2)
         res = client.get("/api/reports/?search=%27%20OR%201%3D1%20--")
-        assert res.status_code == 200
+        assert res.status_code == HTTPStatus.OK
         assert res.data["count"] == 0
 
 

@@ -1,5 +1,7 @@
 """Catálogo de provincias y localidades para el alta de municipalidades."""
 
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -13,6 +15,7 @@ class ProvinceListView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         return Response({"results": list_provinces()})
 
@@ -27,5 +30,6 @@ class LocalityListView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request, province_id: str):
         return Response({"results": list_localities(province_id)})
