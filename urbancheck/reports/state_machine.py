@@ -385,9 +385,13 @@ VALIDATOR_DECISIONS: dict[str, str] = {
     Report.Status.CANCELADO: "rechazado",
 }
 
-#: Estados sin transiciones de salida para quien gestiona el reporte. Cancelado
-#: tiene una sola, y no es del municipio: la reversión de un descarte por
-#: moderación, que ejecuta el administrador de la plataforma (US-049).
+#: Estados finales del circuito: no se sale de ellos con las acciones de
+#: gestión del panel. Resuelto no tiene ninguna transición de salida. Cancelado
+#: solo sale por la restitución de un descarte por moderación (US-049), una
+#: fila ``restituir_a_<estado>`` por estado de origen: la ejecuta el
+#: administrador, de oficio o al hacer lugar a una apelación, y también el agente
+#: de la jurisdicción al hacer lugar a una apelación (decisión del 20/10). Hoy
+#: ningún módulo importa esta constante.
 FINAL_STATUSES = frozenset({Report.Status.RESUELTO, Report.Status.CANCELADO})
 
 #: Estados en los que el municipio puede publicar una respuesta oficial

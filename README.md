@@ -1839,53 +1839,115 @@ completa, con sus defaults, está en `.env.example`.
   semanal para uv, Docker, Docker Compose y GitHub Actions, con los PR contra
   `develop` (C-16).
 
-## Deployment
+## Despliegue
 
-The following details how to deploy this application.
+Producción corre con `docker-compose.production.yml`: Traefik (TLS con Let's
+Encrypt), Django con gunicorn, PostgreSQL, Redis, el worker y el beat de
+Celery, Flower, el nginx que sirve `/media/` y el panel. Base de cookiecutter:
+[documentación de despliegue con Docker](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
 
-### Docker
+### Pasos
 
-See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
+1. **DNS y puertos.** `<dominio>` y `panel.<dominio>` apuntan al servidor. Se
+   abren solo el 80 (lo usa el desafío de Let's Encrypt y redirige a 443) y el
+   443. El 5555 no: Flower no se publica (C-06).
+2. **Código.** Clonar `urbancheck_backend` y `urbanchech_frontend` uno al lado
+   del otro y dejar los dos en la misma versión (la etiqueta del release). El
+   servicio `panel` se construye desde `../urbanchech_frontend`, target
+   `runtime` (C-04): no hay una imagen publicada en un registro.
+3. **Entorno.** Crear `.envs/.production/.django` y `.envs/.production/.postgres`
+   (no se versionan) con las variables de `.env.example`. Las que no tienen
+   default en producción:
+   - `DJANGO_SECRET_KEY`, `DJANGO_ADMIN_URL` (no `admin/`) y `EMAIL_HOST`, más
+     `EMAIL_HOST_USER` y `EMAIL_HOST_PASSWORD` del proveedor (C-02).
+   - `DJANGO_ALLOWED_HOSTS=<dominio>,panel.<dominio>` y
+     `DJANGO_PUBLIC_REPORT_PAGE_URL=https://panel.<dominio>/reporte/{token}`
+     (C-04); `DJANGO_PUBLIC_REPORT_URL=https://<dominio>/r/{token}`.
+   - `CELERY_FLOWER_USER` y `CELERY_FLOWER_PASSWORD`, que pide Flower, y
+     `CELERY_WORKER_CONCURRENCY` si 2 procesos no entran en la memoria (C-07).
+   - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` y
+     `POSTGRES_PASSWORD` en `.postgres`.
+   - Para el primer despliegue, `DJANGO_SECURE_HSTS_SECONDS=60` hasta verificar
+     que todo anda por HTTPS: un HSTS largo no se deshace en el navegador. El
+     middleware `panel-hsts` de Traefik tiene el año fijo (C-05).
+4. **Dominio.** `export URBANCHECK_DOMAIN=<dominio>` en la sesión que corre
+   Compose (o en un `.env` junto al archivo). Sin ella Compose no arranca: la
+   usa Traefik para el ruteo y los certificados.
+5. **Levantar.**
 
-El panel es el servicio `panel` (C-04): se construye desde
-`../urbanchech_frontend` (target `runtime`), así que el servidor necesita los
-dos repositorios clonados uno al lado del otro. `URBANCHECK_DOMAIN` define el
-dominio: `panel.<dominio>` va al panel, `<dominio>/r/` también (el enlace para
-compartir, que su nginx le pasa a Django), `<dominio>/media/` a nginx y el
-resto, `/.well-known/` incluido, a Django. En `.envs/.production/.django`,
-`DJANGO_ALLOWED_HOSTS` tiene que incluir `panel.<dominio>` y
-`DJANGO_PUBLIC_REPORT_PAGE_URL` apuntar a `https://panel.<dominio>/reporte/{token}`.
+   ```bash
+   docker compose -f docker-compose.production.yml build
+   docker compose -f docker-compose.production.yml up -d
+   ```
 
-Flower no se publica (C-06): escucha solo en el `127.0.0.1:5555` del servidor
-y se entra por túnel SSH, con su usuario y contraseña de siempre:
+   El servicio `django` aplica las migraciones al arrancar (`migrate
+   --noinput`, antes de `collectstatic`); worker, beat y flower no migran
+   (C-03).
+6. **Primer usuario y verificación.**
+
+   ```bash
+   docker compose -f docker-compose.production.yml run --rm django python manage.py createsuperuser
+   docker compose -f docker-compose.production.yml run --rm django python manage.py check --deploy
+   ```
+
+### Ruteo (Traefik)
+
+| Pedido                    | Servicio                                           |
+| ------------------------- | -------------------------------------------------- |
+| `panel.<dominio>`         | `panel` (su nginx hace de proxy de la API)         |
+| `<dominio>/r/<token>`     | `panel`, que se lo pasa a Django (US-030)          |
+| `<dominio>/media/`        | `nginx`                                            |
+| `<dominio>`, todo lo demás | `django`: API, admin, `/.well-known/` incluido    |
+
+Traefik agrega HSTS de un año a las respuestas del panel (middleware
+`panel-hsts`, C-05); las de Django ya lo traen. El nginx del panel le reenvía a
+Django el `X-Forwarded-Proto` que recibió de Traefik.
+
+### Flower
+
+Escucha solo en el `127.0.0.1:5555` del servidor (C-06). Se entra por túnel
+SSH, con su usuario y contraseña de siempre:
 
 ```bash
 ssh -N -L 5555:127.0.0.1:5555 <usuario>@<servidor>
 # y en el navegador: http://localhost:5555
 ```
 
-Traefik agrega HSTS de un año a las respuestas del panel (middleware
-`panel-hsts`, C-05); las de Django ya lo traen.
+### Celery
 
-El worker de Celery corre con `--concurrency` de `CELERY_WORKER_CONCURRENCY`
-(2), `--prefetch-multiplier=1` y `--max-tasks-per-child=20`: difuminar una foto
-de 12 MP llega a 847 MB (C-07). Los límites por tarea son 60 s blando y 90 s
-duro (`config/settings/base.py`).
+El worker corre con `--concurrency` de `CELERY_WORKER_CONCURRENCY` (2),
+`--prefetch-multiplier=1` y `--max-tasks-per-child=20`: difuminar una foto de
+12 MP llega a 847 MB (C-07). Los límites por tarea son 60 s blando y 90 s duro
+(`config/settings/base.py`).
 
-El servicio `django` aplica las migraciones al arrancar (`migrate --noinput`,
-antes de `collectstatic`). Worker, beat y flower no migran (C-03).
+### Pendiente
+
+- Los identificadores de la app para Universal Links y App Links
+  (`IOS_UNIVERSAL_LINK_APP_ID`, `ANDROID_APP_PACKAGE`) siguen siendo los de la
+  plantilla de Expo hasta tener el bundle ID y el Team ID (C-13).
+- `DJANGO_NUM_PROXIES` cuenta los proxies delante de Django, y no son los mismos
+  en los dos caminos: Traefik solo (la app) o Traefik y el nginx del panel. Con
+  un único valor, los límites por IP de uno de los dos caminos cuentan la IP de
+  un proxy.
 
 ## Flujo de trabajo
 
-El proyecto utiliza Git Flow:
+Git Flow por sprint, igual en los tres repositorios (C-20). Es lo que se hace
+desde el Sprint 1, no una rama por historia:
 
-- `main`: código estable.
-- `develop`: integración de funcionalidades.
-- `feature/US-<nro>-<descripcion>`: desarrollo de historias.
-- `release/<version>`: preparación de entregas.
-- `hotfix/<descripcion>`: correcciones urgentes.
+- Cada sprint se trabaja en `feature/sprint-N`, que sale de `develop`.
+  Correcciones puntuales sobre un sprint en curso pueden ir en ramas
+  `fix/<id>` que salen de esa rama y vuelven a ella con merge.
+- Al cerrar el sprint, PR de `feature/sprint-N` a `develop`, que se fusiona con
+  merge commit (sin squash ni rebase) con el CI en verde.
+- El merge a `develop` se etiqueta con una etiqueta anotada `sprint-N`. Las
+  etiquetas se suben de a una (`git push origin sprint-N`), nunca con `--tags`.
+- `main` solo recibe releases: `release/x.y.z` sale de `develop`, se fusiona en
+  `main`, se etiqueta `vx.y.z` y vuelve a `develop`. Un `hotfix/<descripcion>`
+  sale de `main` y vuelve a `main` y a `develop`.
+- No se reescribe historia publicada: nada de force push, rebase de ramas
+  remotas ni amend de commits ya subidos.
 
-Toda funcionalidad debe desarrollarse desde `develop` y mergearse mediante Pull Request.
 ## Licencia
 
 Propietaria, todos los derechos reservados: ver [`LICENSE`](LICENSE). Es la
