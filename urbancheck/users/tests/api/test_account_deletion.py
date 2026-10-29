@@ -7,6 +7,7 @@ Decisión del equipo:
 - los que tuvieron gestión municipal se conservan sin autor, con sus
   apelaciones también sin autor;
 - se borran sus comentarios y sus me gusta;
+- los avisos de otros vecinos que lo nombraban pasan a decir "Usuario eliminado";
 - las cuentas de trabajo no se borran a sí mismas: siguen con la baja lógica.
 """
 
@@ -22,6 +23,7 @@ from django.core.files.storage import default_storage
 from PIL import Image
 from rest_framework.test import APIClient
 
+from urbancheck.notifications.models import Notification
 from urbancheck.notifications.services import notify_new_comment
 from urbancheck.notifications.services import notify_new_like
 from urbancheck.notifications.services import notify_status_change
@@ -45,6 +47,7 @@ pytestmark = pytest.mark.django_db
 
 URL = "/api/users/me/"
 PASSWORD = "Xk7#mP9@qLz2!"  # noqa: S105
+DELETED = "Usuario eliminado"
 Status = Report.Status
 
 
@@ -253,6 +256,27 @@ class TestActivity:
 
         assert not Comment.objects.filter(report=other).exists()
         assert not Like.objects.filter(report=other).exists()
+
+    def test_the_notices_of_others_say_deleted_user(self, citizen):
+        other = ReportFactory.create()
+        comment = CommentFactory.create(
+            report=other,
+            author=citizen,
+            text="Mi vecina de enfrente tiene el mismo problema",
+        )
+        comment_notice = notify_new_comment(comment)
+        like_notice = notify_new_like(other, citizen)
+
+        delete_account(citizen)
+
+        comment_notice.refresh_from_db()
+        like_notice.refresh_from_db()
+        assert comment_notice.message == f"{DELETED} comentó tu reporte."
+        assert like_notice.message == f"{DELETED} apoyó tu reporte."
+        assert comment_notice.actor_id is None
+        texts = Notification.objects.values_list("message", flat=True)
+        assert not any("Vecina Borrada" in text for text in texts)
+        assert not any("vecina de enfrente" in text for text in texts)
 
     def test_the_avatar_file_is_deleted(
         self,

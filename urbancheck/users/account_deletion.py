@@ -9,6 +9,8 @@ Decisión del equipo sobre qué se borra y qué se conserva:
   *Reportado* o más allá, o los rechazó un validador, los descartó el
   municipio o tienen una respuesta oficial. Sus apelaciones, también sin autor.
 - **Se borran** sus comentarios, sus me gusta, sus avisos y sus sesiones.
+- Los avisos de **otros** vecinos que lo nombraban pasan a decir "Usuario
+  eliminado", sin el extracto de su comentario (N-17).
 
 Los archivos (fotos y avatar) los borra ``media_cleanup`` al confirmarse la
 transacción (N-08). Las cuentas de trabajo no pasan por acá: siguen con la baja
@@ -23,12 +25,15 @@ from django.db.models import OuterRef
 from django.db.models import Q
 
 from urbancheck.common.security import log_event
+from urbancheck.notifications.models import Notification
 from urbancheck.reports.models import ModerationDecision
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportStatusHistory
 
 from .signals import close_sessions
+
+DELETED_USER = "Usuario eliminado"
 
 #: Los estados en los que puede quedar un reporte que el municipio no tocó.
 UNHANDLED_STATUSES = frozenset(
@@ -38,6 +43,12 @@ UNHANDLED_STATUSES = frozenset(
         Report.Status.ARCHIVADO,
     },
 )
+
+#: Cómo queda el aviso que nombraba al vecino, por tipo.
+_NOTICE_WITHOUT_NAME = {
+    Notification.Kind.NUEVO_COMENTARIO: f"{DELETED_USER} comentó tu reporte.",
+    Notification.Kind.NUEVO_LIKE: f"{DELETED_USER} apoyó tu reporte.",
+}
 
 
 def unhandled_reports(user):
@@ -58,6 +69,11 @@ def unhandled_reports(user):
 @transaction.atomic
 def delete_citizen_account(user, *, request=None) -> dict[str, int]:
     """Borra la cuenta de un vecino según la decisión del equipo."""
+    for kind, message in _NOTICE_WITHOUT_NAME.items():
+        Notification.objects.filter(actor=user, kind=kind).exclude(
+            recipient=user,
+        ).update(message=message)
+
     unhandled = unhandled_reports(user)
     deleted = unhandled.count()
     unhandled.delete()
