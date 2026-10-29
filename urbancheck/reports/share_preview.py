@@ -18,9 +18,15 @@ visibilidad. Un reporte que ya no es público no filtra nada en la vista previa.
 
 from __future__ import annotations
 
+import math
+
 from django.conf import settings
+from django.http import HttpResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
+
+from urbancheck.common.throttling import ScopedThrottle
+from urbancheck.common.throttling import throttled_message
 
 from .models import Report
 
@@ -39,6 +45,20 @@ def page_url_for(token) -> str:
 
 @require_GET
 def shared_report_preview(request, token):
+    # El mismo límite que el endpoint de la página pública, con el mismo
+    # contador (N-05). La vista no es de DRF, así que se consulta a mano.
+    throttle = ScopedThrottle("public_reports")
+    if not throttle.allow_request(request, None):
+        wait = throttle.wait()
+        response = HttpResponse(
+            throttled_message(wait),
+            status=429,
+            content_type="text/plain; charset=utf-8",
+        )
+        if wait:
+            response["Retry-After"] = str(math.ceil(wait))
+        return response
+
     report = (
         Report.objects.publicly_visible()
         .select_related("municipality")
