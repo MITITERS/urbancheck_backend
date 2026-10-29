@@ -1878,8 +1878,9 @@ Celery, Flower, el nginx que sirve `/media/` y el panel. Base de cookiecutter:
    del otro y dejar los dos en la misma versión (la etiqueta del release). El
    servicio `panel` se construye desde `../urbanchech_frontend`, target
    `runtime` (C-04): no hay una imagen publicada en un registro.
-3. **Entorno.** Crear `.envs/.production/.django` y `.envs/.production/.postgres`
-   (no se versionan) con las variables de `.env.example`. Las que no tienen
+3. **Entorno.** Crear `.envs/.production/.django`, `.envs/.production/.postgres`
+   y `.envs/.production/.redis` (no se versionan) con las variables de
+   `.env.example`. Las que no tienen
    default en producción:
    - `DJANGO_SECRET_KEY`, `DJANGO_ADMIN_URL` (no `admin/`) y `EMAIL_HOST`, más
      `EMAIL_HOST_USER` y `EMAIL_HOST_PASSWORD` del proveedor (C-02).
@@ -1889,7 +1890,13 @@ Celery, Flower, el nginx que sirve `/media/` y el panel. Base de cookiecutter:
    - `CELERY_FLOWER_USER` y `CELERY_FLOWER_PASSWORD`, que pide Flower, y
      `CELERY_WORKER_CONCURRENCY` si 2 procesos no entran en la memoria (C-07).
    - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` y
-     `POSTGRES_PASSWORD` en `.postgres`.
+     `POSTGRES_PASSWORD` en `.postgres`, más `POSTGRES_APP_USER` y
+     `POSTGRES_APP_PASSWORD`: el rol sin superusuario con que entra Django
+     (N-07). Lo crea `compose/production/postgres/init` la primera vez que se
+     inicializa el volumen; en una base ya creada hay que crearlo a mano con
+     las sentencias de ese script.
+   - `REDIS_PASSWORD` en `.redis`, y `REDIS_URL=redis://:<contraseña>@redis:6379/0`
+     en `.django` (N-07).
    - Para el primer despliegue, `DJANGO_SECURE_HSTS_SECONDS=60` hasta verificar
      que todo anda por HTTPS: un HSTS largo no se deshace en el navegador. El
      middleware `panel-hsts` de Traefik tiene el año fijo (C-05).

@@ -33,6 +33,9 @@ services:
     volumes:
       - production_postgres_data:/var/lib/postgresql/18/docker
       - production_postgres_data_backups:/backups
+      # El rol de aplicación sin superusuario (N-07). Solo acá: el compose
+      # local usa la misma imagen y no lo monta.
+      - ./compose/production/postgres/init:/docker-entrypoint-initdb.d:ro
     env_file:
       - ./.envs/.production/.postgres
 
@@ -56,10 +59,19 @@ services:
 
   redis:
     image: docker.io/redis:7.2
-    
     volumes:
       - production_redis_data:/data
-    
+    # Con contraseña (N-07). REDIS_PASSWORD va en .envs/.production/.redis, y
+    # el REDIS_URL de .envs/.production/.django la lleva
+    # (redis://:<contraseña>@redis:6379/0). Se vuelve a pasar por el
+    # entrypoint de la imagen para que redis-server siga bajando al usuario
+    # redis.
+    env_file:
+      - ./.envs/.production/.redis
+    command:
+      - sh
+      - -c
+      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD"
 
   celeryworker:
     <<: *django
