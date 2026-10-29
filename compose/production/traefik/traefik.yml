@@ -112,12 +112,12 @@ http:
     django-media:
       loadBalancer:
         servers:
-          - url: http://nginx:80
+          - url: http://nginx:8080
 
     panel:
       loadBalancer:
         servers:
-          - url: http://panel:80
+          - url: http://panel:8080
 
 providers:
   # https://doc.traefik.io/traefik/master/providers/file/

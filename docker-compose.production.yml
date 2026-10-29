@@ -56,6 +56,14 @@ services:
     ports:
       - '0.0.0.0:80:80'
       - '0.0.0.0:443:443'
+    # Sin root (N-18), con NET_BIND_SERVICE como única capacidad: alcanza
+    # para el 80 y el 443. Sin no-new-privileges, que anularía la capacidad
+    # que lleva el binario.
+    user: '65532:65532'
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
 
   redis:
     image: docker.io/redis:7.2
