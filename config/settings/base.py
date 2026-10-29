@@ -576,6 +576,10 @@ PUBLIC_REPORT_PAGE_URL = env(
     default="/reporte/{token}",
 )
 
+# Decimales de las coordenadas en la página pública de un reporte (N-06). Con
+# 3, unos 100 m. Con sesión, la app y el panel ven la ubicación exacta.
+PUBLIC_COORDINATE_DECIMALS = env.int("DJANGO_PUBLIC_COORDINATE_DECIMALS", default=3)
+
 # Con cuánta antelación se le avisa al autor que el plazo está por vencer.
 RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
     "DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES",

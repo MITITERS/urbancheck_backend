@@ -11,17 +11,23 @@ existiera (escenario 3). La excepción es el descarte por moderación (US-049):
 ahí el ``404`` lleva el motivo, que es público.
 
 Se busca por ``share_token`` y nunca por id: el id es correlativo, y con él se
-podrían recorrer todos los reportes cambiando un número.
+podrían recorrer todos los reportes cambiando un número. Por lo mismo, la
+respuesta no lo incluye, y las coordenadas van redondeadas (N-06). La app, que
+con sesión abre el detalle, resuelve el token con ``SharedReportResolveView``.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from drf_spectacular.utils import extend_schema_field
+from drf_spectacular.utils import inline_serializer
 from rest_framework import serializers
 from rest_framework import status
 from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -36,6 +42,17 @@ UNAVAILABLE_MESSAGE = "Este reporte ya no está disponible."
 
 def share_url_for(report: Report) -> str:
     return settings.PUBLIC_REPORT_URL.format(token=report.share_token)
+
+
+def rounded_coordinate(value: Decimal | None) -> str | None:
+    """La coordenada con ``PUBLIC_COORDINATE_DECIMALS`` decimales (N-06).
+
+    Con 3, unos 100 m: alcanza para ubicar el problema en el mapa sin marcar la
+    puerta de quien lo reportó.
+    """
+    if value is None:
+        return None
+    return str(value.quantize(Decimal(1).scaleb(-settings.PUBLIC_COORDINATE_DECIMALS)))
 
 
 class _TimelineEntrySerializer(serializers.Serializer):
@@ -65,11 +82,13 @@ class PublicReportSerializer(serializers.ModelSerializer):
     timeline = serializers.SerializerMethodField()
     official_responses = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
 
     class Meta:
         model = Report
+        # Sin ``id`` (N-06): es correlativo. El número es por municipio.
         fields = [
-            "id",
             "number",
             "category",
             "category_label",
@@ -88,6 +107,12 @@ class PublicReportSerializer(serializers.ModelSerializer):
             "share_url",
         ]
         read_only_fields = fields
+
+    def get_latitude(self, obj) -> str | None:
+        return rounded_coordinate(obj.latitude)
+
+    def get_longitude(self, obj) -> str | None:
+        return rounded_coordinate(obj.longitude)
 
     def get_municipality(self, obj) -> dict:
         return {"city": obj.municipality.city, "province": obj.municipality.province}
@@ -149,3 +174,39 @@ class PublicReportView(APIView):
             },
             status=status.HTTP_404_NOT_FOUND,
         )
+
+
+class SharedReportResolveView(APIView):
+    """El id del reporte de un enlace compartido, para la app con sesión.
+
+    La respuesta pública ya no lleva el id (N-06); la app lo necesita para
+    abrir el detalle. Pide sesión y aplica la misma visibilidad que la página
+    pública: lo que no es público responde ``404``.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get_throttles(self):
+        return [ScopedThrottle("public_reports")]
+
+    @extend_schema(
+        responses={
+            200: inline_serializer(
+                "SharedReportId",
+                {"id": serializers.IntegerField()},
+            ),
+        },
+    )
+    def get(self, request, token):
+        report_id = (
+            Report.objects.publicly_visible()
+            .filter(share_token=token)
+            .values_list("pk", flat=True)
+            .first()
+        )
+        if report_id is None:
+            return Response(
+                {"code": UNAVAILABLE_CODE, "detail": UNAVAILABLE_MESSAGE},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response({"id": report_id})

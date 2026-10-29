@@ -13,6 +13,7 @@ from urbancheck.reports.api.operator_views import OperatorReportViewSet
 from urbancheck.reports.api.panel_views import PanelReportViewSet
 from urbancheck.reports.api.privacy_views import PrivacyRequestViewSet
 from urbancheck.reports.api.public_views import PublicReportView
+from urbancheck.reports.api.public_views import SharedReportResolveView
 from urbancheck.reports.api.statistics_views import PanelStatisticsView
 from urbancheck.reports.api.validation_views import ValidationReportViewSet
 from urbancheck.reports.api.views import CommentViewSet
@@ -87,6 +88,13 @@ urlpatterns = [
         "public/reports/<uuid:token>/",
         PublicReportView.as_view(),
         name="public-report",
+    ),
+    # El id del reporte de un enlace, para la app con sesión (N-06): la
+    # respuesta pública ya no lo lleva.
+    path(
+        "reports/shared/<uuid:token>/",
+        SharedReportResolveView.as_view(),
+        name="shared-report-resolve",
     ),
     # Términos y condiciones vigentes (RN-10): sin sesión, para el registro.
     path("terms/current/", CurrentTermsView.as_view(), name="terms-current"),

@@ -79,8 +79,9 @@ def shared_report_preview(request, token):
     likes = report.likes.count()
     support = "1 vecino lo apoya" if likes == 1 else f"{likes} vecinos lo apoyan"
     context.update(
-        title=f"{report.get_category_display()} en {city} · Reporte "
-        f"#{report.number or report.pk}",
+        # El número es por municipio; el id no se muestra (N-06).
+        title=f"{report.get_category_display()} en {city} · Reporte"
+        + (f" #{report.number}" if report.number else ""),
         description=_truncate(
             f"{report.description} — {report.get_status_display()}. {support}.",
         ),
