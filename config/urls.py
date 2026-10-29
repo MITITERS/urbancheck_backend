@@ -7,7 +7,6 @@ from django.views import defaults as default_views
 from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerSplitView
-from rest_framework.authtoken.views import obtain_auth_token
 
 from config.deeplink import android_assetlinks
 from config.deeplink import apple_app_site_association
@@ -50,8 +49,6 @@ urlpatterns = [
 urlpatterns += [
     # API base url
     path("api/", include("config.api_router")),
-    # DRF auth token
-    path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
     path(
         "api/notification-preferences/",
         NotificationPreferenceView.as_view(),
