@@ -3,10 +3,15 @@ from django.contrib.auth import admin as auth_admin
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
+from urbancheck.common.admin_login import limit_admin_login
+
 from .forms import UserAdminChangeForm
 from .forms import UserAdminCreationForm
 from .models import TermsOfService
 from .models import User
+
+# El login del admin con el mismo límite de intentos que el de la API (N-02).
+admin.site.login = limit_admin_login(admin.site.login)  # type: ignore[method-assign]
 
 
 @admin.register(User)
