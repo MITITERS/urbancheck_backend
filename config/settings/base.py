@@ -117,7 +117,9 @@ AUTH_USER_MODEL = "users.User"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-redirect-url
 LOGIN_REDIRECT_URL = "users:redirect"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-url
-LOGIN_URL = "account_login"
+# Sin las páginas de allauth (N-16), las vistas HTML que piden sesión mandan al
+# login del admin: son las únicas que quedan y solo las usa el staff.
+LOGIN_URL = "admin:login"
 
 # PASSWORDS
 # ------------------------------------------------------------------------------
@@ -303,9 +305,6 @@ ADMIN_URL = "admin/"
 ADMINS = ['"Mititers" <mititerspf2026@gmail.com>']
 # https://docs.djangoproject.com/en/dev/ref/settings/#managers
 MANAGERS = ADMINS
-# https://cookiecutter-django.readthedocs.io/en/latest/settings.html#other-environment-settings
-# Force the `admin` sign in process to go through the `django-allauth` workflow
-DJANGO_ADMIN_FORCE_ALLAUTH = env.bool("DJANGO_ADMIN_FORCE_ALLAUTH", default=False)
 
 # LOGGING
 # ------------------------------------------------------------------------------
@@ -712,28 +711,37 @@ ACCOUNT_RATE_LIMITS = {
 
 # django-allauth headless
 # -------------------------------------------------------------------------------
-HEADLESS_ONLY = False
+# Solo la API (N-16): las páginas HTML de ``/accounts/`` eran una superficie que
+# ningún cliente usaba. Los enlaces de los correos van a ``HEADLESS_FRONTEND_URLS``.
+HEADLESS_ONLY = True
 # El payload de usuario del login incluye rol, municipalidad y el flag de
 # contraseña temporal, para que el panel decida el flujo sin una llamada extra.
 HEADLESS_ADAPTER = "urbancheck.users.adapters.HeadlessAdapter"
 PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
 # Link enviado en el correo de recuperación de contraseña.
-# Se usa un https:// que apunta a la página web de reset de allauth (/accounts/...),
-# porque los clientes de correo no rompen los enlaces https como sí ocurre con los
-# esquemas custom (urbancheck://). El key de headless tiene el mismo formato que la
-# URL web de allauth, así que funciona directamente en el navegador de cualquier
-# dispositivo, sin depender de Expo Go ni de deep links.
-# Configurable por entorno: en dev apuntar a la IP/LAN del backend, en prod al dominio.
-# Por defecto (prod) usa el Universal Link /reset-password, que abre la app de
-# UrbanCheck directamente cuando está instalada (ver config/deeplink.py) y cae en
-# la web de allauth como fallback. En dev/Expo Go se sobreescribe por la URL web
-# de allauth, porque los Universal Links no funcionan en Expo Go ni sobre una IP LAN.
+# Es un https:// y no un esquema custom (urbancheck://), porque los clientes de
+# correo no rompen los enlaces https. Por defecto (prod) es el Universal Link
+# /reset-password, que abre la app de UrbanCheck cuando está instalada (ver
+# config/deeplink.py); sin la app, ese mismo enlace redirige a la página pública
+# del panel (``PASSWORD_RESET_PAGE_URL``). En dev/Expo Go, donde los Universal
+# Links no funcionan, se apunta al /reset-password del backend en la IP/LAN.
 ACCOUNT_RESET_PASSWORD_URL = env(
     "DJANGO_ACCOUNT_RESET_PASSWORD_URL",
     default="https://urbancheck.com.ar/reset-password?key={key}",
 )
+# Las páginas públicas del panel que completan los dos flujos desde el
+# navegador. En desarrollo: ``http://localhost:5173/...``.
+PASSWORD_RESET_PAGE_URL = env(
+    "DJANGO_PASSWORD_RESET_PAGE_URL",
+    default="https://panel.urbancheck.com.ar/restablecer-contrasena?key={key}",
+)
+EMAIL_CONFIRMATION_URL = env(
+    "DJANGO_EMAIL_CONFIRMATION_URL",
+    default="https://panel.urbancheck.com.ar/confirmar-correo?key={key}",
+)
 HEADLESS_FRONTEND_URLS = {
     "account_reset_password_from_key": ACCOUNT_RESET_PASSWORD_URL,
+    "account_confirm_email": EMAIL_CONFIRMATION_URL,
 }
 
 # Universal Links (iOS) / App Links (Android)

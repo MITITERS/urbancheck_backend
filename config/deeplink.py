@@ -2,8 +2,8 @@
 
 Permiten que un enlace https://urbancheck.com.ar/reset-password?key=... abra
 directamente la app de UrbanCheck (sin pasar por el navegador) cuando está
-instalada, y que caiga en la página web de reset de allauth como fallback
-cuando la app no está presente.
+instalada, y que caiga en la página de reset del panel como fallback cuando la
+app no está presente.
 
 Los identificadores (Apple App ID, package y huella del certificado Android)
 se configuran por entorno; ver settings IOS_UNIVERSAL_LINK_APP_ID,
@@ -11,6 +11,8 @@ ANDROID_APP_PACKAGE y ANDROID_SHA256_CERT_FINGERPRINTS.
 """
 
 from __future__ import annotations
+
+from urllib.parse import quote
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -66,8 +68,9 @@ def reset_password_web_fallback(request):
     """Fallback web del enlace de reset.
 
     Si la app está instalada, el SO intercepta /reset-password y abre la app
-    antes de llegar acá. Si no, este endpoint redirige al formulario de reset
-    de allauth para completar el cambio desde el navegador.
+    antes de llegar acá. Si no, este endpoint redirige a la página pública del
+    panel, que completa el cambio contra la API headless: las páginas HTML de
+    allauth ya no existen (N-16).
     """
     key = request.GET.get("key", "")
-    return redirect(f"/accounts/password/reset/key/{key}/")
+    return redirect(settings.PASSWORD_RESET_PAGE_URL.format(key=quote(key, safe="")))
