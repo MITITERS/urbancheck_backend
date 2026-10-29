@@ -225,9 +225,13 @@ class Report(PendingPhotoMixin, models.Model):
         CANCELADO = "cancelado", "Cancelado"
         ARCHIVADO = "archivado", "Archivado"
 
+    # Nulo cuando el vecino borró su cuenta (N-09): el reporte que el municipio
+    # ya gestionó se conserva, sin autor. Los clientes muestran "Usuario
+    # eliminado".
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="reports",
     )
     # Jurisdicción del reporte (US-034). Se asigna al crearlo y no se
@@ -811,9 +815,12 @@ class ResolutionAppeal(PendingPhotoMixin, models.Model):
         blank=True,
         related_name="appeals",
     )
+    # Nulo si el vecino borró su cuenta (N-09): la apelación es parte de la
+    # gestión del cierre, que se conserva.
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="resolution_appeals",
     )
     kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.CIERRE)

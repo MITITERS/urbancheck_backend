@@ -2,6 +2,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.mixins import CreateModelMixin
@@ -15,6 +16,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.common.throttling import ScopedThrottle
+from urbancheck.users.account_deletion import delete_citizen_account
 from urbancheck.users.models import TermsOfService
 from urbancheck.users.models import User
 
@@ -150,12 +153,19 @@ class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
             serializer = PublicUserSerializer(instance, context={"request": request})
         return Response(serializer.data)
 
+    def get_throttles(self):
+        if getattr(self, "action", None) == "me" and self.request.method == "DELETE":
+            return [ScopedThrottle("account_deletion")]
+        return super().get_throttles()
+
     @action(
         detail=False,
-        methods=["get", "patch"],
+        methods=["get", "patch", "delete"],
         parser_classes=[MultiPartParser, JSONParser],
     )
     def me(self, request):
+        if request.method == "DELETE":
+            return self._delete_account(request)
         if request.method == "PATCH":
             serializer = UserSerializer(
                 request.user,
@@ -168,6 +178,27 @@ class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
             return Response(status=status.HTTP_200_OK, data=serializer.data)
         serializer = UserSerializer(request.user, context={"request": request})
         return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+    def _delete_account(self, request) -> Response:
+        """Baja de la cuenta por su titular (N-09), confirmada con la contraseña.
+
+        Solo para vecinos: una cuenta de trabajo no se borra a sí misma, porque
+        su nombre es parte del historial de gestión; sigue con la baja lógica
+        desde el panel. Qué se borra y qué se conserva está en
+        ``urbancheck.users.account_deletion``.
+        """
+        user = request.user
+        if user.role in User.WORK_ROLES:
+            msg = (
+                "Una cuenta de trabajo no se borra desde acá: la da de baja el "
+                "administrador de la plataforma."
+            )
+            raise PermissionDenied(msg)
+        password = request.data.get("password") or ""
+        if not password or not user.check_password(password):
+            raise ValidationError({"password": ["La contraseña no es correcta."]})
+        delete_citizen_account(user, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(
         detail=False,

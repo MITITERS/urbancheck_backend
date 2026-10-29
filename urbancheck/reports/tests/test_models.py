@@ -39,10 +39,12 @@ class TestReport:
         newer = ReportFactory.create()
         assert list(Report.objects.all()) == [newer, older]
 
-    def test_deleting_author_deletes_reports(self):
+    def test_deleting_the_author_keeps_the_report_without_author(self):
+        """N-09: lo que se borra lo decide la baja de la cuenta, no la cascada."""
         report = ReportFactory.create()
         report.author.delete()
-        assert not Report.objects.filter(id=report.id).exists()
+        report.refresh_from_db()
+        assert report.author_id is None
 
 
 @pytest.mark.django_db

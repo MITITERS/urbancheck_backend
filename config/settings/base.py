@@ -814,6 +814,9 @@ REST_FRAMEWORK = {
         "privacy_requests": env("DJANGO_THROTTLE_PRIVACY_REQUESTS", default="5/day"),
         # La página pública de un reporte compartido (US-030): sin sesión, por IP.
         "public_reports": env("DJANGO_THROTTLE_PUBLIC_REPORTS", default="120/hour"),
+        # La baja de la cuenta (N-09): pide la contraseña, así que también frena
+        # a quien la prueba con una sesión robada.
+        "account_deletion": env("DJANGO_THROTTLE_ACCOUNT_DELETION", default="5/hour"),
     },
     "NUM_PROXIES": NUM_PROXIES,
 }

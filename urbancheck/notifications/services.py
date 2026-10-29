@@ -4,17 +4,39 @@ Se expone como funciones y no como señales de Django para que el disparo quede
 explícito y sea fácil de testear desde las vistas que lo provocan.
 """
 
+from functools import wraps
+
 from django.utils import formats
 
 from .models import Notification
 from .push import deliver_push
 from .templates_status import message_for
 
+
+def _to_the_author(notify):
+    """Saltea el aviso al autor de un reporte que ya no lo tiene.
+
+    El reporte que el municipio gestionó sobrevive a la baja de la cuenta de su
+    autor, sin autor (N-09): no hay a quién avisarle. El primer argumento es el
+    reporte, o algo que lo tiene en ``report`` (un comentario, una respuesta).
+    """
+
+    @wraps(notify)
+    def wrapper(subject, *args, **kwargs):
+        report = getattr(subject, "report", subject)
+        if report.author_id is None:
+            return None
+        return notify(subject, *args, **kwargs)
+
+    return wrapper
+
+
 # Fragmento del comentario que se incluye en el aviso, para que el usuario sepa
 # de qué se trata sin abrir el reporte.
 _PREVIEW_LENGTH = 60
 
 
+@_to_the_author
 def notify_new_comment(comment) -> Notification | None:
     """Avisa al autor del reporte que alguien comentó (US-009).
 
@@ -41,6 +63,7 @@ def notify_new_comment(comment) -> Notification | None:
     return notification
 
 
+@_to_the_author
 def notify_new_like(report, user) -> Notification | None:
     """Avisa al autor que alguien apoyó su reporte (C-09).
 
@@ -72,6 +95,7 @@ def notify_new_like(report, user) -> Notification | None:
     return notification
 
 
+@_to_the_author
 def notify_status_change(  # noqa: PLR0913 (cada uno es un dato del aviso)
     report,
     *,
@@ -110,6 +134,7 @@ def notify_status_change(  # noqa: PLR0913 (cada uno es un dato del aviso)
     return notification
 
 
+@_to_the_author
 def notify_official_response(response) -> Notification | None:
     """Avisa al autor que el municipio respondió su reporte (US-024).
 
@@ -138,6 +163,7 @@ def notify_official_response(response) -> Notification | None:
     return notification
 
 
+@_to_the_author
 def notify_upcoming_archival(report, *, archives_on) -> Notification:
     """Avisa al autor que su reporte está por archivarse (US-031).
 
@@ -161,6 +187,7 @@ def notify_upcoming_archival(report, *, archives_on) -> Notification:
     return notification
 
 
+@_to_the_author
 def notify_objection_deadline(report, *, deadline) -> Notification:
     """Avisa al autor que el plazo para objetar el cierre está por vencer (US-047).
 
@@ -225,6 +252,7 @@ def notify_resolution_appealed(appeal) -> list[Notification]:
     return notifications
 
 
+@_to_the_author
 def notify_image_removed(
     report,
     *,
@@ -277,6 +305,7 @@ def notify_image_removed(
     return notification
 
 
+@_to_the_author
 def notify_report_under_review(report) -> Notification:
     """Avisa al autor que su reporte se ocultó por una denuncia (US-043).
 
@@ -316,6 +345,7 @@ def notify_complaint_received(complaint, *, message: str) -> Notification:
     return notification
 
 
+@_to_the_author
 def notify_report_reported(report) -> Notification:
     """Avisa al autor que su reporte recibió una denuncia de contenido (US-021).
 
@@ -338,6 +368,7 @@ def notify_report_reported(report) -> Notification:
     return notification
 
 
+@_to_the_author
 def notify_report_restored(report) -> Notification:
     """Avisa al autor que la denuncia se desestimó (US-043, escenario 6)."""
     notification = Notification.objects.create(
@@ -475,8 +506,10 @@ def notify_content_complaints_resolved(
     return notifications
 
 
-def notify_moderation_appeal_rejected(appeal) -> Notification:
+def notify_moderation_appeal_rejected(appeal) -> Notification | None:
     """El administrador no hizo lugar a la apelación del autor (US-049)."""
+    if appeal.author_id is None:
+        return None
     notification = Notification.objects.create(
         recipient=appeal.author,
         actor=None,
