@@ -86,6 +86,7 @@ THIRD_PARTY_APPS = [
     "corsheaders",
     "django_filters",
     "drf_spectacular",
+    "drf_spectacular_sidecar",
 ]
 
 LOCAL_APPS = [
@@ -270,16 +271,16 @@ X_FRAME_OPTIONS = "DENY"
 # ``AdminAndDocsCSPMiddleware`` solo al admin y a Swagger, las dos pantallas
 # HTML de administración: la API responde JSON, el panel tiene la suya en su
 # nginx y la vista previa de un reporte compartido redirige con un script
-# inline. Swagger UI llega del CDN de jsDelivr (default de drf-spectacular) y
-# arranca desde un script aparte (``SpectacularSwaggerSplitView``); los estilos
-# admiten inline porque Swagger UI los inyecta al dibujar.
+# inline. Swagger UI se sirve desde el servidor (``drf-spectacular-sidecar``,
+# N-13), con la versión fijada en ``uv.lock``, y arranca desde un script aparte
+# (``SpectacularSwaggerSplitView``); los estilos admiten inline porque Swagger
+# UI los inyecta al dibujar.
 # https://docs.djangoproject.com/en/6.0/ref/csp/
-SWAGGER_CDN = "https://cdn.jsdelivr.net"
 SECURE_CSP = {
     "default-src": [CSP.SELF],
-    "script-src": [CSP.SELF, SWAGGER_CDN],
-    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE, SWAGGER_CDN],
-    "img-src": [CSP.SELF, "data:", SWAGGER_CDN],
+    "script-src": [CSP.SELF],
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
+    "img-src": [CSP.SELF, "data:"],
     "connect-src": [CSP.SELF],
     "object-src": [CSP.NONE],
     "frame-ancestors": [CSP.NONE],
@@ -824,6 +825,9 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "SCHEMA_PATH_PREFIX": "/api/",
+    # Swagger UI desde los estáticos propios y no desde jsDelivr (N-13).
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
     # Nombres propios para los catálogos que comparten nombre de campo
     # (``status``) o se usan en más de uno (``previous_status``): sin esto el
     # generador inventa nombres como ``Status614Enum``.
