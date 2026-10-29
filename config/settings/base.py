@@ -777,7 +777,7 @@ NOMINATIM_REVERSE_URL = env(
 )
 NOMINATIM_USER_AGENT = env(
     "NOMINATIM_USER_AGENT",
-    default="UrbanCheck/1.0 (contacto: stefano.riscaldino@yahoo.com)",
+    default="UrbanCheck/1.0 (+https://urbancheck.com.ar)",
 )
 # Restringe los resultados a estos países (códigos ISO separados por coma). Vacío = global.
 NOMINATIM_COUNTRYCODES = env("NOMINATIM_COUNTRYCODES", default="ar")
