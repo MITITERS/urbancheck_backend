@@ -20,12 +20,14 @@ env:
   UV_PYTHON: '3.14'
 
 jobs:
+  # setup-uv va fijado a un commit: Astral no publica la etiqueta flotante de
+  # la versión mayor (`@v10` no existe y el job no arrancaba, N-12).
   ruff:
     name: Ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       # Misma versión que fija pyproject.toml, para que local y CI coincidan.
       - run: uvx ruff@0.15.13 check .
 
@@ -34,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       # Los tests quedan afuera: los `assert` y las contraseñas de prueba son lo
       # esperable ahí, y no se despliegan.
       - run: >-
@@ -47,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       # Las versiones exactas del uv.lock, incluidas las de desarrollo.
       # pip-audit no informa la severidad, así que falla ante cualquier
       # vulnerabilidad conocida: es más estricto que "altas o críticas". Una
