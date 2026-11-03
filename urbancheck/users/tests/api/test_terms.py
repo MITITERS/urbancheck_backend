@@ -1,9 +1,10 @@
-"""RN-10 (C-23) — aceptación de los términos y condiciones.
+"""RN-10 (C-23) — aceptación de los términos y la política de privacidad.
 
 El vecino acepta la versión vigente al registrarse; las cuentas que ya
 existían la aceptan en su próximo ingreso, y lo mismo pasa cada vez que se
-publica una versión nueva. Mientras no haya términos publicados no se exige
-nada: el texto lo carga el equipo desde el admin.
+publica una versión nueva. Mientras no haya una versión publicada no se exige
+nada. Los textos viven en archivos (``urbancheck.users.legal``): cada test
+publica en una carpeta propia, la de ``legal_documents_dir``.
 """
 
 from __future__ import annotations
@@ -13,14 +14,17 @@ from datetime import timedelta
 from http import HTTPStatus
 
 import pytest
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.reports.api.permissions import TERMS_NOT_ACCEPTED_MESSAGE
 from urbancheck.reports.tests.factories import ReportFactory
+from urbancheck.users import legal
 from urbancheck.users.adapters import HeadlessAdapter
-from urbancheck.users.models import TermsOfService
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import OperatorFactory
@@ -37,12 +41,21 @@ ME_URL = "/api/users/me/"
 PASSWORD = "Qw8$rTy4&nBv1?"  # noqa: S105
 
 
-def publish(version: str = "2026-10", **kwargs) -> TermsOfService:
-    return TermsOfService.objects.create(
-        version=version,
-        text=f"Términos {version}",
-        **kwargs,
-    )
+def publish(version: str = "2026-10", published_at=None) -> None:
+    """Publica una versión en la carpeta del test: sus dos archivos y su entrada."""
+    root = settings.LEGAL_DOCUMENTS_DIR
+    folder = root / version
+    folder.mkdir()
+    for name, title in [
+        (legal.TERMS_FILE, "Términos"),
+        (legal.PRIVACY_FILE, "Privacidad"),
+    ]:
+        (folder / name).write_text(f"# {title} {version}", encoding="utf-8")
+    when = (published_at or timezone.now() - timedelta(seconds=1)).isoformat()
+    with (root / legal.REGISTRY_FILE).open("a", encoding="utf-8") as fh:
+        fh.write(f'[[version]]\nnumero = "{version}"\nvigente_desde = {when}\n\n')
+    # El registro se cachea por carpeta; acá cambia dentro del mismo test.
+    legal._load.cache_clear()  # noqa: SLF001
 
 
 def client_for(user: User) -> APIClient:
@@ -74,14 +87,46 @@ class TestCurrentTerms:
         response = APIClient().get(CURRENT_TERMS_URL)
 
         assert response.status_code == HTTPStatus.OK
-        assert response.json()["version"] == "2026-10"
-        assert response.json()["text"] == "Términos 2026-10"
+        body = response.json()
+        assert body["version"] == "2026-10"
+        assert body["terms"] == "# Términos 2026-10"
+        assert body["privacy"] == "# Privacidad 2026-10"
+        assert body["published_at"]
 
     def test_a_version_scheduled_for_later_is_not_current_yet(self):
         publish("2026-10")
         publish("2026-11", published_at=timezone.now() + timedelta(days=1))
 
-        assert TermsOfService.objects.current().version == "2026-10"
+        assert current_legal_documents().version == "2026-10"
+
+
+class TestLegalFiles:
+    def test_a_published_version_without_its_privacy_policy_fails_loudly(self):
+        publish("2026-10")
+        (settings.LEGAL_DOCUMENTS_DIR / "2026-10" / legal.PRIVACY_FILE).unlink()
+        legal._load.cache_clear()  # noqa: SLF001
+
+        with pytest.raises(ImproperlyConfigured):
+            current_legal_documents()
+
+    def test_a_date_without_time_zone_fails_loudly(self):
+        root = settings.LEGAL_DOCUMENTS_DIR
+        (root / legal.REGISTRY_FILE).write_text(
+            '[[version]]\nnumero = "1.0"\nvigente_desde = 2026-10-30\n',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ImproperlyConfigured):
+            current_legal_documents()
+
+    def test_the_documents_in_the_repository_load(self):
+        """Los archivos reales: que el registro y las carpetas coincidan."""
+        versions = legal._load(str(settings.APPS_DIR / "legal"))  # noqa: SLF001
+
+        assert versions
+        for version in versions:
+            assert version.terms.strip()
+            assert version.privacy.strip()
 
 
 class TestSignup:

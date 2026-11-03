@@ -1,13 +1,11 @@
 from django.contrib import admin
 from django.contrib.auth import admin as auth_admin
-from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from urbancheck.common.admin_login import limit_admin_login
 
 from .forms import UserAdminChangeForm
 from .forms import UserAdminCreationForm
-from .models import TermsOfService
 from .models import User
 
 # El login del admin con el mismo límite de intentos que el de la API (N-02).
@@ -73,20 +71,3 @@ class UserAdmin(auth_admin.UserAdmin):
             },
         ),
     )
-
-
-@admin.register(TermsOfService)
-class TermsOfServiceAdmin(admin.ModelAdmin):
-    """Publicación de los términos y condiciones (RN-10, C-23).
-
-    Publicar una versión nueva hace que cada vecino la tenga que aceptar en su
-    próximo ingreso. Una versión ya publicada no se edita: se publica otra.
-    """
-
-    list_display = ["version", "published_at"]
-    ordering = ["-published_at"]
-
-    def get_readonly_fields(self, request, obj=None):
-        if obj is not None and obj.published_at <= timezone.now():
-            return ["version", "text", "published_at"]
-        return []

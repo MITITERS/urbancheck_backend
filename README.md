@@ -1780,12 +1780,18 @@ mantiene así, pero cada asiento de `ReportStatusHistory` guarda en
 `changed_by_role` el rol de `changed_by` en ese momento, y el panel marca los
 cambios del admin. Los asientos anteriores al campo lo tienen vacío.
 
-### Términos y condiciones: el vecino acepta una versión (RN-10, C-23)
+### Términos y privacidad: el vecino acepta una versión (RN-10, C-23)
 
-- **El texto vive en la base** (`TermsOfService`: versión, texto y fecha de
-  publicación) y se publica desde el admin de Django, sin deploy. La vigente es
-  la última con `published_at` ya cumplida. Una versión publicada no se edita
-  desde el admin: se publica otra.
+- **Los textos viven en archivos, no en la base**, en `urbancheck/legal/`:
+  `versiones.toml` lista cada versión publicada con su fecha de vigencia, y
+  cada versión tiene su carpeta con `terminos.md` y `privacidad.md`. Los dos
+  documentos comparten versión y se aceptan juntos. La vigente es la última
+  con `vigente_desde` ya cumplida (`urbancheck.users.legal`). Publicar una
+  versión nueva es agregar su carpeta y su entrada, y reiniciar; una versión
+  que alguien ya aceptó no se edita, se publica otra. Hasta el 30/10/2026
+  vivían en la tabla `TermsOfService`, que borró la migración `users/0012`.
+- **Los tests no ven los archivos reales**: el fixture `legal_documents_dir`
+  los apunta a una carpeta vacía, y el que ejercita la aceptación publica ahí.
 - **Mientras no haya ninguna publicada, no se exige nada.** Así nadie queda
   trabado hasta que el equipo cargue el texto.
 - **Solo el vecino.** Las cuentas de trabajo las da de alta el municipio o la
@@ -1797,7 +1803,8 @@ cambios del admin. Los asientos anteriores al campo lo tienen vacío.
 - **Cuentas existentes y versiones nuevas**: `must_accept_terms` llega en el
   perfil y en el payload del login, y la app frena al vecino en una pantalla
   propia hasta que llame a `POST /api/users/me/accept-terms/` con la versión que
-  leyó. `GET /api/terms/current/` devuelve la vigente sin sesión, o `404`.
+  leyó. `GET /api/terms/current/` devuelve la vigente sin sesión
+  (`version`, `published_at`, `terms` y `privacy`, en Markdown), o `404`.
 - **El servidor no depende de la app**: reportar, comentar y dar me gusta
   responden `403` mientras falte aceptar (`HasAcceptedTerms`, aparte de
   `ParticipatesAsCitizen` porque aquella es regla del rol y esta del estado de

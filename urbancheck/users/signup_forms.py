@@ -4,7 +4,7 @@ from django.forms import Form
 from django.forms import ValidationError
 from django.utils import timezone
 
-from .models import TermsOfService
+from .legal import current_legal_documents
 
 TERMS_REQUIRED_MESSAGE = (
     "Para crear la cuenta tenés que aceptar los términos y condiciones."
@@ -25,7 +25,7 @@ class HeadlessUserSignupForm(Form):
 
     def clean(self):
         cleaned = super().clean()
-        self._terms = TermsOfService.objects.current()
+        self._terms = current_legal_documents()
         if self._terms is None:
             return cleaned
         if not cleaned.get("accept_terms"):

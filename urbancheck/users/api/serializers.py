@@ -6,7 +6,7 @@ from urbancheck.municipalities.api.area_serializers import OperationalAreaSerial
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.models import OperationalArea
-from urbancheck.users.models import TermsOfService
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 
 EMAIL_TAKEN_MESSAGE = "Ya existe un usuario registrado con ese correo."
@@ -438,13 +438,16 @@ TERMS_VERSION_MISMATCH_MESSAGE = (
 )
 
 
-class TermsOfServiceSerializer(serializers.ModelSerializer[TermsOfService]):
-    """La versión vigente de los términos, para mostrarla en la app (RN-10)."""
+class LegalDocumentsSerializer(serializers.Serializer):
+    """La versión vigente de los dos documentos, para mostrarla en la app (RN-10).
 
-    class Meta:
-        model = TermsOfService
-        fields = ["version", "text", "published_at"]
-        read_only_fields = fields
+    Los textos van en Markdown, tal como están en los archivos.
+    """
+
+    version = serializers.CharField(read_only=True)
+    published_at = serializers.DateTimeField(read_only=True)
+    terms = serializers.CharField(read_only=True)
+    privacy = serializers.CharField(read_only=True)
 
 
 class TermsAcceptanceSerializer(serializers.Serializer):
@@ -453,7 +456,7 @@ class TermsAcceptanceSerializer(serializers.Serializer):
     version = serializers.CharField(max_length=20)
 
     def validate_version(self, value: str) -> str:
-        current = TermsOfService.objects.current()
+        current = current_legal_documents()
         if current is None or current.version != value:
             raise serializers.ValidationError(TERMS_VERSION_MISMATCH_MESSAGE)
         return value

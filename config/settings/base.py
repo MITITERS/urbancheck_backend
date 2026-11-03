@@ -526,6 +526,10 @@ COLLECTIVE_VALIDATION_THRESHOLD = env.int(
 # venza.
 ARCHIVAL_INACTIVITY_DAYS = env.int("DJANGO_ARCHIVAL_INACTIVITY_DAYS", default=90)
 
+# Términos y condiciones y política de privacidad (RN-10). Viven en archivos del
+# repositorio, no en la base: ver ``urbancheck.users.legal``.
+LEGAL_DOCUMENTS_DIR = APPS_DIR / "legal"
+
 # Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
 #
 # El mapa muestra lo que pasa hoy; los resueltos acumulados de todos los meses

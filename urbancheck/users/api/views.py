@@ -18,13 +18,15 @@ from rest_framework.viewsets import GenericViewSet
 
 from urbancheck.common.throttling import ScopedThrottle
 from urbancheck.users.account_deletion import delete_citizen_account
-from urbancheck.users.models import TermsOfService
+from urbancheck.users.legal import LegalDocuments
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 
 from .permissions import IsCitizen
 from .permissions import IsPanelUser
 from .permissions import IsPlatformAdmin
 from .serializers import AdminValidatorCreateSerializer
+from .serializers import LegalDocumentsSerializer
 from .serializers import MunicipalAgentCreateSerializer
 from .serializers import MunicipalAgentSerializer
 from .serializers import OperatorCreateSerializer
@@ -32,7 +34,6 @@ from .serializers import OperatorSerializer
 from .serializers import OperatorUpdateSerializer
 from .serializers import PublicUserSerializer
 from .serializers import TermsAcceptanceSerializer
-from .serializers import TermsOfServiceSerializer
 from .serializers import UserSerializer
 from .serializers import ValidatorCreateSerializer
 from .serializers import ValidatorSerializer
@@ -253,7 +254,7 @@ NO_TERMS_MESSAGE = "Todavía no hay términos y condiciones publicados."
 
 
 class CurrentTermsView(RetrieveAPIView):
-    """Los términos y condiciones vigentes (RN-10, C-23).
+    """Los términos y la política de privacidad vigentes (RN-10, C-23).
 
     Sin sesión: la app los muestra en el registro, antes de que exista la
     cuenta. ``404`` mientras no haya ninguna versión publicada.
@@ -261,10 +262,10 @@ class CurrentTermsView(RetrieveAPIView):
 
     permission_classes = [AllowAny]
     authentication_classes = []
-    serializer_class = TermsOfServiceSerializer
+    serializer_class = LegalDocumentsSerializer
 
-    def get_object(self) -> TermsOfService:
-        terms = TermsOfService.objects.current()
+    def get_object(self) -> LegalDocuments:
+        terms = current_legal_documents()
         if terms is None:
             raise NotFound(NO_TERMS_MESSAGE)
         return terms

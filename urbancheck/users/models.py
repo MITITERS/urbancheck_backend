@@ -11,15 +11,14 @@ from django.db.models import DateTimeField
 from django.db.models import EmailField
 from django.db.models import ForeignKey
 from django.db.models import TextChoices
-from django.db.models import TextField
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from urbancheck.anonymization.fields import MetadataFreeImageField
 from urbancheck.municipalities.models import PHONE_INVALID_MESSAGE
 from urbancheck.municipalities.models import PHONE_REGEX
 
+from .legal import current_legal_documents
 from .managers import UserManager
 
 
@@ -395,7 +394,7 @@ class User(AbstractUser):
         """
         if self.role != self.Role.CIUDADANO:
             return False
-        current = TermsOfService.objects.current()
+        current = current_legal_documents()
         return current is not None and self.terms_version != current.version
 
     def get_absolute_url(self) -> str:
@@ -406,34 +405,3 @@ class User(AbstractUser):
 
         """
         return reverse("users:detail", kwargs={"pk": self.id})
-
-
-class TermsOfServiceQuerySet(models.QuerySet):
-    def current(self) -> TermsOfService | None:
-        """La versión vigente: la última publicada, o ninguna."""
-        published = self.filter(published_at__lte=timezone.now())
-        return published.order_by("-published_at").first()
-
-
-class TermsOfService(models.Model):
-    """Una versión de los términos y condiciones (RN-10, C-23).
-
-    El texto vive en la base y se carga desde el admin: publicar una versión
-    nueva no pide un deploy. Las versiones no se editan una vez aceptadas por
-    alguien —se publica otra—, porque la aceptación guardada en el usuario
-    apunta a la versión por su nombre.
-    """
-
-    version = CharField(_("version"), max_length=20, unique=True)
-    text = TextField(_("text"))
-    published_at = DateTimeField(_("published at"), default=timezone.now)
-
-    objects = TermsOfServiceQuerySet.as_manager()
-
-    class Meta:
-        verbose_name = _("terms of service")
-        verbose_name_plural = _("terms of service")
-        ordering = ["-published_at"]
-
-    def __str__(self) -> str:
-        return self.version
