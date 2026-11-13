@@ -5,6 +5,8 @@ import ssl
 from pathlib import Path
 
 import environ
+from celery.schedules import crontab
+from django.utils.csp import CSP
 
 BASE_DIR = Path(__file__).resolve(strict=True).parent.parent.parent
 # urbancheck/
@@ -76,18 +78,25 @@ THIRD_PARTY_APPS = [
     "crispy_bootstrap5",
     "allauth",
     "allauth.account",
+    "allauth.headless",
     "allauth.mfa",
     "allauth.socialaccount",
     "django_celery_beat",
     "rest_framework",
-    "rest_framework.authtoken",
     "corsheaders",
+    "django_filters",
     "drf_spectacular",
+    "drf_spectacular_sidecar",
 ]
 
 LOCAL_APPS = [
+    # Antes de ``users``: el admin de usuarios arma un ModelForm en tiempo de
+    # importación sobre la FK a Municipality, que ya tiene que estar cargada.
+    "urbancheck.municipalities",
     "urbancheck.users",
-    # Your stuff: custom apps go here
+    "urbancheck.reports",
+    "urbancheck.notifications",
+    "urbancheck.anonymization",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -109,7 +118,9 @@ AUTH_USER_MODEL = "users.User"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-redirect-url
 LOGIN_REDIRECT_URL = "users:redirect"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-url
-LOGIN_URL = "account_login"
+# Sin las páginas de allauth (N-16), las vistas HTML que piden sesión mandan al
+# login del admin: son las únicas que quedan y solo las usa el staff.
+LOGIN_URL = "admin:login"
 
 # PASSWORDS
 # ------------------------------------------------------------------------------
@@ -143,8 +154,15 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # Registro de seguridad (401, 403, 429 y el contexto de ``log_event``).
+    # El de allauth va después: tiene que corregir el ``400`` del bloqueo de
+    # login a ``429`` antes de que el registro mire la respuesta.
+    "urbancheck.common.security.SecurityContextMiddleware",
+    "urbancheck.common.security.HeadlessLockoutMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # ``SECURE_CSP`` solo en el admin y en Swagger (C-05).
+    "urbancheck.common.security.AdminAndDocsCSPMiddleware",
     "allauth.account.middleware.AccountMiddleware",
 ]
 
@@ -168,6 +186,38 @@ STATICFILES_FINDERS = [
 MEDIA_ROOT = str(APPS_DIR / "media")
 # https://docs.djangoproject.com/en/dev/ref/settings/#media-url
 MEDIA_URL = "/media/"
+
+# Dónde espera la foto original hasta que la tarea la difumina (US-042). Fuera
+# de MEDIA_ROOT a propósito: `/media/` se sirve entero, y ahí adentro estaría
+# publicada la foto sin difuminar. Ver `urbancheck/anonymization/storage.py`.
+PENDING_PHOTO_ROOT = env(
+    "DJANGO_PENDING_PHOTO_ROOT",
+    default=str(BASE_DIR / "pending_media"),
+)
+# https://docs.djangoproject.com/en/dev/ref/settings/#storages
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+    # La ubicación no viaja en OPTIONS: el storage la lee de
+    # `PENDING_PHOTO_ROOT` en cada uso, y así se puede redirigir sin recrear
+    # nada. Sin `base_url`: `photo_pending.url` levanta ValueError, y exponer
+    # la original por descuido falla en vez de filtrarla.
+    "pending_photos": {
+        "BACKEND": "urbancheck.anonymization.storage.PendingPhotoStorage",
+    },
+}
+
+# La foto sube sin pasar por un temporal a disco (US-041), que es lo que Django
+# hace por defecto con todo archivo de más de 2,5 MB: de ahí no la borra nadie.
+# https://docs.djangoproject.com/en/dev/ref/settings/#file-upload-handlers
+FILE_UPLOAD_HANDLERS = ["urbancheck.anonymization.uploads.MemoryOnlyUploadHandler"]
+PHOTO_MAX_UPLOAD_BYTES = env.int("DJANGO_PHOTO_MAX_UPLOAD_MB", default=15) * 1024 * 1024
+# El cuerpo entero del request: la foto más los campos de texto que la acompañan.
+FILE_UPLOAD_MAX_MEMORY_SIZE = PHOTO_MAX_UPLOAD_BYTES + 1024 * 1024
 
 # TEMPLATES
 # ------------------------------------------------------------------------------
@@ -217,6 +267,26 @@ SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
 # https://docs.djangoproject.com/en/dev/ref/settings/#x-frame-options
 X_FRAME_OPTIONS = "DENY"
+# Política de contenido de Django 6.0 (C-05). La aplica
+# ``AdminAndDocsCSPMiddleware`` solo al admin y a Swagger, las dos pantallas
+# HTML de administración: la API responde JSON, el panel tiene la suya en su
+# nginx y la vista previa de un reporte compartido redirige con un script
+# inline. Swagger UI se sirve desde el servidor (``drf-spectacular-sidecar``,
+# N-13), con la versión fijada en ``uv.lock``, y arranca desde un script aparte
+# (``SpectacularSwaggerSplitView``); los estilos admiten inline porque Swagger
+# UI los inyecta al dibujar.
+# https://docs.djangoproject.com/en/6.0/ref/csp/
+SECURE_CSP = {
+    "default-src": [CSP.SELF],
+    "script-src": [CSP.SELF],
+    "style-src": [CSP.SELF, CSP.UNSAFE_INLINE],
+    "img-src": [CSP.SELF, "data:"],
+    "connect-src": [CSP.SELF],
+    "object-src": [CSP.NONE],
+    "frame-ancestors": [CSP.NONE],
+    "base-uri": [CSP.SELF],
+    "form-action": [CSP.SELF],
+}
 
 # EMAIL
 # ------------------------------------------------------------------------------
@@ -236,15 +306,50 @@ ADMIN_URL = "admin/"
 ADMINS = ['"Mititers" <mititerspf2026@gmail.com>']
 # https://docs.djangoproject.com/en/dev/ref/settings/#managers
 MANAGERS = ADMINS
-# https://cookiecutter-django.readthedocs.io/en/latest/settings.html#other-environment-settings
-# Force the `admin` sign in process to go through the `django-allauth` workflow
-DJANGO_ADMIN_FORCE_ALLAUTH = env.bool("DJANGO_ADMIN_FORCE_ALLAUTH", default=False)
 
 # LOGGING
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#logging
 # See https://docs.djangoproject.com/en/dev/topics/logging for
 # more details on how to customize your logging configuration.
+# Registro de eventos de seguridad (logger ``security``, ver
+# ``urbancheck/common/security.py``): logins, bloqueos, cambios de contraseña,
+# altas de cuentas de trabajo, denuncias y respuestas 401/403/429. Va a un
+# archivo propio con rotación por tamaño, además de la consola. Vacío
+# desactiva el archivo y deja solo la consola.
+SECURITY_LOG_FILE = env(
+    "DJANGO_SECURITY_LOG_FILE",
+    default=str(BASE_DIR / "logs" / "security.log"),
+)
+SECURITY_LOG_MAX_BYTES = env.int("DJANGO_SECURITY_LOG_MAX_MB", default=10) * 1024 * 1024
+SECURITY_LOG_BACKUP_COUNT = env.int("DJANGO_SECURITY_LOG_BACKUP_COUNT", default=10)
+
+
+def security_logging(log_file: str) -> tuple[dict, dict]:
+    """Handlers y logger de ``security``, para sumar a cualquier ``LOGGING``.
+
+    Es una función porque ``production.py`` arma su propio ``LOGGING`` y el
+    registro de seguridad no puede faltar en ninguno de los dos.
+    """
+    handlers: dict = {}
+    names = ["console"]
+    if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers["security_file"] = {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": log_file,
+            "maxBytes": SECURITY_LOG_MAX_BYTES,
+            "backupCount": SECURITY_LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
+            "formatter": "security",
+        }
+        names.append("security_file")
+    logger = {"handlers": names, "level": "INFO", "propagate": False}
+    return handlers, logger
+
+
+_security_handlers, _security_logger = security_logging(SECURITY_LOG_FILE)
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -252,6 +357,7 @@ LOGGING = {
         "verbose": {
             "format": "%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s",
         },
+        "security": {"format": "%(asctime)s %(levelname)s %(message)s"},
     },
     "handlers": {
         "console": {
@@ -259,12 +365,38 @@ LOGGING = {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
         },
+        **_security_handlers,
     },
     "root": {"level": "INFO", "handlers": ["console"]},
+    "loggers": {"security": _security_logger},
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
 REDIS_SSL = REDIS_URL.startswith("rediss://")
+
+# CACHES
+# ------------------------------------------------------------------------------
+# Compartido sobre Redis en todos los entornos: los contadores de los límites
+# de allauth y de DRF viven acá, y con un cache por proceso cada worker de
+# gunicorn llevaría su propia cuenta y el límite real se multiplicaría por la
+# cantidad de workers.
+# https://docs.djangoproject.com/en/dev/topics/cache/#redis
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env("DJANGO_CACHE_URL", default=REDIS_URL),
+    },
+}
+
+# PROXIES DE CONFIANZA
+# ------------------------------------------------------------------------------
+# Cuántos proxies propios (Nginx, Traefik) hay delante de Django. Con cero se
+# ignora ``X-Forwarded-For`` y la IP es la de la conexión; detrás de un proxy
+# hay que poner 1, o todos los límites por IP contarían la IP del proxy y un
+# solo cliente agotaría el cupo de todos. Lo leen DRF (``NUM_PROXIES``),
+# allauth (``ALLAUTH_TRUSTED_PROXY_COUNT``) y el registro de seguridad.
+NUM_PROXIES = env.int("DJANGO_NUM_PROXIES", default=0)
+ALLAUTH_TRUSTED_PROXY_COUNT = NUM_PROXIES
 
 # Celery
 # ------------------------------------------------------------------------------
@@ -292,20 +424,248 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std:setting-result_serializer
 CELERY_RESULT_SERIALIZER = "json"
-# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-time-limit
-# TODO: set to whatever value is adequate in your circumstances
-CELERY_TASK_TIME_LIMIT = 5 * 60
+# Límites por ejecución de una tarea (C-07). Las dos que pesan son el
+# difuminado (US-041/US-042), alrededor de 1,1 s por foto, y un intento de
+# comparación de cierres (US-015), que espera hasta
+# ``RESOLUTION_COMPARISON_TIMEOUT_SECONDS`` (30 s) al proveedor. Cada reintento
+# de la comparación es una ejecución nueva, así que el límite cubre un intento,
+# no la suma. El corte blando, al doble de ese timeout, deja margen para bajar
+# las imágenes y registrar el fallo; el duro llega 30 s después y mata a un
+# proceso trabado antes de que siga reteniendo memoria (847 MB en el pico de
+# una foto de 12 MP).
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-soft-time-limit
-# TODO: set to whatever value is adequate in your circumstances
 CELERY_TASK_SOFT_TIME_LIMIT = 60
+# https://docs.celeryq.dev/en/stable/userguide/configuration.html#task-time-limit
+CELERY_TASK_TIME_LIMIT = 90
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#beat-scheduler
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+# https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+# El scheduler es el de base de datos, así que esta tabla es el **default** con
+# el que arranca: django-celery-beat la sincroniza al levantar y después la
+# entrada se administra desde el admin. Se declara acá para que un despliegue
+# nuevo tenga la verificación diaria de US-041 andando sin un paso manual.
+CELERY_BEAT_SCHEDULE = {
+    "archive-stale-reports": {
+        "task": "urbancheck.reports.tasks.archive_stale_reports",
+        # Cada quince minutos, por lo mismo que la confirmación de abajo: el
+        # plazo es configurable desde que existe
+        # ``DJANGO_ARCHIVAL_INACTIVITY_DAYS``, y una corrida diaria dejaba el
+        # archivado automático **sin poder demostrarse** —había que fechar un
+        # reporte en el pasado y después esperar a la madrugada—.
+        #
+        # Corría a las 3:30 para no mover reportes en horario de uso del
+        # municipio. Esa razón no se sostiene para esta tarea: solo alcanza
+        # reportes *pendientes de validación* que nadie tocó en meses, que por
+        # definición no están en la cola de trabajo de nadie. Y el aviso al
+        # autor se lee mejor a las diez de la mañana que a las tres.
+        "schedule": crontab(minute="*/15"),
+    },
+    "confirm-resolved-reports": {
+        "task": "urbancheck.reports.tasks.confirm_resolved_reports",
+        # Cada quince minutos y no una vez al día: el plazo de objeción es
+        # configurable y la review lo baja a minutos, así que una corrida diaria
+        # dejaría la confirmación automática sin poder demostrarse.
+        "schedule": crontab(minute="*/15"),
+    },
+    "requeue-stale-pending-photos": {
+        "task": "urbancheck.anonymization.tasks.requeue_stale_pending_photos",
+        # El seguro contra el mensaje que el broker perdió (US-042). En la
+        # práctica no encuentra nada; el día que encuentre algo, es un reporte
+        # que no se habría publicado nunca.
+        "schedule": crontab(minute="*/15"),
+    },
+}
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-send-task-events
 CELERY_WORKER_SEND_TASK_EVENTS = True
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#std-setting-task_send_sent_event
 CELERY_TASK_SEND_SENT_EVENT = True
 # https://docs.celeryq.dev/en/stable/userguide/configuration.html#worker-hijack-root-logger
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+# UrbanCheck
+# ------------------------------------------------------------------------------
+# Municipalidad a la que se asocian los reportes nuevos (US-034). Vacío significa
+# "la única registrada"; se vuelve obligatorio cuando haya más de una.
+ACTIVE_MUNICIPALITY_ID = env.int("DJANGO_ACTIVE_MUNICIPALITY_ID", default=None)
+
+# Radio dentro del cual un validador puede confirmar un reporte en terreno
+# (US-036). Es un único parámetro y no una constante repartida por el código;
+# la verificación se hace siempre en el servidor, nunca en el dispositivo.
+VALIDATION_RADIUS_METERS = env.int("DJANGO_VALIDATION_RADIUS_METERS", default=50)
+
+# Radio dentro del cual un reporte activo de la misma categoría se considera el
+# mismo problema (US-026) y el nuevo no se crea (US-032). Absorbe el error del
+# GPS de un teléfono en la calle (10 a 20 m) sin unificar dos baches distintos
+# de la misma cuadra. Como el radio de US-036 y el umbral de US-040, es un
+# único parámetro y se lee en cada evaluación. El criterio completo vive en
+# ``urbancheck.reports.duplicates``.
+DUPLICATE_REPORT_RADIUS_METERS = env.int(
+    "DJANGO_DUPLICATE_REPORT_RADIUS_METERS",
+    default=30,
+)
+
+# Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
+# validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
+# trabajo: el conteo lo resuelve ``Report.confirmation_count()``.
+#
+# Va acá y no como constante en el código porque el escenario 7 pide poder
+# moverlo sin redeploy; el módulo lo lee en cada evaluación.
+COLLECTIVE_VALIDATION_THRESHOLD = env.int(
+    "DJANGO_COLLECTIVE_VALIDATION_THRESHOLD",
+    default=10,
+)
+
+# Días sin interacción tras los cuales un reporte pendiente de validación se
+# archiva solo (US-031).
+#
+# Cuenta desde la **última señal de vida** —creación, comentario o me gusta—, no
+# desde el alta: un reporte que alguien apoyó hace una semana no está
+# abandonado, por viejo que sea.
+#
+# Acá sí va en días y no en minutos, a diferencia de los otros plazos: el
+# archivado se demuestra fechando un reporte en el pasado, no esperando a que
+# venza.
+ARCHIVAL_INACTIVITY_DAYS = env.int("DJANGO_ARCHIVAL_INACTIVITY_DAYS", default=90)
+
+# Términos y condiciones y política de privacidad (RN-10). Viven en archivos del
+# repositorio, no en la base: ver ``urbancheck.users.legal``.
+LEGAL_DOCUMENTS_DIR = APPS_DIR / "legal"
+
+# Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
+#
+# El mapa muestra lo que pasa hoy; los resueltos acumulados de todos los meses
+# lo convierten en un registro histórico. Pasado el plazo el reporte **solo**
+# deja de dibujarse: sigue en el feed, en el detalle y en el panel, no se
+# archiva ni cambia de estado.
+#
+# **En minutos y no en días**, por lo mismo que la ventana de objeción: el
+# default son quince días y una demostración necesita poder bajarlo a un par de
+# minutos sin tocar código.
+MAP_RESOLVED_RETENTION_MINUTES = env.int(
+    "DJANGO_MAP_RESOLVED_RETENTION_MINUTES",
+    default=15 * 24 * 60,
+)
+
+# Ventana durante la cual el autor puede objetar el cierre de un operario antes
+# de que el reporte quede confirmado como Resuelto (US-047).
+#
+# **En minutos y no en días** a propósito: el default son siete días, pero la
+# demostración en la review necesita poder bajarlo a un par de minutos sin tocar
+# código, y un parámetro expresado en días no lo permite.
+RESOLUTION_OBJECTION_MINUTES = env.int(
+    "DJANGO_RESOLUTION_OBJECTION_MINUTES",
+    default=7 * 24 * 60,
+)
+
+# Estadísticas del panel (US-050): desde qué porcentaje de cierres apelados el
+# panel destaca el indicador. Es configurable porque qué es "mucho" lo decide
+# cada despliegue, no el código.
+STATS_APPEAL_ALERT_PERCENT = env.int("DJANGO_STATS_APPEAL_ALERT_PERCENT", default=20)
+
+# El enlace para compartir un reporte (US-030). Apunta a la ruta pública del
+# panel, ``/r/<token>``, que es también la que abre la app si está instalada.
+# En desarrollo conviene ``http://localhost:5173/r/{token}``.
+PUBLIC_REPORT_URL = env(
+    "DJANGO_PUBLIC_REPORT_URL",
+    default="https://urbancheck.com.ar/r/{token}",
+)
+# A dónde sigue una persona que abre ese enlace: la página pública del panel.
+# ``/r/<token>`` lo responde el backend con las etiquetas de vista previa para
+# las redes (Open Graph) y redirige acá. En producción el panel vive en
+# ``panel.<dominio>`` (C-04), así que va la URL absoluta
+# ``https://panel.<dominio>/reporte/{token}``; en desarrollo, en otro puerto:
+# ``http://localhost:5173/reporte/{token}``. El default relativo solo sirve si
+# el panel se sirve en la misma raíz que Django.
+PUBLIC_REPORT_PAGE_URL = env(
+    "DJANGO_PUBLIC_REPORT_PAGE_URL",
+    default="/reporte/{token}",
+)
+
+# Decimales de las coordenadas en la página pública de un reporte (N-06). Con
+# 3, unos 100 m. Con sesión, la app y el panel ven la ubicación exacta.
+PUBLIC_COORDINATE_DECIMALS = env.int("DJANGO_PUBLIC_COORDINATE_DECIMALS", default=3)
+
+# Con cuánta antelación se le avisa al autor que el plazo está por vencer.
+RESOLUTION_OBJECTION_WARNING_MINUTES = env.int(
+    "DJANGO_RESOLUTION_OBJECTION_WARNING_MINUTES",
+    default=24 * 60,
+)
+
+# Plazo para resolver una solicitud de revisión por dato personal visible
+# (US-043, RN-12). Corre desde la **recepción** de la solicitud; pasado el plazo
+# la bandeja del administrador la señala como fuera de plazo.
+#
+# **En minutos y no en horas**, por lo mismo que la ventana de objeción: el
+# default son 24 horas y una demostración necesita ver vencer una solicitud.
+PERSONAL_DATA_REVIEW_MINUTES = env.int(
+    "DJANGO_PERSONAL_DATA_REVIEW_MINUTES",
+    default=24 * 60,
+)
+
+# Comparación automática del antes y el después de un cierre (US-015).
+#
+# El cliente habla el dialecto de chat completions de OpenAI, que ofrecen Gemini,
+# Groq, OpenRouter y Ollama: cambiar de proveedor es cambiar estas variables. El
+# default es el free tier de Gemini en Google AI Studio.
+#
+# **Sin clave, la función queda apagada**: cada cierre se registra como
+# "comparación no disponible" y el circuito sigue igual. Es informativa y nunca
+# puede bloquear un cierre.
+# Qué servicio de visión se usa (ver ``urbancheck/reports/vision.py``). Vacío
+# es el proveedor nulo: no se compara nada y ninguna foto sale del servidor.
+# ``openai_compatible`` es el adaptador de chat completions (Gemini, Groq,
+# OpenRouter, Ollama), que usa las variables de abajo.
+VISION_PROVIDER = env("DJANGO_VISION_PROVIDER", default="")
+RESOLUTION_COMPARISON_API_KEY = env("DJANGO_RESOLUTION_COMPARISON_API_KEY", default="")
+RESOLUTION_COMPARISON_BASE_URL = env(
+    "DJANGO_RESOLUTION_COMPARISON_BASE_URL",
+    default="https://generativelanguage.googleapis.com/v1beta/openai/",
+)
+RESOLUTION_COMPARISON_MODEL = env(
+    "DJANGO_RESOLUTION_COMPARISON_MODEL",
+    default="gemini-3.6-flash",
+)
+# Reintentos ante fallos transitorios (timeout, 429, 5xx) antes de darla por no
+# disponible. Una respuesta fuera de formato no se reintenta.
+RESOLUTION_COMPARISON_MAX_RETRIES = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES",
+    default=3,
+)
+# Por debajo del ``CELERY_TASK_SOFT_TIME_LIMIT``: la tarea tiene que poder
+# registrar el fallo antes de que Celery la corte.
+RESOLUTION_COMPARISON_TIMEOUT_SECONDS = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_TIMEOUT_SECONDS",
+    default=30,
+)
+# Lado mayor con el que viajan las imágenes. Alcanza para ver un bache y ahorra
+# cuota del plan gratuito.
+RESOLUTION_COMPARISON_MAX_SIDE_PX = env.int(
+    "DJANGO_RESOLUTION_COMPARISON_MAX_SIDE_PX",
+    default=1024,
+)
+
+# ANONIMIZACIÓN DIFERIDA (US-042)
+# ------------------------------------------------------------------------------
+# Cuántas veces se reintenta una foto cuyo detector falló, y con qué espera
+# inicial entre intentos (se duplica en cada uno). Un fallo permanente —un
+# archivo que no se puede abrir— no se reintenta ninguna vez.
+ANONYMIZATION_MAX_RETRIES = env.int("DJANGO_ANONYMIZATION_MAX_RETRIES", default=3)
+ANONYMIZATION_RETRY_BASE_SECONDS = env.int(
+    "DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS",
+    default=30,
+)
+# A partir de cuánto una foto en cola se considera perdida y se reencola. Cubre
+# el mensaje que el broker nunca entregó: sin esto el reporte queda invisible
+# para siempre y ni siquiera falló, así que su autor no recibe ningún aviso.
+ANONYMIZATION_STALE_MINUTES = env.int("DJANGO_ANONYMIZATION_STALE_MINUTES", default=30)
+# Carpeta **no versionada** con el set de referencia de US-041: fotos reales con
+# rostros y patentes y su ``manifest.json`` de etiquetas. La leen el comando
+# ``benchmark_anonymization`` y los tests de detección, que se saltean si falta.
+# Nunca va dentro del control de versiones ni de la imagen de Docker.
+ANONYMIZATION_REFERENCE_SET = env(
+    "DJANGO_ANONYMIZATION_REFERENCE_SET",
+    default=str(BASE_DIR / "benchmark_data" / "anonymization"),
+)
+
 # django-allauth
 # ------------------------------------------------------------------------------
 ACCOUNT_ALLOW_REGISTRATION = env.bool("DJANGO_ACCOUNT_ALLOW_REGISTRATION", True)
@@ -315,31 +675,158 @@ ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]
 # https://docs.allauth.org/en/latest/account/configuration.html
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
+# Opcional a propósito (C-08, decisión del equipo del 22/10/2026): allauth
+# manda el correo de confirmación, pero no frena el ingreso. Con "mandatory",
+# si el SMTP de producción falla nadie puede registrarse, y el envío recién se
+# configura en C-02 sin un proveedor probado. Pasarlo a obligatorio exige,
+# además, la pantalla "Revisá tu correo" del flujo ``verify_email`` en la app y
+# que las cuentas de trabajo que crea el panel nazcan verificadas. Queda como
+# deuda técnica.
 # https://docs.allauth.org/en/latest/account/configuration.html
-ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+ACCOUNT_EMAIL_VERIFICATION = "optional"
 # https://docs.allauth.org/en/latest/account/configuration.html
 ACCOUNT_ADAPTER = "urbancheck.users.adapters.AccountAdapter"
 # https://docs.allauth.org/en/latest/account/forms.html
 ACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSignupForm"}
+ACCOUNT_SIGNUP_FORM_CLASS = "urbancheck.users.signup_forms.HeadlessUserSignupForm"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
 SOCIALACCOUNT_ADAPTER = "urbancheck.users.adapters.SocialAccountAdapter"
 # https://docs.allauth.org/en/latest/socialaccount/configuration.html
 SOCIALACCOUNT_FORMS = {"signup": "urbancheck.users.forms.UserSocialSignupForm"}
+# Límites de intentos (deuda de seguridad del Sprint 4). Formato de allauth:
+# ``cantidad/período/clave``, varios separados por coma; ``key`` es la cuenta
+# (el correo) e ``ip`` la IP del cliente. La ventana es deslizante: allauth
+# guarda la marca de cada intento en el cache y cuenta los del período.
+# https://docs.allauth.org/en/latest/account/rate_limits.html
+ACCOUNT_RATE_LIMITS = {
+    # 5 fallidos por cuenta cada 15 minutos, más un tope por IP contra quien
+    # prueba muchas cuentas a la vez. Un login correcto no borra el contador.
+    "login_failed": env(
+        "DJANGO_RATELIMIT_LOGIN_FAILED",
+        default="10/m/ip,5/15m/key",
+    ),
+    "reset_password": env(
+        "DJANGO_RATELIMIT_RESET_PASSWORD",
+        default="20/m/ip,3/h/key",
+    ),
+    # Reenvío del correo de confirmación: conserva la espera de 3 minutos
+    # entre envíos que trae allauth y le suma el tope por hora.
+    "confirm_email": env(
+        "DJANGO_RATELIMIT_CONFIRM_EMAIL",
+        default="1/3m/key,3/h/key",
+    ),
+    "signup": env("DJANGO_RATELIMIT_SIGNUP", default="20/h/ip"),
+}
+
+# django-allauth headless
+# -------------------------------------------------------------------------------
+# Solo la API (N-16): las páginas HTML de ``/accounts/`` eran una superficie que
+# ningún cliente usaba. Los enlaces de los correos van a ``HEADLESS_FRONTEND_URLS``.
+HEADLESS_ONLY = True
+# El payload de usuario del login incluye rol, municipalidad y el flag de
+# contraseña temporal, para que el panel decida el flujo sin una llamada extra.
+HEADLESS_ADAPTER = "urbancheck.users.adapters.HeadlessAdapter"
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+# Link enviado en el correo de recuperación de contraseña.
+# Es un https:// y no un esquema custom (urbancheck://), porque los clientes de
+# correo no rompen los enlaces https. Por defecto (prod) es el Universal Link
+# /reset-password, que abre la app de UrbanCheck cuando está instalada (ver
+# config/deeplink.py); sin la app, ese mismo enlace redirige a la página pública
+# del panel (``PASSWORD_RESET_PAGE_URL``). En dev/Expo Go, donde los Universal
+# Links no funcionan, se apunta al /reset-password del backend en la IP/LAN.
+ACCOUNT_RESET_PASSWORD_URL = env(
+    "DJANGO_ACCOUNT_RESET_PASSWORD_URL",
+    default="https://urbancheck.com.ar/reset-password?key={key}",
+)
+# Las páginas públicas del panel que completan los dos flujos desde el
+# navegador. En desarrollo: ``http://localhost:5173/...``.
+PASSWORD_RESET_PAGE_URL = env(
+    "DJANGO_PASSWORD_RESET_PAGE_URL",
+    default="https://panel.urbancheck.com.ar/restablecer-contrasena?key={key}",
+)
+EMAIL_CONFIRMATION_URL = env(
+    "DJANGO_EMAIL_CONFIRMATION_URL",
+    default="https://panel.urbancheck.com.ar/confirmar-correo?key={key}",
+)
+HEADLESS_FRONTEND_URLS = {
+    "account_reset_password_from_key": ACCOUNT_RESET_PASSWORD_URL,
+    "account_confirm_email": EMAIL_CONFIRMATION_URL,
+}
+
+# Universal Links (iOS) / App Links (Android)
+# -------------------------------------------------------------------------------
+# Identificadores usados por los archivos de asociación servidos en
+# /.well-known/ (ver config/deeplink.py). Completar al generar el build:
+#   - IOS_UNIVERSAL_LINK_APP_ID: "<APPLE_TEAM_ID>.<bundleIdentifier>"
+#   - ANDROID_SHA256_CERT_FINGERPRINTS: huella(s) SHA256 del certificado de firma
+#     (se obtiene con `eas credentials` o `keytool`).
+IOS_UNIVERSAL_LINK_APP_ID = env(
+    "IOS_UNIVERSAL_LINK_APP_ID",
+    default="TEAMID.com.anonymous.urbancheck",
+)
+ANDROID_APP_PACKAGE = env(
+    "ANDROID_APP_PACKAGE",
+    default="com.anonymous.urbancheck",
+)
+ANDROID_SHA256_CERT_FINGERPRINTS = env.list(
+    "ANDROID_SHA256_CERT_FINGERPRINTS",
+    default=[],
+)
+
+# Geocodificación (Nominatim / OpenStreetMap)
+# -------------------------------------------------------------------------------
+# Convierte direcciones escritas a mano en coordenadas. El servidor público es
+# gratuito pero exige un User-Agent identificable con datos de contacto y un
+# máximo de 1 req/seg. Para producción con volumen conviene self-hostear Nominatim
+# y apuntar NOMINATIM_URL a esa instancia.
+NOMINATIM_URL = env("NOMINATIM_URL", default="https://nominatim.openstreetmap.org/search")
+NOMINATIM_REVERSE_URL = env(
+    "NOMINATIM_REVERSE_URL",
+    default="https://nominatim.openstreetmap.org/reverse",
+)
+NOMINATIM_USER_AGENT = env(
+    "NOMINATIM_USER_AGENT",
+    default="UrbanCheck/1.0 (+https://urbancheck.com.ar)",
+)
+# Restringe los resultados a estos países (códigos ISO separados por coma). Vacío = global.
+NOMINATIM_COUNTRYCODES = env("NOMINATIM_COUNTRYCODES", default="ar")
 
 # django-rest-framework
 # -------------------------------------------------------------------------------
 # django-rest-framework - https://www.django-rest-framework.org/api-guide/settings/
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
+        "allauth.headless.contrib.rest_framework.authentication.XSessionTokenAuthentication",
         "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    # Solo lo declaramos como backend disponible: las vistas que filtran lo
+    # activan explícitamente con ``filter_backends``. El feed ciudadano sigue
+    # resolviendo sus filtros a mano (ver urbancheck/reports/api/filters.py).
+    "DEFAULT_FILTER_BACKENDS": [],
+    # El ``429`` en castellano y con código estable (``throttled``).
+    "EXCEPTION_HANDLER": "urbancheck.common.throttling.api_exception_handler",
+    # Límites por acción: las vistas eligen alcance en ``get_throttles`` (ver
+    # ``urbancheck.common.throttling``). Por usuario; sin sesión, por IP.
+    "DEFAULT_THROTTLE_RATES": {
+        "reports": env("DJANGO_THROTTLE_REPORTS", default="20/hour"),
+        "comments": env("DJANGO_THROTTLE_COMMENTS", default="60/hour"),
+        "complaints": env("DJANGO_THROTTLE_COMPLAINTS", default="10/day"),
+        "privacy_requests": env("DJANGO_THROTTLE_PRIVACY_REQUESTS", default="5/day"),
+        # La página pública de un reporte compartido (US-030): sin sesión, por IP.
+        "public_reports": env("DJANGO_THROTTLE_PUBLIC_REPORTS", default="120/hour"),
+        # La baja de la cuenta (N-09): pide la contraseña, así que también frena
+        # a quien la prueba con una sesión robada.
+        "account_deletion": env("DJANGO_THROTTLE_ACCOUNT_DELETION", default="5/hour"),
+    },
+    "NUM_PROXIES": NUM_PROXIES,
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup
-CORS_URLS_REGEX = r"^/api/.*$"
+CORS_URLS_REGEX = r"^/(api|_allauth)/.*$"
 
 # By Default swagger ui is available only to admin user(s). You can change permission classes to change that
 # See more configuration options at https://drf-spectacular.readthedocs.io/en/latest/settings.html#settings
@@ -349,6 +836,19 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "SCHEMA_PATH_PREFIX": "/api/",
+    # Swagger UI desde los estáticos propios y no desde jsDelivr (N-13).
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    # Nombres propios para los catálogos que comparten nombre de campo
+    # (``status``) o se usan en más de uno (``previous_status``): sin esto el
+    # generador inventa nombres como ``Status614Enum``.
+    "ENUM_NAME_OVERRIDES": {
+        "ReportStatusEnum": "urbancheck.reports.models.Report.Status",
+        "ComplaintStatusEnum": "urbancheck.reports.models.ReportComplaint.Status",
+        "ComparisonStatusEnum": "urbancheck.reports.models.ResolutionComparison.Status",
+        "AppealStatusEnum": "urbancheck.reports.models.ResolutionAppeal.Status",
+        "ModerationOutcomeEnum": "urbancheck.reports.models.ModerationDecision.Outcome",
+    },
 }
 # Your stuff...
 # ------------------------------------------------------------------------------

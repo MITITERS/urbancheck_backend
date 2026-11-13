@@ -1,0 +1,9 @@
+# python manage.py check --deploy --fail-level WARNING (configuración de producción)
+# Fecha: 2026-10-15 10:27 -0300 · Django 6.0.9 · rama feature/sprint-5
+# Entorno: DJANGO_SETTINGS_MODULE=config.settings.production, DJANGO_SECRET_KEY aleatoria de 86 caracteres,
+#          DJANGO_ADMIN_URL=gestion-9f2c/ (ejemplo), DJANGO_SECURITY_LOG_FILE vacío, sin DJANGO_ALLOWED_HOSTS
+#          (default de production.py: urbancheck.com.ar); el resto, defaults de production.py.
+# Primera corrida: 0 advertencias de seguridad (security.W0xx) y 11 de drf-spectacular (esquema
+# OpenAPI: tipos de id, nombres de enums y tres APIView sin serializer), todas corregidas.
+
+System check identified no issues (0 silenced).

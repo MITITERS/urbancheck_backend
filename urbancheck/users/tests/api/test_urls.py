@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+from django.urls import NoReverseMatch
+from django.urls import Resolver404
 from django.urls import resolve
 from django.urls import reverse
 
@@ -16,9 +19,12 @@ def test_user_detail(user: User):
     assert resolve(f"/api/users/{user.pk}/").view_name == "api:user-detail"
 
 
-def test_user_list():
-    assert reverse("api:user-list") == "/api/users/"
-    assert resolve("/api/users/").view_name == "api:user-list"
+def test_there_is_no_user_list():
+    """C-01: el listado de usuarios no existe."""
+    with pytest.raises(NoReverseMatch):
+        reverse("api:user-list")
+    with pytest.raises(Resolver404):
+        resolve("/api/users/")
 
 
 def test_user_me():

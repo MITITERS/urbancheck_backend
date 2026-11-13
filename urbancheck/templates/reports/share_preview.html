@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <meta name="description" content="{{ description }}">
+    {# Open Graph: lo que leen WhatsApp, Facebook y LinkedIn para la tarjeta. #}
+    <meta property="og:site_name" content="{{ site_name }}">
+    <meta property="og:type" content="article">
+    <meta property="og:locale" content="es_AR">
+    <meta property="og:title" content="{{ title }}">
+    <meta property="og:description" content="{{ description }}">
+    {% if url %}<meta property="og:url" content="{{ url }}">{% endif %}
+    {% if image %}
+    <meta property="og:image" content="{{ image }}">
+    <meta property="og:image:alt" content="{{ title }}">
+    {% endif %}
+    {# X (Twitter) usa sus propias etiquetas, con OG como respaldo. #}
+    <meta name="twitter:card" content="{% if image %}summary_large_image{% else %}summary{% endif %}">
+    <meta name="twitter:title" content="{{ title }}">
+    <meta name="twitter:description" content="{{ description }}">
+    {% if image %}<meta name="twitter:image" content="{{ image }}">{% endif %}
+    <meta name="robots" content="noindex">
+    {# Una persona sigue de largo a la página completa del panel; los bots no
+       ejecutan JavaScript y se quedan con las etiquetas de arriba. #}
+    <script>window.location.replace("{{ page_url|escapejs }}");</script>
+  </head>
+  <body>
+    <p><a href="{{ page_url }}">{{ title }}</a></p>
+  </body>
+</html>

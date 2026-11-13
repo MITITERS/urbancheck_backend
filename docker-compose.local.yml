@@ -74,6 +74,11 @@ services:
     <<: *django
     image: urbancheck_local_flower
     container_name: urbancheck_local_flower
+    # Publicado en 8555 y no en 5555: adb escanea los puertos 5555-5585
+    # buscando emuladores de Android, se encuentra a flower escuchando ahí y
+    # registra un `emulator-5554` fantasma que nunca responde. Con eso,
+    # `expo start` aborta al intentar hablarle. Adentro del contenedor flower
+    # sigue en 5555; solo cambia por dónde se lo publica.
     ports:
-      - '5555:5555'
+      - '8555:5555'
     command: /start-flower

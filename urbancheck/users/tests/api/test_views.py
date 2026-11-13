@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 import pytest
+from rest_framework.test import APIClient
 from rest_framework.test import APIRequestFactory
 
 from urbancheck.users.api.views import UserViewSet
+from urbancheck.users.tests.factories import MunicipalAgentFactory
+from urbancheck.users.tests.factories import PlatformAdminFactory
+from urbancheck.users.tests.factories import UserFactory
 
 if TYPE_CHECKING:
     from urbancheck.users.models import User
@@ -25,7 +30,7 @@ class TestUserViewSet:
 
         assert user in view.get_queryset()
 
-    def test_me(self, user: User, api_rf: APIRequestFactory):
+    def test_me_get(self, user: User, api_rf: APIRequestFactory):
         view = UserViewSet()
         request = api_rf.get("/fake-url/")
         request.user = user
@@ -34,7 +39,63 @@ class TestUserViewSet:
 
         response = view.me(request)  # type: ignore[call-arg]
 
-        assert response.data == {
-            "url": f"http://testserver/api/users/{user.pk}/",
-            "name": user.name,
-        }
+        assert response.data["email"] == user.email
+        assert response.data["name"] == user.name
+        assert response.data["role"] == user.role
+
+
+class TestUserMePatch:
+    def test_patch_name(self, user: User, db):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        response = client.patch(
+            "/api/users/me/",
+            data={"name": "Nuevo Nombre"},
+            format="multipart",
+        )
+        assert response.status_code == HTTPStatus.OK
+        user.refresh_from_db()
+        assert user.name == "Nuevo Nombre"
+
+    def test_patch_email_ignored(self, user: User, db):
+        original_email = user.email
+        client = APIClient()
+        client.force_authenticate(user=user)
+        response = client.patch(
+            "/api/users/me/",
+            data={"email": "hacker@example.com", "name": user.name},
+            format="multipart",
+        )
+        assert response.status_code == HTTPStatus.OK
+        user.refresh_from_db()
+        assert user.email == original_email
+
+
+class TestThereIsNoUserListing:
+    """C-01 (A01 de OWASP 2025): ``GET /api/users/`` exponía el correo, el rol y
+    la municipalidad de todas las cuentas a cualquier sesión. Ningún cliente lo
+    usaba, así que no existe para ningún rol."""
+
+    @pytest.mark.parametrize(
+        "factory",
+        [UserFactory, MunicipalAgentFactory, PlatformAdminFactory],
+    )
+    def test_no_role_can_list_the_users(self, factory, db):
+        other = UserFactory.create()
+        client = APIClient()
+        client.force_authenticate(user=factory.create())
+
+        response = client.get("/api/users/")
+
+        assert response.status_code == HTTPStatus.NOT_FOUND
+        assert other.email not in response.content.decode()
+
+    def test_another_users_detail_stays_public_without_the_email(self, user, db):
+        other = UserFactory.create(is_public=True)
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.get(f"/api/users/{other.pk}/")
+
+        assert response.status_code == HTTPStatus.OK
+        assert "email" not in response.data

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from factory import Faker
+from factory import LazyAttribute
+from factory import SubFactory
 from factory import post_generation
 from factory.django import DjangoModelFactory
 
+from urbancheck.municipalities.tests.factories import MunicipalityFactory
+from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.users.models import User
 
 
@@ -33,3 +37,31 @@ class UserFactory(DjangoModelFactory[User]):
         model = User
         django_get_or_create = ["email"]
         skip_postgeneration_save = True
+
+
+class PlatformAdminFactory(UserFactory):
+    """Administrador de la plataforma: sin municipalidad, opera sobre todas."""
+
+    role = User.Role.ADMIN_PLATAFORMA
+
+
+class MunicipalAgentFactory(UserFactory):
+    role = User.Role.AGENTE_MUNICIPAL
+    municipality = SubFactory(MunicipalityFactory)
+
+
+class ValidatorFactory(UserFactory):
+    role = User.Role.VALIDADOR
+    municipality = SubFactory(MunicipalityFactory)
+
+
+class OperatorFactory(UserFactory):
+    """Operario de un área operativa (US-044).
+
+    La municipalidad se toma del área para que las dos coincidan: el modelo lo
+    exige, y una factory que las dejara distintas fallaría al validar.
+    """
+
+    role = User.Role.OPERARIO
+    operational_area = SubFactory(OperationalAreaFactory)
+    municipality = LazyAttribute(lambda o: o.operational_area.municipality)

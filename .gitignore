@@ -276,3 +276,10 @@ urbancheck/media/
 .env
 .envs/*
 !.envs/.local/
+
+# US-042: originales a la espera del difuminado. Nunca se versionan ni se copian a la imagen.
+pending_media/
+
+# US-041: set de referencia del benchmark y de los tests de detección. Son fotos
+# reales de personas, patentes y la vía pública: nunca se versionan.
+benchmark_data/
