@@ -23,6 +23,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.middleware.csp import ContentSecurityPolicyMiddleware
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -184,3 +185,24 @@ def _has_lockout_error(response: HttpResponse) -> bool:
         isinstance(error, dict) and error.get("code") in LOCKOUT_ERROR_CODES
         for error in errors
     )
+
+
+#: Rutas que llevan la política de contenido de ``SECURE_CSP`` (C-05), además
+#: del admin, cuya ruta sale de ``ADMIN_URL``.
+CSP_PATHS = ("/api/docs/",)
+
+
+class AdminAndDocsCSPMiddleware(ContentSecurityPolicyMiddleware):
+    """``ContentSecurityPolicyMiddleware`` de Django, acotado al admin y a Swagger.
+
+    Son las únicas pantallas HTML de administración que sirve el backend. El
+    resto no la lleva: la API responde JSON, y la vista previa de un reporte
+    compartido (US-030) redirige con un script inline que la política
+    bloquearía. Ampliarla a otra página es sumar su prefijo a ``CSP_PATHS``.
+    """
+
+    def process_response(self, request, response):
+        prefixes = (f"/{settings.ADMIN_URL}", *CSP_PATHS)
+        if not request.path.startswith(prefixes):
+            return response
+        return super().process_response(request, response)

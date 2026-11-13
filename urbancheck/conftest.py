@@ -31,6 +31,20 @@ def _media_storage(settings, tmpdir) -> None:
 
 
 @pytest.fixture(autouse=True)
+def legal_documents_dir(settings, tmp_path):
+    """Los tests arrancan sin términos publicados, aunque el repo tenga una versión.
+
+    Si vieran los archivos reales, cada vecino de cada test quedaría bloqueado
+    hasta aceptarlos (RN-10) y medio repositorio fallaría con 403. El que
+    ejercita la aceptación publica en esta carpeta con ``publish_legal``.
+    """
+    directory = tmp_path / "legal"
+    directory.mkdir()
+    settings.LEGAL_DOCUMENTS_DIR = directory
+    return directory
+
+
+@pytest.fixture(autouse=True)
 def _no_geocoding_network(monkeypatch) -> None:
     """Impide que los tests golpeen la red real de Nominatim ni la de Georef.
 

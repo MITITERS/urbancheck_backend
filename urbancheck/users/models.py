@@ -7,6 +7,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models import BooleanField
 from django.db.models import CharField
+from django.db.models import DateTimeField
 from django.db.models import EmailField
 from django.db.models import ForeignKey
 from django.db.models import TextChoices
@@ -17,6 +18,7 @@ from urbancheck.anonymization.fields import MetadataFreeImageField
 from urbancheck.municipalities.models import PHONE_INVALID_MESSAGE
 from urbancheck.municipalities.models import PHONE_REGEX
 
+from .legal import current_legal_documents
 from .managers import UserManager
 
 
@@ -107,6 +109,32 @@ class User(AbstractUser):
         _("must change password"),
         default=False,
         help_text=_("El usuario todavía usa la contraseña temporal del alta."),
+    )
+    # Cuándo vio el tutorial de bienvenida (US-051). Nulo mientras no lo vio. La
+    # marca vive en la cuenta y no en el dispositivo: reinstalar la app o
+    # cambiar de teléfono no lo vuelve a mostrar. Es una fecha y no un booleano
+    # porque dice cuándo se vio y no cuesta más.
+    onboarding_completed_at = DateTimeField(
+        _("onboarding completed at"),
+        null=True,
+        blank=True,
+        help_text=_("Cuándo terminó u omitió el tutorial de bienvenida."),
+    )
+    # Aceptación de los términos y condiciones (RN-10, C-23). Se guarda qué
+    # versión se aceptó y no solo si se aceptó: cuando se publica una versión
+    # nueva, la cuenta tiene que volver a aceptarla. Vacía es "nunca aceptó".
+    terms_version = CharField(
+        _("terms version"),
+        max_length=20,
+        blank=True,
+        default="",
+        help_text=_("Versión de los términos y condiciones que aceptó."),
+    )
+    terms_accepted_at = DateTimeField(
+        _("terms accepted at"),
+        null=True,
+        blank=True,
+        help_text=_("Cuándo aceptó esa versión de los términos y condiciones."),
     )
     # Teléfono de contacto. Obligatorio en el alta de un operario (US-044) y
     # vacío para el resto: nadie más lo carga hoy, así que el campo es opcional
@@ -354,6 +382,20 @@ class User(AbstractUser):
         lo resuelve el panel con ``must_change_password``.
         """
         return self.is_panel_user and self.is_work_account_active
+
+    @property
+    def must_accept_terms(self) -> bool:
+        """Si tiene que aceptar los términos vigentes antes de participar (RN-10).
+
+        Solo el vecino: es quien se registra solo y publica. Las cuentas de
+        trabajo las da de alta el municipio o la plataforma, que responden por
+        ellas. Sin términos publicados no hay nada que aceptar, así que nadie
+        queda trabado mientras el equipo no cargue el texto.
+        """
+        if self.role != self.Role.CIUDADANO:
+            return False
+        current = current_legal_documents()
+        return current is not None and self.terms_version != current.version
 
     def get_absolute_url(self) -> str:
         """Get URL for user's detail view.

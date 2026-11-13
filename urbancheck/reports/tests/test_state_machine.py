@@ -13,12 +13,15 @@ from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.services import ReasonRequiredError
 from urbancheck.reports.services import TransitionError
 from urbancheck.reports.services import apply_transition
+from urbancheck.reports.state_machine import MODERATION_ORIGINS
 from urbancheck.reports.state_machine import TRANSITIONS
 from urbancheck.reports.state_machine import Actor
+from urbancheck.reports.state_machine import Origin
 from urbancheck.reports.state_machine import is_valid
 from urbancheck.reports.state_machine import transitions_from
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.reports.tests.factories import area_for
+from urbancheck.reports.tests.factories import prepare_for
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import ValidatorFactory
 
@@ -37,14 +40,29 @@ def test_only_declared_pairs_are_valid(source, target):
 
 
 def test_final_statuses_have_no_way_out():
+    """Ninguna salida por la gestión normal.
+
+    Cancelado tiene una sola: la restitución de un descarte por moderación
+    (US-049), que ejecuta el administrador o el agente al hacer lugar a una
+    apelación. El validador y el operario no tienen ninguna.
+    """
     for status in (Report.Status.RESUELTO, Report.Status.CANCELADO):
-        assert transitions_from(status) == ()
+        for actor in (Actor.MUNICIPAL_AGENT, Actor.VALIDATOR, Actor.OPERATOR):
+            assert not [
+                t
+                for t in transitions_from(status, actor)
+                if t.origin not in MODERATION_ORIGINS
+            ]
+    assert {t.origin for t in transitions_from(Report.Status.CANCELADO)} == {
+        Origin.REVERSION_MODERACION,
+    }
 
 
 class TestApplyTransition:
     @pytest.mark.parametrize("transition", TRANSITIONS, ids=lambda t: t.operation)
     def test_every_declared_transition_runs(self, transition):
         report = ReportFactory.create(status=transition.source)
+        prepare_for(transition, report)
         # La transición del sistema (US-031) no tiene usuario detrás.
         if transition.actor == Actor.SYSTEM:
             user = None

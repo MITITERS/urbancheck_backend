@@ -5,9 +5,13 @@
 # regenera en el mismo PR. Con `pip`, Dependabot tocaría `pyproject.toml` y
 # dejaría el lock desfasado.
 
+# Todos los PR van contra `develop` (C-16): `main` recibe solo releases, y un
+# PR de dependencias contra `main` se saltea `develop` y su CI.
+
 version: 2
 updates:
   - package-ecosystem: 'github-actions'
+    target-branch: 'develop'
     directory: '/'
     schedule:
       interval: 'weekly'
@@ -17,6 +21,7 @@ updates:
           - '*'
 
   - package-ecosystem: 'uv'
+    target-branch: 'develop'
     directory: '/'
     schedule:
       interval: 'weekly'
@@ -27,6 +32,7 @@ updates:
           - 'patch'
 
   - package-ecosystem: 'docker'
+    target-branch: 'develop'
     directories:
       - 'compose/local/django/'
       - 'compose/local/docs/'
@@ -46,6 +52,7 @@ updates:
           - '*'
 
   - package-ecosystem: 'docker'
+    target-branch: 'develop'
     directories:
       - 'compose/production/postgres/'
       - 'compose/production/traefik/'
@@ -54,6 +61,7 @@ updates:
       interval: 'weekly'
 
   - package-ecosystem: 'docker-compose'
+    target-branch: 'develop'
     directories:
       - '/'
     schedule:

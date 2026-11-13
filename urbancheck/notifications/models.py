@@ -52,6 +52,13 @@ class Notification(models.Model):
         # reporte, el operario que cerró o quien apeló— con la invitación a
         # volver a cargarla: es el único camino que le queda.
         IMAGEN_NO_PROCESADA = "imagen_no_procesada", "No pudimos procesar la imagen"
+        # El administrador de la plataforma no hizo lugar a la apelación del
+        # autor contra un descarte por moderación (US-049). Si hace lugar, el
+        # aviso es el del cambio de estado: el reporte vuelve a publicarse.
+        APELACION_MODERACION_RECHAZADA = (
+            "apelacion_moderacion_rechazada",
+            "Apelación rechazada",
+        )
 
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -66,7 +73,8 @@ class Notification(models.Model):
         blank=True,
         related_name="notifications_sent",
     )
-    kind = models.CharField(max_length=30, choices=Kind.choices)
+    # 50 y no 30 (C-12): ``apelacion_moderacion_rechazada`` ya ocupaba los 30.
+    kind = models.CharField(max_length=50, choices=Kind.choices)
     report = models.ForeignKey(
         "reports.Report",
         on_delete=models.CASCADE,
@@ -118,7 +126,8 @@ class NotificationPreference(models.Model):
         on_delete=models.CASCADE,
         related_name="notification_preferences",
     )
-    kind = models.CharField(max_length=30, choices=Notification.Kind.choices)
+    # El mismo catálogo que ``Notification.kind``, con el mismo largo (C-12).
+    kind = models.CharField(max_length=50, choices=Notification.Kind.choices)
     enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 

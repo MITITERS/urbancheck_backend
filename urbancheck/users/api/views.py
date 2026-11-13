@@ -1,27 +1,39 @@
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
+from rest_framework.generics import RetrieveAPIView
 from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.mixins import UpdateModelMixin
 from rest_framework.parsers import JSONParser
 from rest_framework.parsers import MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.common.throttling import ScopedThrottle
+from urbancheck.users.account_deletion import delete_citizen_account
+from urbancheck.users.legal import LegalDocuments
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 
+from .permissions import IsCitizen
 from .permissions import IsPanelUser
 from .permissions import IsPlatformAdmin
 from .serializers import AdminValidatorCreateSerializer
+from .serializers import LegalDocumentsSerializer
 from .serializers import MunicipalAgentCreateSerializer
 from .serializers import MunicipalAgentSerializer
 from .serializers import OperatorCreateSerializer
 from .serializers import OperatorSerializer
 from .serializers import OperatorUpdateSerializer
 from .serializers import PublicUserSerializer
+from .serializers import TermsAcceptanceSerializer
 from .serializers import UserSerializer
 from .serializers import ValidatorCreateSerializer
 from .serializers import ValidatorSerializer
@@ -108,7 +120,15 @@ def filter_by_state(queryset, query_params):
     return queryset
 
 
-class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
+class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
+    """Perfil propio (``me``) y perfil público de otro usuario.
+
+    No hay listado (C-01): ``GET /api/users/`` devolvía el correo, el rol y la
+    municipalidad de todas las cuentas a cualquier sesión, y ningún cliente lo
+    usaba. Las cuentas de trabajo se listan en sus propios endpoints, acotados
+    por rol y jurisdicción.
+    """
+
     serializer_class = UserSerializer
     queryset = User.objects.all()
     lookup_field = "pk"
@@ -134,12 +154,19 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
             serializer = PublicUserSerializer(instance, context={"request": request})
         return Response(serializer.data)
 
+    def get_throttles(self):
+        if getattr(self, "action", None) == "me" and self.request.method == "DELETE":
+            return [ScopedThrottle("account_deletion")]
+        return super().get_throttles()
+
     @action(
         detail=False,
-        methods=["get", "patch"],
+        methods=["get", "patch", "delete"],
         parser_classes=[MultiPartParser, JSONParser],
     )
     def me(self, request):
+        if request.method == "DELETE":
+            return self._delete_account(request)
         if request.method == "PATCH":
             serializer = UserSerializer(
                 request.user,
@@ -152,6 +179,96 @@ class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericV
             return Response(status=status.HTTP_200_OK, data=serializer.data)
         serializer = UserSerializer(request.user, context={"request": request})
         return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+    def _delete_account(self, request) -> Response:
+        """Baja de la cuenta por su titular (N-09), confirmada con la contraseña.
+
+        Solo para vecinos: una cuenta de trabajo no se borra a sí misma, porque
+        su nombre es parte del historial de gestión; sigue con la baja lógica
+        desde el panel. Qué se borra y qué se conserva está en
+        ``urbancheck.users.account_deletion``.
+        """
+        user = request.user
+        if user.role in User.WORK_ROLES:
+            msg = (
+                "Una cuenta de trabajo no se borra desde acá: la da de baja el "
+                "administrador de la plataforma."
+            )
+            raise PermissionDenied(msg)
+        password = request.data.get("password") or ""
+        if not password or not user.check_password(password):
+            raise ValidationError({"password": ["La contraseña no es correcta."]})
+        delete_citizen_account(user, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/onboarding",
+        permission_classes=[IsAuthenticated, IsCitizen],
+    )
+    def onboarding(self, request):
+        """Marca el tutorial de bienvenida como visto (US-051).
+
+        Idempotente: la fecha se escribe solo si todavía estaba vacía, en el
+        mismo ``UPDATE``, así una segunda llamada —el reintento de la app tras
+        un error de red, o dos dispositivos a la vez— no pisa la original.
+        Terminar y omitir llaman a lo mismo: el tutorial queda visto igual.
+        """
+        User.objects.filter(
+            pk=request.user.pk,
+            onboarding_completed_at__isnull=True,
+        ).update(onboarding_completed_at=timezone.now())
+        request.user.refresh_from_db(fields=["onboarding_completed_at"])
+        serializer = UserSerializer(request.user, context={"request": request})
+        return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/accept-terms",
+        permission_classes=[IsAuthenticated, IsCitizen],
+        serializer_class=TermsAcceptanceSerializer,
+    )
+    def accept_terms(self, request):
+        """Registra que el vecino aceptó los términos vigentes (RN-10, C-23).
+
+        Pide la versión que leyó: si se publicó otra mientras tanto, responde
+        ``400`` y la app vuelve a mostrar el texto. Aceptar de nuevo la misma
+        versión no cambia la fecha original.
+        """
+        serializer = TermsAcceptanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.validated_data["version"]
+        pending = User.objects.filter(pk=request.user.pk).exclude(
+            terms_version=version,
+        )
+        pending.update(terms_version=version, terms_accepted_at=timezone.now())
+        request.user.refresh_from_db(fields=["terms_version", "terms_accepted_at"])
+        data = UserSerializer(request.user, context={"request": request}).data
+        return Response(status=status.HTTP_200_OK, data=data)
+
+
+NO_TERMS_MESSAGE = "Todavía no hay términos y condiciones publicados."
+
+
+class CurrentTermsView(RetrieveAPIView):
+    """Los términos y la política de privacidad vigentes (RN-10, C-23).
+
+    Sin sesión: la app los muestra en el registro, antes de que exista la
+    cuenta. ``404`` mientras no haya ninguna versión publicada.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = LegalDocumentsSerializer
+
+    def get_object(self) -> LegalDocuments:
+        terms = current_legal_documents()
+        if terms is None:
+            raise NotFound(NO_TERMS_MESSAGE)
+        return terms
 
 
 class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):

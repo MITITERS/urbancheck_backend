@@ -124,6 +124,9 @@ class PrivacyRequestSerializer(serializers.ModelSerializer):
         """
         field = obj.target.photo
         url = None
+        # La ven el admin y el agente de la municipalidad (pedido del usuario del
+        # 21/10): los dos tienen que ver lo denunciado para entender la
+        # solicitud. Decidir sigue siendo del admin.
         if field and field.name == obj.image_name:
             request = self.context.get("request")
             url = request.build_absolute_uri(field.url) if request else field.url

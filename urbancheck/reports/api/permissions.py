@@ -37,6 +37,26 @@ class CanDeleteComment(BasePermission):
         return request.user.id in {obj.author_id, obj.report.author_id}
 
 
+TERMS_NOT_ACCEPTED_MESSAGE = (
+    "Antes de participar tenés que aceptar los términos y condiciones vigentes."
+)
+
+
+class HasAcceptedTerms(BasePermission):
+    """Reportar, comentar y dar me gusta piden los términos vigentes aceptados (RN-10).
+
+    Va aparte de ``ParticipatesAsCitizen`` a propósito: aquella es una regla
+    del rol, y esta del estado de la cuenta, con su propio mensaje. La app ya
+    frena al vecino en la puerta; esto cubre al cliente que no lo haga.
+    """
+
+    message = TERMS_NOT_ACCEPTED_MESSAGE
+
+    def has_permission(self, request, view) -> bool:
+        user = request.user
+        return bool(user and user.is_authenticated and not user.must_accept_terms)
+
+
 class ParticipatesAsCitizen(BasePermission):
     """Reportar, comentar y dar me gusta: solo las cuentas de vecino.
 

@@ -209,7 +209,8 @@ def test_the_panel_never_serves_an_image_that_is_not_public(report, agent, how):
     """CP-VIS-06: el panel lista el reporte, pero nunca una imagen no pública.
 
     Se exceptúan cancelado y archivado: su imagen está difuminada y es parte de
-    lo que el agente gestiona.
+    lo que el agente gestiona. Y la revisión por dato personal: el agente la ve
+    para resolverla (pedido del usuario del 21/10).
     """
     make_invisible(report, how)
 
@@ -220,5 +221,5 @@ def test_the_panel_never_serves_an_image_that_is_not_public(report, agent, how):
 
     assert listed
     assert "photo_pending" not in detail
-    if how not in {"cancelado", "archivado"}:
+    if how not in {"cancelado", "archivado", "revision_dato_personal"}:
         assert detail["photo"] is None

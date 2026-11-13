@@ -27,31 +27,22 @@ Do not work directly on:
 - `main`
 - `develop`
 
-Create all work branches from `develop`.
+This is the flow the team actually uses since Sprint 1, the same in the three
+repositories (C-20):
 
-Branch naming:
-
-```text
-feature/US-<number>-<short-description>
-release/<version>
-hotfix/<short-description>
-```
-
-Examples:
-
-```text
-feature/US-001-user-registration
-feature/US-002-login
-feature/US-003-create-report
-release/v1.0
-hotfix/fix-login-error
-```
-
-If the task has no user story, use:
-
-```text
-feature/US-000-technical-task
-```
+- Each sprint is worked on `feature/sprint-N`, branched from `develop`. Focused
+  fixes during a sprint may go on `fix/<id>` branches that come out of the
+  sprint branch and are merged back into it.
+- When the sprint closes, a PR from `feature/sprint-N` to `develop`, merged
+  with a merge commit (no squash, no rebase) once CI is green.
+- That merge on `develop` gets an annotated tag `sprint-N`. Tags are pushed one
+  by one (`git push origin sprint-N`), never with `--tags`.
+- `main` only receives releases: `release/x.y.z` branches from `develop`, is
+  merged into `main`, tagged `vx.y.z` and merged back into `develop`. A
+  `hotfix/<short-description>` branches from `main` and goes back to `main`
+  and `develop`.
+- Published history is never rewritten: no force push, no rebase of remote
+  branches, no amend of pushed commits.
 
 ## Commit rules
 
@@ -93,7 +84,7 @@ final commit
 
 ## Pull Request rules
 
-Feature branches must open Pull Requests into `develop`.
+Sprint branches (`feature/sprint-N`) open Pull Requests into `develop`.
 
 Release branches must merge into `main` and then back into `develop`.
 
@@ -164,7 +155,7 @@ uv run mypy urbancheck
 
 Check that:
 
-- The branch name follows the project convention.
+- The work is on the current `feature/sprint-N` branch (or a `fix/<id>` off it).
 - The change is limited to the requested task.
 - The code follows the existing project style.
 - Tests were added or updated when needed.

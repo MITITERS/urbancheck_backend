@@ -21,7 +21,10 @@ COMPARISON_RETRY_BASE_SECONDS = 30
 
 @app.task()
 def archive_stale_reports() -> dict[str, int]:
-    """Verificación diaria del archivado por inactividad (US-031).
+    """Verificación del archivado por inactividad (US-031), cada 15 minutos.
+
+    La frecuencia la fija ``CELERY_BEAT_SCHEDULE``: corre cada quince minutos y
+    no una vez por día, para que un plazo bajado a minutos se pueda demostrar.
 
     Delega en ``archival.run_archival``, igual que el comando de management: la
     política del plazo vive en un solo lugar.

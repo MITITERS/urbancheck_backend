@@ -509,27 +509,72 @@ class TestAdminInbox:
 
         assert listed_ids(response) == {here.pk}
 
-    def test_the_municipal_agent_gets_403_listing(self, report):
-        """CP-043-59 (US-043 E10)."""
+    def test_the_municipal_agent_sees_those_of_their_municipality(self, report):
+        """CP-043-59. Decisión del usuario (21/10), contraria al escenario 10.
+
+        El agente ve las solicitudes de su municipalidad, con la imagen: los dos
+        roles tienen que ver lo denunciado (pedido del usuario, 21/10).
+        """
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
-        ReportComplaintFactory.create(report=report)
+        mine = ReportComplaintFactory.create(report=report)
+        ReportComplaintFactory.create(
+            report=ReportFactory.create(municipality=MunicipalityFactory.create()),
+        )
 
         response = client_for(agent).get(INBOX)
 
-        assert response.status_code == HTTP_FORBIDDEN
+        assert response.status_code == HTTP_OK
+        assert listed_ids(response) == {mine.pk}
+        [row] = response.data["results"]
+        assert row["image"]["url"]
+
+    def test_an_agent_cannot_open_another_municipality_request(self, report):
+        """CP-043-64. Igual que en el resto del panel: ``404``."""
+        complaint = ReportComplaintFactory.create(report=report)
+        stranger = MunicipalAgentFactory.create()
+
+        response = client_for(stranger).get(f"{INBOX}{complaint.pk}/")
+
+        assert response.status_code == HTTP_NOT_FOUND
+
+    def test_the_admin_sees_the_pending_image(self, admin, report):
+        """CP-043-65. Es quien decide: tiene que ver qué decide."""
+        ReportComplaintFactory.create(report=report)
+
+        [row] = client_for(admin).get(INBOX).data["results"]
+
+        assert row["image"]["url"]
 
     @pytest.mark.parametrize("decision", ["remove-image", "dismiss"])
-    def test_the_municipal_agent_gets_403_resolving_by_id(self, report, decision):
-        """CP-043-60 (US-043 E10).
-
-        Escenario 10: aunque el reporte sea de su jurisdicción.
-        """
+    def test_the_municipal_agent_resolves_those_of_their_municipality(
+        self,
+        report,
+        decision,
+    ):
+        """CP-043-60. Decisión del usuario (21/10), contraria al escenario 10."""
         agent = MunicipalAgentFactory.create(municipality=report.municipality)
         complaint = ReportComplaintFactory.create(report=report)
 
         response = client_for(agent).post(f"{INBOX}{complaint.pk}/{decision}/")
 
-        assert response.status_code == HTTP_FORBIDDEN
+        assert response.status_code == HTTP_OK
+        complaint.refresh_from_db()
+        assert not complaint.is_pending
+        assert complaint.resolved_by == agent
+
+    @pytest.mark.parametrize("decision", ["remove-image", "dismiss"])
+    def test_an_agent_cannot_resolve_another_municipality_request(
+        self,
+        report,
+        decision,
+    ):
+        """CP-043-66. Otra municipalidad no existe para él: ``404``."""
+        complaint = ReportComplaintFactory.create(report=report)
+        stranger = MunicipalAgentFactory.create()
+
+        response = client_for(stranger).post(f"{INBOX}{complaint.pk}/{decision}/")
+
+        assert response.status_code == HTTP_NOT_FOUND
         complaint.refresh_from_db()
         assert complaint.is_pending
         assert on_disk(report.photo.name)

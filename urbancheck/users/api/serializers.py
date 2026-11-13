@@ -6,6 +6,7 @@ from urbancheck.municipalities.api.area_serializers import OperationalAreaSerial
 from urbancheck.municipalities.api.serializers import MunicipalitySerializer
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.models import OperationalArea
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 
 EMAIL_TAKEN_MESSAGE = "Ya existe un usuario registrado con ese correo."
@@ -22,6 +23,7 @@ class UserSerializer(serializers.ModelSerializer[User]):
     """Perfil propio: incluye datos privados como el email."""
 
     municipality = MunicipalitySerializer(read_only=True)
+    must_accept_terms = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = User
@@ -33,6 +35,16 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "role",
             "municipality",
             "must_change_password",
+            # La app decide con este campo si muestra el tutorial de bienvenida
+            # (US-051), igual que con ``must_change_password``: sin una llamada
+            # extra. Solo se escribe por ``POST /me/onboarding/``.
+            "onboarding_completed_at",
+            # Términos y condiciones (RN-10): la app frena al vecino que no
+            # aceptó la versión vigente. Solo se escribe por
+            # ``POST /me/accept-terms/``.
+            "must_accept_terms",
+            "terms_version",
+            "terms_accepted_at",
             # Lo mira el panel para frenar en la puerta a una cuenta de trabajo
             # dada de baja, en vez de dejarla entrar a una pantalla en la que
             # cada request va a devolver 403.
@@ -47,6 +59,9 @@ class UserSerializer(serializers.ModelSerializer[User]):
             "role",
             "municipality",
             "must_change_password",
+            "onboarding_completed_at",
+            "terms_version",
+            "terms_accepted_at",
             "is_work_account_active",
         ]
 
@@ -415,3 +430,33 @@ class OperatorUpdateSerializer(
         instance.full_clean(exclude=["password"])
         instance.save()
         return instance
+
+
+TERMS_VERSION_MISMATCH_MESSAGE = (
+    "Esa no es la versión vigente de los términos y condiciones. "
+    "Leé la actual y aceptala."
+)
+
+
+class LegalDocumentsSerializer(serializers.Serializer):
+    """La versión vigente de los dos documentos, para mostrarla en la app (RN-10).
+
+    Los textos van en Markdown, tal como están en los archivos.
+    """
+
+    version = serializers.CharField(read_only=True)
+    published_at = serializers.DateTimeField(read_only=True)
+    terms = serializers.CharField(read_only=True)
+    privacy = serializers.CharField(read_only=True)
+
+
+class TermsAcceptanceSerializer(serializers.Serializer):
+    """La versión que el vecino leyó y acepta (RN-10, C-23)."""
+
+    version = serializers.CharField(max_length=20)
+
+    def validate_version(self, value: str) -> str:
+        current = current_legal_documents()
+        if current is None or current.version != value:
+            raise serializers.ValidationError(TERMS_VERSION_MISMATCH_MESSAGE)
+        return value

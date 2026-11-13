@@ -11,6 +11,7 @@ from urbancheck.reports.state_machine import Actor
 from urbancheck.reports.tests.factories import CommentFactory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.reports.tests.factories import area_for
+from urbancheck.reports.tests.factories import prepare_for
 from urbancheck.users.tests.factories import MunicipalAgentFactory
 from urbancheck.users.tests.factories import UserFactory
 from urbancheck.users.tests.factories import ValidatorFactory
@@ -46,6 +47,7 @@ class TestOneNotificationPerTransition:
     @pytest.mark.parametrize("transition", TRANSITIONS, ids=lambda t: t.operation)
     def test_each_transition_notifies_the_author_exactly_once(self, transition):
         report = ReportFactory.create(status=transition.source)
+        prepare_for(transition, report)
         user = actor_for(transition).create(municipality=report.municipality)
 
         run(transition, report, user)
@@ -61,6 +63,7 @@ class TestOneNotificationPerTransition:
     def test_nobody_else_is_notified(self, transition):
         """Escenario 8: el destinatario es siempre y solo el autor."""
         report = ReportFactory.create(status=transition.source)
+        prepare_for(transition, report)
         bystander = UserFactory.create()
         CommentFactory.create(report=report, author=bystander)
         user = actor_for(transition).create(municipality=report.municipality)
