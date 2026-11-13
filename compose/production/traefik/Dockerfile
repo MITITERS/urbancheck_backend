@@ -1,4 +1,4 @@
-FROM docker.io/traefik:v3.7.1
+FROM docker.io/traefik:v3.7.17
 # Sin root (N-18): el binario lleva la capacidad de abrir puertos bajos (80 y
 # 443) y el almacén de certificados es del usuario con que corre. El compose
 # deja NET_BIND_SERVICE como única capacidad del contenedor.
