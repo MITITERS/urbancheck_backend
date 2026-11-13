@@ -16,6 +16,7 @@ from rest_framework.viewsets import ModelViewSet
 from urbancheck.municipalities.models import OperationalArea
 from urbancheck.reports.api.mixins import JurisdictionScopedMixin
 from urbancheck.users.api.permissions import IsPanelUser
+from urbancheck.users.api.views import filter_by_municipality
 
 from .area_serializers import OperationalAreaSerializer
 
@@ -70,6 +71,9 @@ class OperationalAreaViewSet(JurisdictionScopedMixin, ModelViewSet):
         # respondería 404.
         if self.action == "list":
             queryset = self._filter_by_state(queryset)
+            # La municipalidad elegida en el header del panel. Solo cambia algo
+            # para el admin: al agente ya lo acotó el mixin a la suya.
+            queryset = filter_by_municipality(queryset, self.request.query_params)
         return queryset
 
     def _filter_by_state(self, queryset):

@@ -393,6 +393,30 @@ class TestAccess:
         assert created.status_code == HTTP_CREATED
         assert created.data["municipality"]["id"] == elsewhere.pk
 
+    def test_the_admin_lists_only_the_chosen_municipality(self, municipality):
+        """El selector del header: una municipalidad nueva no ve áreas ajenas."""
+        OperationalAreaFactory.create(municipality=municipality)
+        brand_new = MunicipalityFactory.create()
+        api = APIClient()
+        api.force_authenticate(PlatformAdminFactory.create())
+
+        response = api.get(LIST_URL, {"municipality": brand_new.pk})
+
+        assert response.status_code == HTTP_OK
+        assert response.data == []
+
+    def test_an_agent_cannot_widen_the_list_with_the_parameter(
+        self,
+        client,
+        municipality,
+    ):
+        """El parámetro solo acota: no saca al agente de su jurisdicción."""
+        other = OperationalAreaFactory.create()
+
+        response = client.get(LIST_URL, {"municipality": other.municipality_id})
+
+        assert response.data == []
+
     def test_the_admin_must_choose_a_municipality(self):
         api = APIClient()
         api.force_authenticate(PlatformAdminFactory.create())

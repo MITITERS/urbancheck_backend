@@ -17,8 +17,15 @@ class ReportsConfig(AppConfig):
         # Imports locales: `ready` corre después de cargar los modelos, y a
         # nivel de módulo esto sería una importación circular.
         from urbancheck.anonymization.pipeline import register_hooks  # noqa: PLC0415
+        from urbancheck.common import media_cleanup  # noqa: PLC0415
 
         from . import photo_hooks  # noqa: PLC0415
+        from .models import Report  # noqa: PLC0415
+        from .models import ResolutionAppeal  # noqa: PLC0415
+        from .models import ResolutionEvidence  # noqa: PLC0415
+
+        # Las fotos se borran con la fila y al reemplazarse (N-08).
+        media_cleanup.connect(Report, ResolutionEvidence, ResolutionAppeal)
 
         register_hooks(
             "reports.report",

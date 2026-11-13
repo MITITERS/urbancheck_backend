@@ -9,6 +9,7 @@ from urbancheck.municipalities.tests.factories import MunicipalityFactory
 from urbancheck.municipalities.tests.factories import OperationalAreaFactory
 from urbancheck.reports.models import Comment
 from urbancheck.reports.models import Like
+from urbancheck.reports.models import ModerationDecision
 from urbancheck.reports.models import OfficialResponse
 from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportComplaint
@@ -152,3 +153,42 @@ class ReportComplaintFactory(DjangoModelFactory[ReportComplaint]):
 
     class Meta:
         model = ReportComplaint
+
+
+def content_complaint_for(report, **kwargs) -> ReportComplaint:
+    """Una denuncia por contenido pendiente (US-021), la que modera el agente."""
+    kwargs.setdefault("reason", ReportComplaint.Reason.REPORTE_FALSO)
+    return ReportComplaintFactory.create(report=report, **kwargs)
+
+
+class ModerationDecisionFactory(DjangoModelFactory[ModerationDecision]):
+    """Un descarte por moderación vigente (US-049)."""
+
+    report = factory.SubFactory(ReportFactory, status=Report.Status.CANCELADO)
+    outcome = ModerationDecision.Outcome.DESCARTADO
+    reason = factory.Faker("sentence", nb_words=8)
+    previous_status = Report.Status.REPORTADO
+
+    class Meta:
+        model = ModerationDecision
+
+
+def prepare_for(transition, report) -> None:
+    """Deja cumplida la guarda de ``transition`` sobre ``report``.
+
+    Para los tests que recorren la tabla entera: el descarte por moderación
+    exige denuncias pendientes, y la restitución exige el descarte que se
+    revierte —con el estado al que vuelve— y, si vuelve a En proceso, un área.
+    Las demás transiciones no necesitan nada.
+    """
+    if transition.operation == "descartar_por_moderacion":
+        content_complaint_for(report)
+    elif transition.operation.startswith("restituir_a_"):
+        ModerationDecisionFactory.create(
+            report=report,
+            previous_status=transition.target,
+        )
+        if transition.target == Report.Status.EN_PROCESO:
+            report.operational_area = area_for(report)
+            report.save(update_fields=["operational_area"])
+

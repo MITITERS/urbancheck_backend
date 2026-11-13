@@ -10,6 +10,7 @@ nombres internos de los estados si hay una forma más clara de decirlo.
 from typing import TYPE_CHECKING
 
 from urbancheck.reports.models import Report
+from urbancheck.reports.state_machine import MODERATION_SOURCES
 from urbancheck.reports.state_machine import Origin
 
 if TYPE_CHECKING:
@@ -102,6 +103,26 @@ ORIGIN_CHANGE_MESSAGES: dict[tuple[str, str, str], str] = {
         "Varios vecinos confirmaron tu reporte: se validó automáticamente y ya "
         "es visible para la comunidad."
     ),
+    # Descarte por moderación municipal (US-049): llega a *Cancelado* desde
+    # cualquier estado publicado, y el par de estados solo no lo distingue de un
+    # rechazo en terreno ni de una cancelación de la intervención.
+    **{
+        (source, Status.CANCELADO, Origin.MODERACION_MUNICIPAL): (
+            "El municipio descartó tu reporte al revisar denuncias de otros "
+            "vecinos. Si creés que es un reclamo legítimo, podés apelar la "
+            "decisión desde el reporte."
+        )
+        for source in MODERATION_SOURCES
+    },
+    # La reversión del administrador: vuelve a estados que por par de estados
+    # se leerían como "reactivado" o no tendrían texto.
+    **{
+        (Status.CANCELADO, target, Origin.REVERSION_MODERACION): (
+            "Revisamos el descarte de tu reporte y lo restituimos: vuelve a "
+            "estar publicado."
+        )
+        for target in MODERATION_SOURCES
+    },
 }
 
 #: Se usa si apareciera una transición sin mensaje propio, para que el aviso

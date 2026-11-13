@@ -41,6 +41,8 @@ GROUPS = {
     # Le llega a quien subió la foto y le dice que lo que cargó no se publicó:
     # es el avance —o la falta de avance— de su propio trámite.
     Notification.Kind.IMAGEN_NO_PROCESADA: "estado",
+    # La respuesta a algo que el vecino pidió sobre su propio reporte.
+    Notification.Kind.APELACION_MODERACION_RECHAZADA: "estado",
 }
 
 INVALID_PAYLOAD_MESSAGE = (
@@ -75,7 +77,7 @@ DESCRIPTIONS = {
         "Cuando tu reporte vuelve a publicarse porque la denuncia se desestimó."
     ),
     Notification.Kind.DENUNCIA_RESUELTA: (
-        "Cuando se resuelve una imagen que denunciaste por mostrar un dato personal."
+        "Cuando se resuelve una denuncia que presentaste sobre un reporte."
     ),
     Notification.Kind.DENUNCIA_RECIBIDA: (
         "Cuando registramos una denuncia que presentaste sobre un reporte."
@@ -85,6 +87,10 @@ DESCRIPTIONS = {
     ),
     Notification.Kind.IMAGEN_NO_PROCESADA: (
         "Cuando no pudimos procesar una foto que subiste y no llegó a publicarse."
+    ),
+    Notification.Kind.APELACION_MODERACION_RECHAZADA: (
+        "Cuando se resuelve la apelación de un reporte tuyo que el municipio "
+        "descartó."
     ),
 }
 

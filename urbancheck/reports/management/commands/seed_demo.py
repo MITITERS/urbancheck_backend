@@ -19,6 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 from PIL import Image
 
+from urbancheck.anonymization.models import PhotoStatus
 from urbancheck.municipalities.models import Municipality
 from urbancheck.municipalities.models import OperationalArea
 from urbancheck.reports.models import Report
@@ -278,6 +279,10 @@ class Command(BaseCommand):
                 author=author,
                 municipality=municipality,
                 photo=_placeholder_photo(),
+                # Un recuadro gris: no hay nada que difuminar. Sin esto el
+                # modelo rechaza la foto desde US-042, que solo admite guardar
+                # una imagen ya procesada, y el seed fallaba entero.
+                photo_status=PhotoStatus.PROCESADA,
                 description=f"{description} {marker}",
                 category=category,
                 latitude=CENTER[0] + (index + offset) * 0.001,
@@ -296,6 +301,7 @@ class Command(BaseCommand):
                 ResolutionEvidence.objects.create(
                     report=report,
                     photo=_placeholder_photo(),
+                    photo_status=PhotoStatus.PROCESADA,
                     description=(
                         "Se ejecutó el trabajo en el lugar y quedó verificado."
                     ),

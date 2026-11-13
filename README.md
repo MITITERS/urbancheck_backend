@@ -544,6 +544,14 @@ El default es **todo activado**: la ausencia de fila en
 `NotificationPreference` significa habilitado, así que un usuario que nunca tocó
 la configuración recibe todo.
 
+`Notification.kind` y `NotificationPreference.kind` miden 50 (C-12): con 30,
+`apelacion_moderacion_rechazada` ya ocupaba todo el campo.
+
+`nuevo_like` estaba en el catálogo pero nada lo creaba (C-09). Ahora lo crea
+`notify_new_like` al dar me gusta: al autor, nunca por el propio, y uno solo
+por persona y reporte aunque se quite y se vuelva a dar. Sigue la misma regla
+de preferencias que los demás.
+
 ### Radio de validación (US-036)
 
 `VALIDATION_RADIUS_METERS` (env `DJANGO_VALIDATION_RADIUS_METERS`, default 50)
@@ -1553,6 +1561,255 @@ archivados y los retenidos. Ahora pasa por `publicly_visible()`.
 - Un archivo pendiente puede quedar huérfano si el borrado falla o si el autor
   elimina el reporte mientras se procesa. No afecta lo publicado: es limpieza.
 
+## Decisiones del Sprint 6
+
+### Tutorial de bienvenida: la marca vive en la cuenta (US-051)
+
+- `User.onboarding_completed_at` es una fecha nula por defecto, no un booleano:
+  dice cuándo se vio el tutorial y no cuesta más. La app decide con este campo
+  si muestra el recorrido; vive en la cuenta y no en el dispositivo, así que
+  reinstalar la app o cambiar de teléfono no lo vuelve a mostrar.
+- **La migración `users/0010` marca a todas las cuentas existentes** con la
+  fecha del despliegue. Así los vecinos que ya usaban la app no reciben el
+  tutorial (escenario 9) sin ninguna condición extra en el código: para la app,
+  una cuenta preexistente es una que ya lo vio.
+- El campo viaja en `/api/users/me/` y en la respuesta del login de allauth
+  headless (`HeadlessAdapter.serialize_user`), igual que `must_change_password`.
+  Se agrega **después** del `super()`, porque el adapter base descarta los
+  nulos y acá el nulo es justamente la señal de "mostrar".
+- `POST /api/users/me/onboarding/` lo marca. Es idempotente: el `UPDATE` va
+  condicionado a `onboarding_completed_at IS NULL`, así el reintento de la app
+  tras un error de red no pisa la fecha original. Terminar y omitir llaman a lo
+  mismo. Solo el vecino (`IsCitizen`, que delega en `participates_as_citizen`):
+  las cuentas de trabajo reciben `403`. El `PATCH` de `/me` no lo escribe.
+
+### Moderación de contenido: del agente, con cuatro contrapesos (US-049)
+
+- **No existe un rol moderador.** El agente municipal resuelve las denuncias
+  por contenido (`contenido_inapropiado`, `reporte_falso`) de su jurisdicción,
+  desde `/api/panel/moderation/`, que hereda `JurisdictionScopedMixin`: otra
+  municipalidad responde `404`. La bandeja parte de
+  `ReportComplaint.objects.for_municipal_review()`, así que las de dato
+  personal nunca entran (las resuelve el admin, US-043).
+- **Una decisión por reporte, no por denuncia** (`ModerationDecision`). Descartar
+  (`discard`) o desestimar (`dismiss`) cierra todas las denuncias pendientes de
+  contenido y las enlaza a la decisión. El motivo es obligatorio en los dos
+  sentidos. Toda la operación es una sola transacción
+  (`reports/moderation.py`).
+- **El descarte es una transición de la máquina única**: `descartar_por_moderacion`,
+  con origen `moderacion_municipal`, a *Cancelado* (no a *Archivado*: cancelado
+  es "no era real", archivado es "caducó"). Es **una operación con una fila por
+  estado de origen** —los cinco estados publicados—; `apply_transition` elige la
+  fila sobre el reporte bloqueado. Su guarda exige denuncias de contenido
+  pendientes: sin eso, el descarte sería una cancelación libre desde cualquier
+  estado. No se ofrece como botón del panel (`MODERATION_ORIGINS`), solo desde
+  la bandeja.
+- **Contrapeso 1, el motivo es público.** La visibilidad no cambia: un reporte
+  descartado sale del feed y del mapa por su estado, como cualquier cancelado.
+  Pero `retrieve` de `/api/reports/{id}/`, si el reporte no es visible y tiene un
+  descarte vigente (`Report.objects.moderation_notices()`), responde a un tercero
+  el aviso reducido (`ModerationNoticeSerializer`: número, categoría, estado,
+  fecha y motivo; sin foto, descripción, autor ni denunciantes). **Decisión del
+  usuario (20/10)**. Nada que cuelgue del detalle se habilita: comentarios, me
+  gusta y denuncias siguen en `visible_to` y responden `404`.
+- **Contrapeso 2, la apelación.** **Decisión del usuario (20/10), contraria a
+  la historia**: la resuelven el administrador —todas— y el agente —solo las de
+  su municipalidad—, desde `/api/panel/moderation-appeals/` (`IsPanelUser`,
+  acotada con `Report.objects.for_user`; otra municipalidad responde `404`). La
+  historia la dejaba solo en manos de la plataforma, para que no la decidiera el
+  mismo municipio que descartó: con este cambio, ese control depende de que el
+  administrador también mire las apelaciones. Reutiliza `ResolutionAppeal` con
+  `kind="moderacion"` (sin foto, con `status`, `resolved_by`,
+  `resolution_reason`). Una por descarte (restricción única). El reporte sigue
+  Cancelado mientras se revisa. `Report.closure_appeals` filtra las de cierre
+  para que el hilo de resolución de US-048 no cambie: los serializers exponen
+  `resolution_appeals` desde ahí.
+- **Contrapeso 3, la reversión**: por apelación
+  (`/api/panel/moderation-appeals/{id}/accept|reject/`, admin o agente) o de
+  oficio (`/api/platform/reports/{id}/revert-moderation/`, **solo** el admin).
+  Es `restituir_a_<estado>`, una operación por destino con actor
+  `admin_plataforma`, `extra_actors` con el agente y origen
+  `reversion_moderacion`; su guarda exige que el
+  destino sea el `previous_status` guardado al descartar, y que haya área si
+  vuelve a *En proceso* (ningún camino a En proceso sin área, US-028).
+- **Contrapeso 4**: el origen `moderacion_municipal` es lo que US-050 va a contar
+  aparte de las demás cancelaciones.
+- Avisos: al autor, el cambio de estado con texto propio por origen
+  (`ORIGIN_CHANGE_MESSAGES`); a quienes denunciaron, `denuncia_resuelta` con
+  textos de contenido; al autor, `apelacion_moderacion_rechazada` si la
+  plataforma mantiene el descarte (migración `notifications/0010`).
+- El listado del panel trae `pending_complaint_count` (subconsulta, no join) y
+  el detalle, `complaints` y `moderation`.
+
+### El rechazo del validador vuelve a ser una decisión en terreno
+
+`rechazar` estaba declarada con el origen por defecto (`manual`). La migración
+0008 le había puesto `validacion_terreno` a los rechazos viejos, pero cada rechazo
+posterior quedó como `manual` y el panel —que reconoce al validador por el
+origen— dejó de mostrarlo como decisión suya. Se encontró al preparar US-050.
+`rechazar` ahora lleva `validacion_terreno`, y la migración `reports/0015`
+corrige los asientos que quedaron mal (solo `pendiente_validacion → cancelado`
+con responsable, que nada más pudo producir).
+
+### Estadísticas: un endpoint para toda la sección (US-023)
+
+- `GET /api/panel/statistics/` (agente, `IsMunicipalAgent`, sobre
+  `Report.objects.for_user`) y `GET /api/municipalities/{id}/statistics/`
+  (admin, desde la ficha). Una sola respuesta con el período aplicado, el total y
+  las dos distribuciones; US-050 suma sus indicadores a la misma.
+- **El período**: `?period=7d|30d|12m|custom` (default `30d`), y con `custom`,
+  `start` y `end` en `aaaa-mm-dd`. Se valida en el backend (`reports/statistics.py`,
+  `resolve_window`): inicio posterior al fin o fin en el futuro dan `400` con el
+  motivo en el campo. Las fechas son días calendario de `TIME_ZONE`, ambos
+  incluidos, y se traducen a `[inicio 00:00, fin + 1 00:00)` hora local: un
+  reporte de las 23 del último día cuenta.
+- Cuenta los reportes **creados** en el período, agrupados por categoría y por
+  su **estado actual**, con los siete estados. Tres consultas agregadas, sin
+  traer filas (hay un test con `django_assert_num_queries`). Lo que no tiene
+  reportes vuelve en cero; sin total, el porcentaje es `null` y no `0`.
+- Índice `report_muni_created` (`municipality`, `created_at`), migración `0016`.
+- **Datos para la demo**: `python manage.py seed_statistics` (después de
+  `seed_demo`) agrega 90 reportes por municipio repartidos en 12 meses, con
+  cadenas de historial fechadas y sus orígenes. Es idempotente y determinista.
+  Las transiciones se escriben directo en el historial porque hay que fecharlas
+  en el pasado; un test verifica que cada una sea una de las de la tabla.
+- `seed_demo` estaba roto desde US-042: creaba fotos sin `photo_status`
+  procesado y el modelo las rechaza. Corregido.
+
+### Indicadores de gestión: todo sale del historial (US-050)
+
+- Viajan en `indicators`, dentro de la misma respuesta de estadísticas y sobre
+  el mismo período. Se calculan en `reports/statistics.py` (`indicators`) **sobre
+  `ReportStatusHistory`**, con subconsultas por reporte, restas
+  `ExpressionWrapper(..., DurationField())` y `Avg` en la base: seis consultas en
+  total, tenga los reportes que tenga.
+- Los cortes de cada reloj:
+
+  | Indicador | Desde | Hasta | Sobre |
+  |---|---|---|---|
+  | Validación | creación | primer paso a Reportado | validados en el período, por origen (`validacion_terreno` / `validacion_colectiva`) |
+  | Asignación | primer Reportado | primer En proceso | pasados a En proceso en el período |
+  | Resolución | primer En proceso | **último** cierre `cierre_operario` | con último cierre en el período |
+
+  La resolución termina en el cierre del operario, no en la confirmación: la
+  ventana de objeción es un control, no trabajo municipal. Y toma primer inicio y
+  último cierre, así un reporte reabierto por apelación cuenta lo que esperó el
+  vecino de verdad. Sin casos, el promedio es `null` (no cero).
+- **Abiertos**: foto del presente, sin período: cantidad por estado
+  (pendiente, reportado, en proceso) y desde cuándo espera el más viejo, medido
+  desde que entró en ese estado. No entran en ningún promedio.
+- **Cierres apelados**: se cuentan cierres (no reportes) del período, y cuántos
+  tuvieron una objeción después. El umbral para destacarlo es
+  `DJANGO_STATS_APPEAL_ALERT_PERCENT` (default 20) y viaja en la respuesta.
+- **Cancelaciones por origen**: `validacion_terreno` (rechazo del validador),
+  `moderacion_municipal` (US-049) y `manual` (el agente cancela la intervención).
+  **Archivados por inactividad** (`archivado_inactividad`) van aparte.
+- El origen se lee del campo de la transición, nunca del rol de quien la hizo: la
+  confirmación automática no tiene usuario.
+- Índice `history_report_status_at` (`report`, `status`, `created_at`), migración
+  `0017`.
+
+### Compartir un reporte: un token, una página pública (US-030)
+
+- `Report.share_token` es un UUID v4 aleatorio y único. El enlace se arma con
+  `DJANGO_PUBLIC_REPORT_URL` (default `https://urbancheck.com.ar/r/{token}`) y
+  viaja como `share_url` en el detalle **solo si el reporte es público**. Nunca
+  se usa el id, que es correlativo y permitiría recorrer los reportes.
+- La migración `0018` crea el campo en tres pasos (nulo, un token por fila,
+  único): un `default` en `AddField` se evalúa una vez y les daría a todas las
+  filas el mismo token.
+- `GET /api/public/reports/<token>/` es el **único endpoint sin sesión**
+  (`AllowAny`, límite `public_reports`, 120/hora por IP). Decide con la función
+  única de visibilidad: lo que no es público responde `404` con
+  `code: report_unavailable`, salvo el descarte por moderación (US-049), que
+  además trae el motivo. El serializer público no lleva autor, comentarios ni
+  quién intervino: responde el municipio.
+- AASA suma `/r/*`, para que iOS abra el enlace en la app si está instalada.
+- **Vista previa en redes** (`reports/share_preview.py`): `/r/<token>` lo
+  responde Django, no el panel. WhatsApp, Facebook y X arman la tarjeta con las
+  etiquetas Open Graph del HTML del servidor y no ejecutan JavaScript, así que a
+  una SPA le verían siempre el mismo `index.html`. La vista devuelve un HTML
+  mínimo con `og:title`, `og:description`, `og:image` (la foto **difuminada**,
+  URL absoluta) y `twitter:card`, y una redirección por JavaScript a
+  `DJANGO_PUBLIC_REPORT_PAGE_URL` (default `/reporte/{token}`, la página del
+  panel). El bot se queda con las etiquetas; la persona sigue de largo. Un
+  reporte que ya no es público da una tarjeta genérica, sin foto ni texto.
+- WhatsApp recomienda imágenes de menos de 300 KB para la vista previa; una foto
+  más pesada puede salir sin miniatura. Si pasa, el paso siguiente es servir una
+  miniatura reducida en `og:image`.
+- En producción el nginx del panel manda `/r/` y `/.well-known/` a Django, en el
+  mismo dominio; en desarrollo lo hace el proxy de Vite (`^/r/`).
+
+### El admin lee la bandeja de denuncias (21/10)
+
+Con el selector de municipalidad del panel, el admin de la plataforma ve la
+bandeja de denuncias de la ciudad elegida: `GET /api/panel/moderation/` y
+`count/` aceptan al admin (`IsPanelUser`) con `?municipality=<id>`. Descartar y
+desestimar siguen siendo solo del agente (`IsMunicipalAgent`): el admin recibe
+`403`.
+
+### El agente ve y resuelve las solicitudes por dato personal de su municipio (21/10)
+
+Pedido del usuario, contrario al escenario 10 de US-043: `GET
+/api/platform/privacy-requests/` (lista y detalle) acepta al agente municipal
+(`IsPanelUser`), acotado a su municipalidad con `Report.objects.for_user` —otra
+municipalidad responde `404`—. **También las resuelve** (`remove-image` y
+`dismiss`, pedido del 21/10): el admin las resuelve en todas las
+municipalidades y el agente en la suya. El agente y el admin reciben
+la `image.url` también mientras la solicitud está pendiente (pedido del 21/10):
+sin la foto no se puede juzgar la denuncia.
+
+El panel juntó esta bandeja con la de contenido en una sola pantalla de
+Denuncias, con un filtro por tipo. Para eso `GET /api/panel/moderation/` y su
+`count/` aceptan `?reason=contenido_inapropiado|reporte_falso`: acota los
+reportes a los que tienen denuncias pendientes de ese motivo, y
+`pending_complaint_count` cuenta solo esas. Un motivo que no es de contenido se
+ignora. `GET /api/panel/moderation/resolved/` es el registro de lo resuelto por
+contenido (una fila por `ModerationDecision`, la más reciente primero, mismo
+alcance y mismo `?reason=`), para la pestaña «Resueltas».
+
+El panel ya no retiene la imagen denunciada por dato personal (pedido del
+21/10): el detalle del panel y la bandeja la mandan siempre, porque el agente y
+el admin la necesitan para resolver. Las vistas públicas siguen sin mostrarla.
+
+### El historial guarda con qué rol se actuó (C-15)
+
+El administrador de la plataforma ejecuta las acciones del panel con las mismas
+reglas que el agente (`Actor.MUNICIPAL_AGENT`). Por decisión del equipo se
+mantiene así, pero cada asiento de `ReportStatusHistory` guarda en
+`changed_by_role` el rol de `changed_by` en ese momento, y el panel marca los
+cambios del admin. Los asientos anteriores al campo lo tienen vacío.
+
+### Términos y privacidad: el vecino acepta una versión (RN-10, C-23)
+
+- **Los textos viven en archivos, no en la base**, en `urbancheck/legal/`:
+  `versiones.toml` lista cada versión publicada con su fecha de vigencia, y
+  cada versión tiene su carpeta con `terminos.md` y `privacidad.md`. Los dos
+  documentos comparten versión y se aceptan juntos. La vigente es la última
+  con `vigente_desde` ya cumplida (`urbancheck.users.legal`). Publicar una
+  versión nueva es agregar su carpeta y su entrada, y reiniciar; una versión
+  que alguien ya aceptó no se edita, se publica otra. Hasta el 30/10/2026
+  vivían en la tabla `TermsOfService`, que borró la migración `users/0012`.
+- **Los tests no ven los archivos reales**: el fixture `legal_documents_dir`
+  los apunta a una carpeta vacía, y el que ejercita la aceptación publica ahí.
+- **Mientras no haya ninguna publicada, no se exige nada.** Así nadie queda
+  trabado hasta que el equipo cargue el texto.
+- **Solo el vecino.** Las cuentas de trabajo las da de alta el municipio o la
+  plataforma.
+- **En el registro**, el formulario de allauth pide `accept_terms: true` y
+  `terms_version` igual a la vigente. Pedir la versión cubre el caso en que se
+  publica otra mientras alguien se registra. El usuario guarda
+  `terms_version` y `terms_accepted_at` (migración `users/0011`).
+- **Cuentas existentes y versiones nuevas**: `must_accept_terms` llega en el
+  perfil y en el payload del login, y la app frena al vecino en una pantalla
+  propia hasta que llame a `POST /api/users/me/accept-terms/` con la versión que
+  leyó. `GET /api/terms/current/` devuelve la vigente sin sesión
+  (`version`, `published_at`, `terms` y `privacy`, en Markdown), o `404`.
+- **El servidor no depende de la app**: reportar, comentar y dar me gusta
+  responden `403` mientras falte aceptar (`HasAcceptedTerms`, aparte de
+  `ParticipatesAsCitizen` porque aquella es regla del rol y esta del estado de
+  la cuenta). Leer no se bloquea.
+
 ## Seguridad (Sprint 5, deuda del Sprint 4)
 
 Todo lo de esta sección se configura por variables de entorno; la lista
@@ -1586,30 +1843,166 @@ completa, con sus defaults, está en `.env.example`.
   shell). `python manage.py strip_image_metadata [--apply]` sanea las de perfil
   ya guardadas. HEIC no llega al backend: la app reencodea a JPEG antes de
   subir, y Pillow sin `pillow-heif` rechaza un HEIC con `400`.
+- **Sin listado de usuarios (C-01).** `GET /api/users/` no existe: exponía el
+  correo, el rol y la municipalidad de todas las cuentas a cualquier sesión.
+  Quedan `me/`, `me/onboarding/` y el detalle de otro usuario, que usa
+  `PublicUserSerializer` (sin correo). Las cuentas de trabajo se listan en
+  `municipal-agents/`, `validators/` y `operators/`, acotados por rol.
+- **Política de contenido (C-05).** `SECURE_CSP` de Django 6.0, aplicada por
+  `AdminAndDocsCSPMiddleware` solo al admin y a `/api/docs/`: sin scripts
+  inline ni `eval`; Swagger UI llega de jsDelivr y arranca desde un script
+  aparte (`SpectacularSwaggerSplitView`). La API y la vista previa de un
+  reporte compartido no la llevan. El panel tiene la suya en su nginx.
+- **Verificación de correo opcional (C-08).** `ACCOUNT_EMAIL_VERIFICATION`
+  sigue en `"optional"` por decisión del equipo: con `"mandatory"`, una falla
+  del SMTP de producción dejaría a todos sin poder registrarse. Hacerla
+  obligatoria pide la pantalla "Revisá tu correo" en la app y que las cuentas
+  de trabajo nazcan verificadas; es deuda técnica.
 - **Producción**: HSTS de un año, CORS cerrado (el panel va por el mismo
   origen), admin en `DJANGO_ADMIN_URL` (rechaza `admin/`).
   `check --deploy` sin advertencias: `docs/sprint-5/check-deploy.txt`.
+  El SMTP sale de `EMAIL_HOST` (obligatoria), `EMAIL_PORT` (587),
+  `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` y `EMAIL_USE_TLS` (True) (C-02).
 - **CI** (`.github/workflows/ci.yml`): ruff, Bandit (falla desde severidad
   media), pip-audit, gitleaks (binario con checksum fijo; excepciones
   revisadas en `.gitleaksignore`), pytest y `makemigrations --check`. Dependabot
-  semanal para uv, Docker, Docker Compose y GitHub Actions.
+  semanal para uv, Docker, Docker Compose y GitHub Actions, con los PR contra
+  `develop` (C-16).
 
-## Deployment
+## Despliegue
 
-The following details how to deploy this application.
+Producción corre con `docker-compose.production.yml`: Traefik (TLS con Let's
+Encrypt), Django con gunicorn, PostgreSQL, Redis, el worker y el beat de
+Celery, Flower, el nginx que sirve `/media/` y el panel. Base de cookiecutter:
+[documentación de despliegue con Docker](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
 
-### Docker
+### Pasos
 
-See detailed [cookiecutter-django Docker documentation](https://cookiecutter-django.readthedocs.io/en/latest/3-deployment/deployment-with-docker.html).
+1. **DNS y puertos.** `<dominio>` y `panel.<dominio>` apuntan al servidor. Se
+   abren solo el 80 (lo usa el desafío de Let's Encrypt y redirige a 443) y el
+   443. El 5555 no: Flower no se publica (C-06).
+2. **Código.** Clonar `urbancheck_backend` y `urbanchech_frontend` uno al lado
+   del otro y dejar los dos en la misma versión (la etiqueta del release). El
+   servicio `panel` se construye desde `../urbanchech_frontend`, target
+   `runtime` (C-04): no hay una imagen publicada en un registro.
+3. **Entorno.** Crear `.envs/.production/.django`, `.envs/.production/.postgres`
+   y `.envs/.production/.redis` (no se versionan) con las variables de
+   `.env.example`. Las que no tienen
+   default en producción:
+   - `DJANGO_SECRET_KEY`, `DJANGO_ADMIN_URL` (no `admin/`) y `EMAIL_HOST`, más
+     `EMAIL_HOST_USER` y `EMAIL_HOST_PASSWORD` del proveedor (C-02).
+   - `DJANGO_ALLOWED_HOSTS=<dominio>,panel.<dominio>` y
+     `DJANGO_PUBLIC_REPORT_PAGE_URL=https://panel.<dominio>/reporte/{token}`
+     (C-04); `DJANGO_PUBLIC_REPORT_URL=https://<dominio>/r/{token}`.
+   - `CELERY_FLOWER_USER` y `CELERY_FLOWER_PASSWORD`, que pide Flower, y
+     `CELERY_WORKER_CONCURRENCY` si 2 procesos no entran en la memoria (C-07).
+   - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER` y
+     `POSTGRES_PASSWORD` en `.postgres`, más `POSTGRES_APP_USER` y
+     `POSTGRES_APP_PASSWORD`: el rol sin superusuario con que entra Django
+     (N-07). Lo crea `compose/production/postgres/init` la primera vez que se
+     inicializa el volumen; en una base ya creada hay que crearlo a mano con
+     las sentencias de ese script.
+   - `REDIS_PASSWORD` en `.redis`, y `REDIS_URL=redis://:<contraseña>@redis:6379/0`
+     en `.django` (N-07).
+   - Para el primer despliegue, `DJANGO_SECURE_HSTS_SECONDS=60` hasta verificar
+     que todo anda por HTTPS: un HSTS largo no se deshace en el navegador. El
+     middleware `panel-hsts` de Traefik tiene el año fijo (C-05).
+4. **Dominio.** `export URBANCHECK_DOMAIN=<dominio>` en la sesión que corre
+   Compose (o en un `.env` junto al archivo). Sin ella Compose no arranca: la
+   usa Traefik para el ruteo y los certificados.
+5. **Levantar.**
+
+   ```bash
+   docker compose -f docker-compose.production.yml build
+   docker compose -f docker-compose.production.yml up -d
+   ```
+
+   El servicio `django` aplica las migraciones al arrancar (`migrate
+   --noinput`, antes de `collectstatic`); worker, beat y flower no migran
+   (C-03).
+6. **Primer usuario y verificación.**
+
+   ```bash
+   docker compose -f docker-compose.production.yml run --rm django python manage.py createsuperuser
+   docker compose -f docker-compose.production.yml run --rm django python manage.py check --deploy
+   ```
+
+### Ruteo (Traefik)
+
+| Pedido                    | Servicio                                           |
+| ------------------------- | -------------------------------------------------- |
+| `panel.<dominio>`         | `panel` (su nginx hace de proxy de la API)         |
+| `<dominio>/r/<token>`     | `panel`, que se lo pasa a Django (US-030)          |
+| `<dominio>/media/`        | `nginx`                                            |
+| `<dominio>`, todo lo demás | `django`: API, admin, `/.well-known/` incluido    |
+
+Traefik agrega HSTS de un año a las respuestas del panel (middleware
+`panel-hsts`, C-05); las de Django ya lo traen. El nginx del panel le reenvía a
+Django el `X-Forwarded-Proto` que recibió de Traefik.
+
+### Flower
+
+Escucha solo en el `127.0.0.1:5555` del servidor (C-06). Se entra por túnel
+SSH, con su usuario y contraseña de siempre:
+
+```bash
+ssh -N -L 5555:127.0.0.1:5555 <usuario>@<servidor>
+# y en el navegador: http://localhost:5555
+```
+
+### Celery
+
+El worker corre con `--concurrency` de `CELERY_WORKER_CONCURRENCY` (2),
+`--prefetch-multiplier=1` y `--max-tasks-per-child=20`: difuminar una foto de
+12 MP llega a 847 MB (C-07). Los límites por tarea son 60 s blando y 90 s duro
+(`config/settings/base.py`).
+
+### `/media/` sin control de acceso: riesgo aceptado (C-25)
+
+nginx sirve `/media/` con un `alias`, sin preguntarle a Django
+(`compose/production/nginx/default.conf`). La regla de visibilidad de los
+reportes vale para la API, no para los archivos: quien tenga la URL de una foto
+la descarga aunque el reporte esté oculto por una denuncia de dato personal,
+descartado por moderación o borrado (N-03 y N-08 del documento de seguridad).
+
+**Decisión del equipo (22/10/2026): se acepta el riesgo.** Las fotos se
+publican recién después de difuminar rostros y patentes (US-041 y US-042), las
+URL no se pueden adivinar y el producto no se despliega en producción. El
+riesgo que queda es justo el caso en que el difuminado falló: una denuncia por
+dato personal oculta el reporte, pero no la foto. Si algún día se despliega, la
+mitigación es servir las fotos de los reportes por Django con el mismo permiso
+que el reporte, y entregarlas con `X-Accel-Redirect` a una `location internal`
+de nginx.
+
+### Pendiente
+
+- Los identificadores de la app para Universal Links y App Links
+  (`IOS_UNIVERSAL_LINK_APP_ID`, `ANDROID_APP_PACKAGE`) siguen siendo los de la
+  plantilla de Expo hasta tener el bundle ID y el Team ID (C-13).
+- `DJANGO_NUM_PROXIES` cuenta los proxies delante de Django, y no son los mismos
+  en los dos caminos: Traefik solo (la app) o Traefik y el nginx del panel. Con
+  un único valor, los límites por IP de uno de los dos caminos cuentan la IP de
+  un proxy.
 
 ## Flujo de trabajo
 
-El proyecto utiliza Git Flow:
+Git Flow por sprint, igual en los tres repositorios (C-20). Es lo que se hace
+desde el Sprint 1, no una rama por historia:
 
-- `main`: código estable.
-- `develop`: integración de funcionalidades.
-- `feature/US-<nro>-<descripcion>`: desarrollo de historias.
-- `release/<version>`: preparación de entregas.
-- `hotfix/<descripcion>`: correcciones urgentes.
+- Cada sprint se trabaja en `feature/sprint-N`, que sale de `develop`.
+  Correcciones puntuales sobre un sprint en curso pueden ir en ramas
+  `fix/<id>` que salen de esa rama y vuelven a ella con merge.
+- Al cerrar el sprint, PR de `feature/sprint-N` a `develop`, que se fusiona con
+  merge commit (sin squash ni rebase) con el CI en verde.
+- El merge a `develop` se etiqueta con una etiqueta anotada `sprint-N`. Las
+  etiquetas se suben de a una (`git push origin sprint-N`), nunca con `--tags`.
+- `main` solo recibe releases: `release/x.y.z` sale de `develop`, se fusiona en
+  `main`, se etiqueta `vx.y.z` y vuelve a `develop`. Un `hotfix/<descripcion>`
+  sale de `main` y vuelve a `main` y a `develop`.
+- No se reescribe historia publicada: nada de force push, rebase de ramas
+  remotas ni amend de commits ya subidos.
 
-Toda funcionalidad debe desarrollarse desde `develop` y mergearse mediante Pull Request.
+## Licencia
+
+Propietaria, todos los derechos reservados: ver [`LICENSE`](LICENSE). Es la
+misma en los tres repositorios de UrbanCheck (C-14).

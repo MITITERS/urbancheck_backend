@@ -1,11 +1,9 @@
-"""Bandeja de solicitudes por dato personal del administrador (US-043).
+"""Bandeja de solicitudes por dato personal (US-043).
 
-Es la **excepción deliberada** a la regla de que toda vista del panel hereda
-``JurisdictionScopedMixin``: el difuminado es una obligación de la plataforma
-bajo la Ley 25.326, no del municipio, y el administrador ve las solicitudes de
-todas las municipalidades. Por lo mismo, un agente municipal recibe ``403`` y
-no ``404`` (escenario 10): no se esconde que la solicitud existe, se le niega
-resolverla.
+US-043 la pensó solo para el administrador (escenario 10). Por decisión del
+usuario del 21/10 también la atiende el agente municipal, con las solicitudes
+de su municipalidad: las ve y las resuelve. Otra municipalidad no existe para
+él (``404``), igual que en el resto del panel. El administrador ve todas.
 """
 
 from __future__ import annotations
@@ -18,11 +16,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.reports.models import Report
 from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.privacy import ComplaintAlreadyResolvedError
 from urbancheck.reports.privacy import dismiss
 from urbancheck.reports.privacy import remove_image
-from urbancheck.users.api.permissions import IsPlatformAdmin
+from urbancheck.users.api.permissions import IsPanelUser
 
 from .pagination import PanelPagination
 from .privacy_serializers import PrivacyRequestSerializer
@@ -42,17 +41,31 @@ class PrivacyRequestViewSet(ListModelMixin, RetrieveModelMixin, GenericViewSet):
     - ``?municipality=<id>``: acota a una municipalidad.
     """
 
-    permission_classes = [IsAuthenticated, IsPlatformAdmin]
     serializer_class = PrivacyRequestSerializer
+
+    #: Los dos roles del panel ven y resuelven (decisión del usuario del 21/10,
+    #: contraria al escenario 10 de US-043); el agente, solo lo de su
+    #: municipalidad, que acota ``get_queryset``.
+    permission_classes = [IsAuthenticated, IsPanelUser]
     pagination_class = PanelPagination
 
+    # Solo para que el esquema OpenAPI tipe el id: lo genera sin usuario.
+    queryset = ReportComplaint.objects.none()
+
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return ReportComplaint.objects.none()
         queryset = ReportComplaint.objects.for_platform_review().select_related(
             "report__municipality",
             "resolution_evidence",
             "reporter",
             "resolved_by",
         )
+        user = self.request.user
+        if not user.sees_every_municipality:
+            # El agente, solo las de su jurisdicción: otra municipalidad no
+            # existe para él (404), igual que en el resto del panel.
+            queryset = queryset.filter(report__in=Report.objects.for_user(user))
         if self.action == "list":
             if self.request.query_params.get("state") == "resolved":
                 queryset = queryset.exclude(

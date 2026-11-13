@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from urbancheck.notifications.models import Notification
+from urbancheck.notifications.models import NotificationPreference
 from urbancheck.notifications.tests.factories import NotificationFactory
 from urbancheck.reports.tests.factories import ReportFactory
 from urbancheck.users.tests.factories import UserFactory
@@ -54,3 +55,16 @@ class TestNotificationModel:
         """Hay avisos que no cuelgan de un reporte (los genera el sistema)."""
         notification = NotificationFactory.create(report=None, actor=None)
         assert notification.report is None
+
+
+class TestKindLength:
+    """C-12: ``apelacion_moderacion_rechazada`` mide 30, justo el largo del
+    campo. El próximo tipo con un nombre un poco más largo no entraba."""
+
+    @pytest.mark.parametrize("model", [Notification, NotificationPreference])
+    def test_every_kind_fits_with_room_to_spare(self, model):
+        max_length = model._meta.get_field("kind").max_length  # noqa: SLF001
+        longest = max(len(value) for value in Notification.Kind.values)
+
+        assert max_length >= 50  # noqa: PLR2004
+        assert longest <= max_length - 10

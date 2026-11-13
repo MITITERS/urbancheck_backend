@@ -3,6 +3,7 @@ from functools import cached_property
 from django.db.models import Count
 from django.db.models import Exists
 from django.db.models import OuterRef
+from django.http import Http404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -27,6 +28,7 @@ from urbancheck.municipalities.services import OutOfCoverageError
 from urbancheck.municipalities.services import find_covering_municipality
 from urbancheck.municipalities.services import resolve_municipality_for
 from urbancheck.notifications.services import notify_new_comment
+from urbancheck.notifications.services import notify_new_like
 from urbancheck.notifications.services import notify_resolution_appealed
 from urbancheck.reports.collective_validation import (
     evaluate as evaluate_collective_validation,
@@ -49,6 +51,10 @@ from urbancheck.reports.models import ReportComplaint
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import on_privacy_hold
 from urbancheck.reports.models import photo_ready
+from urbancheck.reports.moderation import ModerationError
+from urbancheck.reports.moderation import NotAuthorError
+from urbancheck.reports.moderation import ReasonRequiredError
+from urbancheck.reports.moderation import appeal_moderation
 from urbancheck.reports.privacy import DuplicateComplaintError
 from urbancheck.reports.privacy import NoImageError
 from urbancheck.reports.privacy import describe_window
@@ -62,12 +68,15 @@ from urbancheck.users.api.operator_permissions import ExcludesOperator
 
 from .filters import apply_report_filters
 from .permissions import CanDeleteComment
+from .permissions import HasAcceptedTerms
 from .permissions import IsAuthorOrReadOnly
 from .permissions import ParticipatesAsCitizen
 from .serializers import CommentSerializer
 from .serializers import ComplaintCreateSerializer
 from .serializers import ComplaintReceiptSerializer
 from .serializers import ExistingReportSerializer
+from .serializers import ModerationAppealCreateSerializer
+from .serializers import ModerationNoticeSerializer
 from .serializers import PrivacyRequestCreateSerializer
 from .serializers import PrivacyRequestReceiptSerializer
 from .serializers import ReportCreateSerializer
@@ -109,6 +118,7 @@ PRIVACY_REQUEST_PENDING_MESSAGE = (
 IMAGE_ALREADY_REMOVED_CODE = "image_already_removed"
 IMAGE_ALREADY_REMOVED_MESSAGE = "Esta imagen ya fue retirada."
 # Respuestas del botón *Denunciar* (US-021), también ``409`` con código.
+MODERATION_APPEAL_REJECTED_CODE = "moderation_appeal_not_allowed"
 COMPLAINT_ALREADY_FILED_CODE = "complaint_already_filed"
 REPORT_NOT_PUBLIC_CODE = "report_not_public"
 
@@ -142,7 +152,12 @@ class ReportViewSet(
         if self.action in {"update", "partial_update", "destroy"}:
             return [IsAuthenticated(), ExcludesOperator(), IsAuthorOrReadOnly()]
         if self._is_citizen_participation():
-            return [IsAuthenticated(), ExcludesOperator(), ParticipatesAsCitizen()]
+            return [
+                IsAuthenticated(),
+                ExcludesOperator(),
+                ParticipatesAsCitizen(),
+                HasAcceptedTerms(),
+            ]
         return [IsAuthenticated(), ExcludesOperator()]
 
     def get_throttles(self):
@@ -431,6 +446,7 @@ class ReportViewSet(
             report=report,
             status=Report.Status.PENDIENTE_VALIDACION,
             changed_by=self.request.user,
+            changed_by_role=self.request.user.role,
         )
         # El reporte ya existe; público todavía no. La foto entra a la cola y
         # el endpoint contesta ahora: bloquear el POST hasta que el difuminado
@@ -507,7 +523,10 @@ class ReportViewSet(
         """
         report = self.get_object()
         if request.method == "POST":
-            Like.objects.get_or_create(report=report, user=request.user)
+            _, created = Like.objects.get_or_create(report=report, user=request.user)
+            if created:
+                # Al autor, una vez por persona (C-09).
+                notify_new_like(report, request.user)
             liked = True
             code = status.HTTP_201_CREATED
             # US-040: el umbral se evalúa **al persistir el me gusta**, no en un
@@ -531,6 +550,65 @@ class ReportViewSet(
                 "status": report.status,
             },
             status=code,
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        """El detalle; o, si se descartó por moderación, solo el aviso (US-049).
+
+        Un reporte descartado no es visible —``visible_to`` lo deja afuera como
+        a cualquier cancelado—, pero el motivo de la decisión es público
+        (escenario 5). Para un tercero se responde la versión reducida, con el
+        aviso y nada más. Nada de lo que cuelga del detalle se habilita por
+        acá: comentarios, me gusta y denuncias siguen respondiendo ``404``.
+        """
+        try:
+            return super().retrieve(request, *args, **kwargs)
+        except Http404:
+            notice = self._moderation_notice(kwargs.get("pk"))
+            if notice is None:
+                raise
+            return Response(
+                ModerationNoticeSerializer(notice, context={"request": request}).data,
+            )
+
+    def _moderation_notice(self, pk) -> Report | None:
+        if not str(pk).isdigit():
+            return None
+        queryset = Report.objects.moderation_notices().filter(pk=int(pk))
+        user = self.request.user
+        if user.sees_only_own_municipality:
+            queryset = queryset.for_user(user)
+        return queryset.first()
+
+    @action(detail=True, methods=["post"], url_path="moderation-appeal")
+    def moderation_appeal(self, request, pk=None):
+        """El autor apela el descarte de su reporte por moderación (US-049).
+
+        Va al administrador de la plataforma, no al municipio que descartó, y
+        el reporte sigue Cancelado mientras se resuelve (escenario 6).
+        """
+        report = self.get_object()
+        serializer = ModerationAppealCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            appeal_moderation(
+                report,
+                author=request.user,
+                reason=serializer.validated_data["reason"],
+            )
+        except NotAuthorError as error:
+            raise PermissionDenied(str(error)) from error
+        except ReasonRequiredError as error:
+            raise ValidationError({"reason": [str(error)]}) from error
+        except ModerationError as error:
+            return Response(
+                {"code": MODERATION_APPEAL_REJECTED_CODE, "detail": str(error)},
+                status=status.HTTP_409_CONFLICT,
+            )
+        report.refresh_from_db()
+        return Response(
+            ReportDetailSerializer(report, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
         )
 
     @action(detail=True, methods=["post"])

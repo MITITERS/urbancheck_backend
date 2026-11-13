@@ -1,0 +1,14 @@
+# Versiones publicadas de los términos y condiciones y la política de privacidad
+# (RN-10). Ver urbancheck/users/legal.py.
+#
+# Cada entrada lleva una carpeta con el mismo nombre que su número, con
+# terminos.md y privacidad.md. Los dos documentos comparten versión y se
+# aceptan juntos.
+#
+# Vigente es la última cuya fecha ya pasó. Al publicar una versión nueva, cada
+# vecino la tiene que aceptar en su próximo ingreso. Una versión que alguien ya
+# aceptó no se edita: se publica otra.
+
+[[version]]
+numero = "1.0"
+vigente_desde = 2026-10-30T00:00:00-03:00

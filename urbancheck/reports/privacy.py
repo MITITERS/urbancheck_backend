@@ -8,9 +8,10 @@ las tres viven acá:
   vistas públicas, sin umbral. No hay código que lo haga: lo deduce
   ``on_privacy_hold()`` de que exista una solicitud pendiente, y deja de
   ocultarlo cuando ninguna lo está.
-- **Resuelve el administrador de la plataforma**, no el municipio: la
-  obligación de anonimizar es de la plataforma, y el afectado no tiene por qué
-  depender de la diligencia de un agente municipal.
+- **Resuelven el administrador de la plataforma y el agente municipal** de la
+  municipalidad del reporte. US-043 la dejaba solo al admin; el usuario sumó al
+  agente el 21/10. El parámetro ``admin`` de las funciones es quien decide,
+  sea cual sea su rol.
 - **La eliminación es física.** Un borrado lógico que conserva el archivo no
   satisface la RN-12.
 

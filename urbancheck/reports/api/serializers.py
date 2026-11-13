@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from urbancheck.common.fields import LatitudeField
@@ -86,6 +87,95 @@ class ResolutionAppealSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+
+class ModerationAppealStateSerializer(serializers.Serializer):
+    """La apelación del autor contra un descarte, tal como la ve él (US-049)."""
+
+    status = serializers.CharField()
+    reason = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    resolution_reason = serializers.CharField(allow_blank=True)
+
+
+class PublicModerationSerializer(serializers.Serializer):
+    """El descarte por moderación de un reporte, de cara al público (US-049).
+
+    Es la **única** información de la moderación que ve el ciudadano: qué se
+    decidió, por qué y cuándo. No viajan la identidad de los denunciantes, la
+    del agente ni la cantidad de denuncias. La apelación y la posibilidad de
+    apelar solo le llegan al autor.
+    """
+
+    reason = serializers.CharField()
+    decided_at = serializers.DateTimeField()
+    can_appeal = serializers.BooleanField()
+    appeal = ModerationAppealStateSerializer(allow_null=True)
+
+
+def moderation_payload(report, request) -> dict | None:
+    """El descarte vigente de ``report`` para quien hace ``request``."""
+    decision = report.active_discard()
+    if decision is None:
+        return None
+    is_author = bool(request) and report.author_id == request.user.id
+    appeal = decision.appeals.first() if is_author else None
+    return {
+        "reason": decision.reason,
+        "decided_at": decision.created_at,
+        "can_appeal": is_author and not decision.appeals.exists(),
+        "appeal": (
+            {
+                "status": appeal.status,
+                "reason": appeal.reason,
+                "created_at": appeal.created_at,
+                "resolved_at": appeal.resolved_at,
+                "resolution_reason": appeal.resolution_reason,
+            }
+            if appeal
+            else None
+        ),
+    }
+
+
+class ModerationNoticeSerializer(serializers.ModelSerializer):
+    """Un reporte descartado por moderación, abierto por un tercero (US-049).
+
+    El reporte ya no está publicado —salió del feed y del mapa por su estado—,
+    pero el motivo del descarte es público: es el contrapeso de que el municipio
+    pueda sacar reclamos de la vista. Así que se muestra el aviso y **nada
+    más**: sin foto, sin descripción, sin autor, sin comentarios.
+    """
+
+    moderation = serializers.SerializerMethodField()
+    is_moderation_notice = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Report
+        fields = [
+            "id",
+            "number",
+            "category",
+            "status",
+            "created_at",
+            "moderation",
+            "is_moderation_notice",
+        ]
+        read_only_fields = fields
+
+    @extend_schema_field(PublicModerationSerializer(allow_null=True))
+    def get_moderation(self, obj) -> dict | None:
+        return moderation_payload(obj, self.context.get("request"))
+
+    def get_is_moderation_notice(self, obj) -> bool:
+        return True
+
+
+class ModerationAppealCreateSerializer(serializers.Serializer):
+    """La apelación del autor contra un descarte (US-049): solo el motivo."""
+
+    reason = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
 
 class ResolutionCreateSerializer(serializers.Serializer):
@@ -297,9 +387,20 @@ class ReportDetailSerializer(ReportListSerializer):
     # El parte de trabajo del operario, en orden cronológico. Son varias cuando
     # hubo una apelación: el segundo cierre no pisa al primero (US-048).
     resolution_evidences = ResolutionEvidenceSerializer(many=True, read_only=True)
-    resolution_appeals = ResolutionAppealSerializer(many=True, read_only=True)
+    # Solo las objeciones de cierre: las de moderación comparten modelo (US-049)
+    # pero van en ``moderation``.
+    resolution_appeals = ResolutionAppealSerializer(
+        source="closure_appeals",
+        many=True,
+        read_only=True,
+    )
     objection_deadline = serializers.SerializerMethodField()
     can_appeal = serializers.SerializerMethodField()
+    # El descarte por moderación vigente (US-049). Su motivo es público.
+    moderation = serializers.SerializerMethodField()
+    # El enlace para compartirlo (US-030). Solo si el reporte es público: un
+    # enlace a algo que nadie más puede ver no se ofrece.
+    share_url = serializers.SerializerMethodField()
 
     class Meta(ReportListSerializer.Meta):
         fields = [
@@ -313,9 +414,23 @@ class ReportDetailSerializer(ReportListSerializer):
             "resolution_appeals",
             "objection_deadline",
             "can_appeal",
+            "moderation",
+            "share_url",
             "status_history",
             "can_edit",
         ]
+
+    def get_share_url(self, obj) -> str | None:
+        # Import local: ``public_views`` importa este módulo.
+        from .public_views import share_url_for  # noqa: PLC0415
+
+        if not Report.objects.publicly_visible().filter(pk=obj.pk).exists():
+            return None
+        return share_url_for(obj)
+
+    @extend_schema_field(PublicModerationSerializer(allow_null=True))
+    def get_moderation(self, obj) -> dict | None:
+        return moderation_payload(obj, self.context.get("request"))
 
     def get_objection_deadline(self, obj) -> str | None:
         """Hasta cuándo se puede objetar el cierre (US-047, escenario 3).

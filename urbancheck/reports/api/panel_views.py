@@ -20,6 +20,7 @@ from urbancheck.reports.models import ReportAreaAssignment
 from urbancheck.reports.models import ReportStatusHistory
 from urbancheck.reports.models import ResolutionAppeal
 from urbancheck.reports.models import ResolutionEvidence
+from urbancheck.reports.moderation import pending_content_complaints
 from urbancheck.users.api.permissions import IsPanelUser
 
 from .mixins import JurisdictionScopedMixin
@@ -107,6 +108,9 @@ class PanelReportViewSet(
             # Alimenta la señal de "cierre a revisar" del listado y su filtro
             # (US-015, escenario 3).
             closure_review_flag=closure_review_annotation(),
+            # Señala en el listado los reportes con denuncias por contenido
+            # pendientes (US-049, escenario 12).
+            pending_complaint_count=pending_content_complaints(),
         )
         .order_by("-created_at")
     )
