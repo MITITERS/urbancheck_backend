@@ -6,8 +6,15 @@ from django.urls import path
 from django.views import defaults as default_views
 from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView
-from drf_spectacular.views import SpectacularSwaggerView
-from rest_framework.authtoken.views import obtain_auth_token
+from drf_spectacular.views import SpectacularSwaggerSplitView
+
+from config.deeplink import android_assetlinks
+from config.deeplink import apple_app_site_association
+from config.deeplink import reset_password_web_fallback
+from urbancheck.municipalities.api.geo_views import LocalityListView
+from urbancheck.municipalities.api.geo_views import ProvinceListView
+from urbancheck.notifications.api.preferences import NotificationPreferenceView
+from urbancheck.reports.share_preview import shared_report_preview
 
 urlpatterns = [
     path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -16,11 +23,22 @@ urlpatterns = [
         TemplateView.as_view(template_name="pages/about.html"),
         name="about",
     ),
+    # Universal Links (iOS) / App Links (Android) + fallback web del reset
+    path(
+        ".well-known/apple-app-site-association",
+        apple_app_site_association,
+    ),
+    path(".well-known/assetlinks.json", android_assetlinks),
+    path("reset-password", reset_password_web_fallback, name="reset_password"),
+    # El enlace para compartir un reporte (US-030): la vista previa para las
+    # redes y la redirección a la página pública del panel.
+    path("r/<uuid:token>", shared_report_preview, name="shared_report"),
     # Django Admin, use {% url 'admin:index' %}
     path(settings.ADMIN_URL, admin.site.urls),
     # User management
     path("users/", include("urbancheck.users.urls", namespace="users")),
     path("accounts/", include("allauth.urls")),
+    path("_allauth/", include("allauth.headless.urls")),
     # Your stuff: custom urls includes go here
     # ...
     # Media files
@@ -31,12 +49,23 @@ urlpatterns = [
 urlpatterns += [
     # API base url
     path("api/", include("config.api_router")),
-    # DRF auth token
-    path("api/auth-token/", obtain_auth_token, name="obtain_auth_token"),
+    path(
+        "api/notification-preferences/",
+        NotificationPreferenceView.as_view(),
+        name="notification-preferences",
+    ),
+    path("api/geo/provinces/", ProvinceListView.as_view(), name="geo-provinces"),
+    path(
+        "api/geo/provinces/<str:province_id>/localities/",
+        LocalityListView.as_view(),
+        name="geo-localities",
+    ),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
     path(
         "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="api-schema"),
+        # La variante que sirve el script de arranque aparte, no inline: es la
+        # que admite la política de contenido del admin y Swagger (C-05).
+        SpectacularSwaggerSplitView.as_view(url_name="api-schema"),
         name="api-docs",
     ),
 ]

@@ -12,3 +12,68 @@ REDIS_URL=redis://redis:6379/0
 # Flower
 CELERY_FLOWER_USER=frEhbFehKdDLsEKveCXUTtgoizjAzbuO
 CELERY_FLOWER_PASSWORD=4Rgf0VI1oTw30RylMBswSvq38aDXC0ocldRtJHtJBDKaJqoLxdKsc5jMWTRATSeA
+DJANGO_ALLOWED_HOSTS=*
+# Link de recuperación de contraseña (dev): apunta a la página web de reset
+# en la IP/LAN del backend para que abra en el navegador del celular.
+DJANGO_ACCOUNT_RESET_PASSWORD_URL=http://192.168.0.116:8000/accounts/password/reset/key/{key}/
+# Municipalidad a la que se asocian los reportes nuevos (US-034).
+# El seed de demo carga dos municipios para que una fuga de jurisdicción
+# se vea en desarrollo; con más de uno, esta variable deja de ser opcional.
+DJANGO_ACTIVE_MUNICIPALITY_ID=1
+
+# Cuántas confirmaciones distintas de vecinos validan un reporte sin que un
+# validador vaya al lugar (US-040). No cuentan ni el autor ni las cuentas de
+# trabajo.
+#
+# Se lee en **cada** evaluación, así que cambiar el número y reiniciar el
+# contenedor alcanza: no hace falta tocar código ni redeployar. Para la demo,
+# bajarlo a 2 o 3 deja mostrar la validación colectiva sin juntar diez cuentas.
+DJANGO_COLLECTIVE_VALIDATION_THRESHOLD=3
+
+# Radio en metros dentro del cual un reporte activo de la misma categoría se
+# considera duplicado (US-026): el nuevo no se crea y se ofrece sumarse al
+# existente (US-032).
+DJANGO_DUPLICATE_REPORT_RADIUS_METERS=30
+
+# Cuánto tiempo sigue dibujado en el mapa un reporte ya resuelto.
+#
+# Pasado el plazo **solo deja de dibujarse en el mapa**: sigue en el feed, en su
+# detalle y en el panel, no se archiva ni cambia de estado.
+#
+# En minutos: el default son 15 días (21600). Para la demo, bajarlo a 1 o 2 deja
+# mostrar la desaparición sin esperar dos semanas.
+DJANGO_MAP_RESOLVED_RETENTION_MINUTES=21600
+
+# Días sin interacción tras los cuales un reporte pendiente de validación se
+# archiva solo (US-031).
+#
+# Cuenta desde la **última señal de vida** —creación, comentario o me gusta—, no
+# desde el alta: un reporte que alguien apoyó hace una semana no está
+# abandonado, por viejo que sea. El aviso al autor sale 7 días antes.
+DJANGO_ARCHIVAL_INACTIVITY_DAYS=90
+
+# Comparación automática del antes y el después de un cierre (US-015).
+#
+# Es informativa: el veredicto se muestra en el panel y no cambia nada del
+# reporte. **Sin clave queda apagada** y cada cierre figura como "comparación no
+# disponible"; el circuito sigue igual.
+#
+# El default es el free tier de Gemini (clave gratis en aistudio.google.com).
+# En ese plan Google puede usar el contenido para mejorar sus productos: solo
+# viajan fotos ya difuminadas (US-041), pero en producción corresponde el plan
+# pago o un proveedor sin retención. Cualquier servicio compatible con la API de
+# chat completions de OpenAI (Groq, OpenRouter, Ollama) sirve cambiando la URL y
+# el modelo.
+# El adaptador de chat completions (ver urbancheck/reports/vision.py). Sin esta
+# línea el proveedor es el nulo y no se compara nada, aunque haya clave.
+DJANGO_VISION_PROVIDER=openai_compatible
+DJANGO_RESOLUTION_COMPARISON_API_KEY=
+# DJANGO_RESOLUTION_COMPARISON_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+# DJANGO_RESOLUTION_COMPARISON_MODEL=gemini-3.6-flash
+# DJANGO_RESOLUTION_COMPARISON_MAX_RETRIES=3
+
+# Anonimización diferida (US-042). Los reintentos se bajan a 1 y la espera a 5 s
+# para poder ver el fallo definitivo y el aviso al autor sin esperar minutos.
+DJANGO_ANONYMIZATION_MAX_RETRIES=1
+DJANGO_ANONYMIZATION_RETRY_BASE_SECONDS=5
+DJANGO_ANONYMIZATION_STALE_MINUTES=5

@@ -1,0 +1,11 @@
+# Hallazgos de gitleaks revisados y aceptados (Sprint 5, 2026-10-15).
+#
+# Son las credenciales del Postgres y del Flower del compose **local**, que
+# cookiecutter genera al crear el proyecto. Solo valen para los contenedores de
+# desarrollo en la máquina de cada uno, no protegen ningún dato real y están
+# versionadas a propósito para que `docker compose up` funcione sin pasos
+# previos. Las de producción viven en `.envs/.production/`, que no se versiona.
+#
+# Cualquier hallazgo nuevo **no** va acá sin revisión: se rota el secreto.
+ab6580ea3dd72a9fbaa08111d6ea358f27425eeb:.envs/.local/.postgres:generic-api-key:7
+ab6580ea3dd72a9fbaa08111d6ea358f27425eeb:.envs/.local/.django:generic-api-key:14

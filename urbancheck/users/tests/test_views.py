@@ -29,12 +29,10 @@ pytestmark = pytest.mark.django_db
 
 
 class TestUserUpdateView:
-    """
-    TODO:
-        extracting view initialization code as class-scoped fixture
-        would be great if only pytest-django supported non-function-scoped
-        fixture db access -- this is a work-in-progress for now:
-        https://github.com/pytest-dev/pytest-django/pull/258
+    """La vista de edición del perfil de la plantilla de cookiecutter.
+
+    Cada test arma la vista a mano: pytest-django no da acceso a la base desde
+    fixtures de alcance de clase, así que no hay dónde compartir ese armado.
     """
 
     def dummy_get_response(self, request: HttpRequest):

@@ -1,26 +1,550 @@
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ValidationError
+from rest_framework.generics import RetrieveAPIView
+from rest_framework.mixins import CreateModelMixin
 from rest_framework.mixins import ListModelMixin
 from rest_framework.mixins import RetrieveModelMixin
 from rest_framework.mixins import UpdateModelMixin
+from rest_framework.parsers import JSONParser
+from rest_framework.parsers import MultiPartParser
+from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
+from urbancheck.common.throttling import ScopedThrottle
+from urbancheck.users.account_deletion import delete_citizen_account
+from urbancheck.users.legal import LegalDocuments
+from urbancheck.users.legal import current_legal_documents
 from urbancheck.users.models import User
 
+from .permissions import IsCitizen
+from .permissions import IsPanelUser
+from .permissions import IsPlatformAdmin
+from .serializers import AdminValidatorCreateSerializer
+from .serializers import LegalDocumentsSerializer
+from .serializers import MunicipalAgentCreateSerializer
+from .serializers import MunicipalAgentSerializer
+from .serializers import OperatorCreateSerializer
+from .serializers import OperatorSerializer
+from .serializers import OperatorUpdateSerializer
+from .serializers import PublicUserSerializer
+from .serializers import TermsAcceptanceSerializer
 from .serializers import UserSerializer
+from .serializers import ValidatorCreateSerializer
+from .serializers import ValidatorSerializer
+
+# Acciones que escriben sobre el usuario: siempre acotadas al propio.
+WRITE_ACTIONS = frozenset({"update", "partial_update"})
+
+# Filtro por estado de la cuenta de trabajo: ``?state=active|inactive``. El
+# panel lo usa para separar en dos pestañas las cuentas habilitadas de las
+# archivadas, de modo que las dadas de baja no viajen siquiera en la respuesta
+# del listado principal.
+STATE_PARAM = "state"
+STATE_ACTIVE = "active"
+STATE_INACTIVE = "inactive"
 
 
-class UserViewSet(RetrieveModelMixin, ListModelMixin, UpdateModelMixin, GenericViewSet):
+INACTIVE_MUNICIPALITY_MESSAGE = (
+    "No se puede reactivar esta cuenta: su municipalidad está dada de baja. "
+    "Volvé a darla de alta primero."
+)
+
+MUNICIPALITY_PARAM = "municipality"
+
+# Filtro del listado de operarios por área: ``?operational_area=<id>``. Es lo
+# que usa la ficha del área en el panel, donde los operarios se gestionan
+# dentro de su dependencia y no como una sección aparte.
+AREA_PARAM = "operational_area"
+
+NO_HARD_DELETE_OPERATOR_MESSAGE = (
+    "Una cuenta de operario no se elimina: se desactiva. Los cierres que "
+    "registró conservan su identidad en el historial de cada reporte."
+)
+
+
+def ensure_can_be_reactivated(user) -> None:
+    """Frena la reactivación de una cuenta sin municipalidad activa.
+
+    Vale para las dos pantallas: la regla es de la cuenta de trabajo, no de un
+    endpoint. Responde ``400`` y no ``403`` porque a quien la ejecuta no le
+    falta permiso —es el admin, o el agente de esa jurisdicción—; lo que falta
+    es una condición del dato.
+    """
+    if not user.can_be_reactivated:
+        raise ValidationError({"detail": INACTIVE_MUNICIPALITY_MESSAGE})
+
+
+def filter_by_municipality(queryset, query_params):
+    """Acota por ``?municipality=<id>``. Solo tiene sentido para el admin.
+
+    Un valor que no sea un id se ignora, igual que el estado: un parámetro mal
+    escrito en la URL no tiene por qué tumbar el listado. Sin esta guarda,
+    ``filter(municipality_id="abc")`` es un ``500``.
+    """
+    municipality = query_params.get(MUNICIPALITY_PARAM)
+    if not municipality or not municipality.isdigit():
+        return queryset
+    return queryset.filter(municipality_id=municipality)
+
+
+def filter_by_area(queryset, query_params):
+    """Acota por ``?operational_area=<id>``. Mismo criterio laxo que los demás.
+
+    No es un agujero en la jurisdicción: se aplica sobre el queryset que ya
+    devolvió el filtro por municipalidad, así que pedir un área ajena devuelve
+    una lista vacía y no la del otro municipio.
+    """
+    area = query_params.get(AREA_PARAM)
+    if not area or not area.isdigit():
+        return queryset
+    return queryset.filter(operational_area_id=area)
+
+
+def filter_by_state(queryset, query_params):
+    """Acota por ``?state=``. Un valor desconocido no filtra ni rompe.
+
+    Sin el parámetro devuelve las dos, que es lo que hacía antes de existir: un
+    cliente que no lo manda sigue viendo el listado completo.
+    """
+    state = query_params.get(STATE_PARAM)
+    if state == STATE_ACTIVE:
+        return queryset.filter(is_work_account_active=True)
+    if state == STATE_INACTIVE:
+        return queryset.filter(is_work_account_active=False)
+    return queryset
+
+
+class UserViewSet(RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
+    """Perfil propio (``me``) y perfil público de otro usuario.
+
+    No hay listado (C-01): ``GET /api/users/`` devolvía el correo, el rol y la
+    municipalidad de todas las cuentas a cualquier sesión, y ningún cliente lo
+    usaba. Las cuentas de trabajo se listan en sus propios endpoints, acotados
+    por rol y jurisdicción.
+    """
+
     serializer_class = UserSerializer
     queryset = User.objects.all()
     lookup_field = "pk"
 
     def get_queryset(self, *args, **kwargs):
-        assert isinstance(self.request.user.id, int)
-        return self.queryset.filter(id=self.request.user.id)
+        # El detalle es público (US-027), pero editar sigue siendo solo sobre uno
+        # mismo: acotamos el queryset en lugar de sumar un permiso de objeto.
+        if getattr(self, "action", None) in WRITE_ACTIONS:
+            return self.queryset.filter(id=self.request.user.id)
+        return self.queryset
 
-    @action(detail=False)
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "retrieve":
+            return PublicUserSerializer
+        return UserSerializer
+
+    def retrieve(self, request, *args, **kwargs):
+        """Perfil público, salvo que sea el propio (ahí devolvemos todo)."""
+        instance = self.get_object()
+        if instance.id == request.user.id:
+            serializer = UserSerializer(instance, context={"request": request})
+        else:
+            serializer = PublicUserSerializer(instance, context={"request": request})
+        return Response(serializer.data)
+
+    def get_throttles(self):
+        if getattr(self, "action", None) == "me" and self.request.method == "DELETE":
+            return [ScopedThrottle("account_deletion")]
+        return super().get_throttles()
+
+    @action(
+        detail=False,
+        methods=["get", "patch", "delete"],
+        parser_classes=[MultiPartParser, JSONParser],
+    )
     def me(self, request):
+        if request.method == "DELETE":
+            return self._delete_account(request)
+        if request.method == "PATCH":
+            serializer = UserSerializer(
+                request.user,
+                data=request.data,
+                partial=True,
+                context={"request": request},
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(status=status.HTTP_200_OK, data=serializer.data)
         serializer = UserSerializer(request.user, context={"request": request})
         return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+    def _delete_account(self, request) -> Response:
+        """Baja de la cuenta por su titular (N-09), confirmada con la contraseña.
+
+        Solo para vecinos: una cuenta de trabajo no se borra a sí misma, porque
+        su nombre es parte del historial de gestión; sigue con la baja lógica
+        desde el panel. Qué se borra y qué se conserva está en
+        ``urbancheck.users.account_deletion``.
+        """
+        user = request.user
+        if user.role in User.WORK_ROLES:
+            msg = (
+                "Una cuenta de trabajo no se borra desde acá: la da de baja el "
+                "administrador de la plataforma."
+            )
+            raise PermissionDenied(msg)
+        password = request.data.get("password") or ""
+        if not password or not user.check_password(password):
+            raise ValidationError({"password": ["La contraseña no es correcta."]})
+        delete_citizen_account(user, request=request)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/onboarding",
+        permission_classes=[IsAuthenticated, IsCitizen],
+    )
+    def onboarding(self, request):
+        """Marca el tutorial de bienvenida como visto (US-051).
+
+        Idempotente: la fecha se escribe solo si todavía estaba vacía, en el
+        mismo ``UPDATE``, así una segunda llamada —el reintento de la app tras
+        un error de red, o dos dispositivos a la vez— no pisa la original.
+        Terminar y omitir llaman a lo mismo: el tutorial queda visto igual.
+        """
+        User.objects.filter(
+            pk=request.user.pk,
+            onboarding_completed_at__isnull=True,
+        ).update(onboarding_completed_at=timezone.now())
+        request.user.refresh_from_db(fields=["onboarding_completed_at"])
+        serializer = UserSerializer(request.user, context={"request": request})
+        return Response(status=status.HTTP_200_OK, data=serializer.data)
+
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="me/accept-terms",
+        permission_classes=[IsAuthenticated, IsCitizen],
+        serializer_class=TermsAcceptanceSerializer,
+    )
+    def accept_terms(self, request):
+        """Registra que el vecino aceptó los términos vigentes (RN-10, C-23).
+
+        Pide la versión que leyó: si se publicó otra mientras tanto, responde
+        ``400`` y la app vuelve a mostrar el texto. Aceptar de nuevo la misma
+        versión no cambia la fecha original.
+        """
+        serializer = TermsAcceptanceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.validated_data["version"]
+        pending = User.objects.filter(pk=request.user.pk).exclude(
+            terms_version=version,
+        )
+        pending.update(terms_version=version, terms_accepted_at=timezone.now())
+        request.user.refresh_from_db(fields=["terms_version", "terms_accepted_at"])
+        data = UserSerializer(request.user, context={"request": request}).data
+        return Response(status=status.HTTP_200_OK, data=data)
+
+
+NO_TERMS_MESSAGE = "Todavía no hay términos y condiciones publicados."
+
+
+class CurrentTermsView(RetrieveAPIView):
+    """Los términos y la política de privacidad vigentes (RN-10, C-23).
+
+    Sin sesión: la app los muestra en el registro, antes de que exista la
+    cuenta. ``404`` mientras no haya ninguna versión publicada.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    serializer_class = LegalDocumentsSerializer
+
+    def get_object(self) -> LegalDocuments:
+        terms = current_legal_documents()
+        if terms is None:
+            raise NotFound(NO_TERMS_MESSAGE)
+        return terms
+
+
+class MunicipalAgentViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
+    """Alta, listado y baja lógica de agentes municipales (US-017).
+
+    Restringido al administrador de la plataforma: es quien habilita a cada
+    municipio a operar el panel, y el único que puede dejar de habilitarlo.
+
+    Es el mismo tablero que el de validadores, con una diferencia de alcance:
+    al validador lo gestionan los dos roles del panel, cada uno en su
+    jurisdicción; al agente solo el admin, que no está acotado a ninguna.
+    """
+
+    permission_classes = [IsAuthenticated, IsPlatformAdmin]
+
+    def get_queryset(self):
+        queryset = (
+            User.objects.filter(role=User.Role.AGENTE_MUNICIPAL)
+            .select_related("municipality")
+            .with_management_count()
+            .order_by("name", "email")
+        )
+        # Solo en el listado: activar y desactivar tienen que poder alcanzar a
+        # la cuenta esté del lado que esté, o reactivar desde el archivado
+        # respondería 404.
+        if self.action == "list":
+            params = self.request.query_params
+            queryset = filter_by_municipality(queryset, params)
+            queryset = filter_by_state(queryset, params)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return MunicipalAgentCreateSerializer
+        return MunicipalAgentSerializer
+
+    def create(self, request, *args, **kwargs):
+        """Responde con el agente ya serializado para lectura.
+
+        El serializer de alta es de escritura (recibe la contraseña temporal),
+        así que la respuesta usa el de lectura y nunca devuelve la contraseña.
+        """
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        agent = serializer.save()
+        # Se relee por el queryset anotado, como en el alta de validadores:
+        # ``management_count`` es una anotación, y un campo read_only sin
+        # atributo lo omite DRF en silencio en vez de fallar.
+        agent = self.get_queryset().get(pk=agent.pk)
+        return Response(
+            self._read_serializer(agent, request).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        """Baja lógica: el agente deja de operar el panel, y nada más.
+
+        No se borra el registro ni se le cierra la cuenta: puede iniciar sesión
+        —el panel se lo dice y lo deja salir— y todo lo que gestionó sigue en el
+        historial de cada reporte, con su nombre.
+        """
+        return self._set_agent_active(request, active=False)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        """Reactiva al agente, si su municipalidad sigue en pie."""
+        return self._set_agent_active(request, active=True)
+
+    def _set_agent_active(self, request, *, active: bool) -> Response:
+        agent = self.get_object()
+        if active:
+            ensure_can_be_reactivated(agent)
+        agent.is_work_account_active = active
+        agent.save(update_fields=["is_work_account_active"])
+        agent = self.get_queryset().get(pk=agent.pk)
+        return Response(self._read_serializer(agent, request).data)
+
+    def _read_serializer(self, agent, request) -> MunicipalAgentSerializer:
+        return MunicipalAgentSerializer(agent, context={"request": request})
+
+
+class ValidatorViewSet(CreateModelMixin, ListModelMixin, GenericViewSet):
+    """Gestión de validadores, por el agente municipal (US-035) o por el admin.
+
+    Los dos hacen lo mismo; lo único que cambia es el alcance y de dónde sale la
+    municipalidad:
+
+    - El **agente** pasa por la capa de jurisdicción de US-034: solo ve —y solo
+      puede activar o desactivar— validadores de su propia municipalidad, y las
+      altas se le asignan a esa municipalidad sin poder elegir.
+    - El **admin de la plataforma** no está acotado a ningún municipio: ve
+      todos, puede filtrar por ``?municipality=<id>`` y elige la municipalidad
+      en cada alta.
+
+    Un ciudadano o un validador autenticado recibe ``403`` por ``IsPanelUser``.
+    """
+
+    permission_classes = [IsAuthenticated, IsPanelUser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = User.objects.none()
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = User.objects.filter(role=User.Role.VALIDADOR)
+        if user.is_platform_admin:
+            qs = filter_by_municipality(qs, self.request.query_params)
+        else:
+            qs = qs.for_user(user)
+        qs = (
+            qs.select_related("municipality")
+            .with_validation_count()
+            .order_by("name", "email")
+        )
+        if self.action == "list":
+            qs = filter_by_state(qs, self.request.query_params)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action != "create":
+            return ValidatorSerializer
+        # De dónde sale la municipalidad depende de quién da el alta: el agente
+        # tiene la suya, el admin la elige.
+        # ``getattr``: al generar el esquema OpenAPI no hay usuario de verdad.
+        if getattr(self.request.user, "is_platform_admin", False):
+            return AdminValidatorCreateSerializer
+        return ValidatorCreateSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validator = serializer.save()
+        # Se relee por el queryset anotado: ``validation_count`` viene de una
+        # anotación y sobre la instancia recién creada no existiría. DRF omite
+        # en silencio un campo read_only sin atributo, así que el bug no
+        # avisaría.
+        validator = self.get_queryset().get(pk=validator.pk)
+        return Response(
+            self._read_serializer(validator, request).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        """Baja lógica: el validador conserva su acceso como ciudadano común.
+
+        No se borra el registro ni se desactiva la cuenta entera, y el historial
+        de validaciones ya ejecutadas queda intacto.
+        """
+        return self._set_validator_active(request, active=False)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        """Reactiva al validador, si su municipalidad sigue en pie."""
+        return self._set_validator_active(request, active=True)
+
+    def _set_validator_active(self, request, *, active: bool) -> Response:
+        validator = self.get_object()
+        if active:
+            ensure_can_be_reactivated(validator)
+        validator.is_work_account_active = active
+        validator.save(update_fields=["is_work_account_active"])
+        validator = self.get_queryset().get(pk=validator.pk)
+        return Response(self._read_serializer(validator, request).data)
+
+    def _read_serializer(self, validator, request) -> ValidatorSerializer:
+        return ValidatorSerializer(validator, context={"request": request})
+
+
+class OperatorViewSet(
+    CreateModelMixin,
+    ListModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    GenericViewSet,
+):
+    """Gestión de operarios, por el agente municipal (US-044) o por el admin.
+
+    Espejo de ``ValidatorViewSet`` —alta, listado, edición y baja lógica de una
+    cuenta de trabajo— con una diferencia: la municipalidad no se elige nunca,
+    ni siquiera el admin la elige. Se deriva del **área operativa**, que sí se
+    elige, y por eso el alta es una sola para los dos roles.
+
+    Un ciudadano, un validador u otro operario reciben ``403`` por
+    ``IsPanelUser``. Un operario de otra municipalidad, ``404``, porque el
+    queryset ya lo dejó afuera.
+    """
+
+    permission_classes = [IsAuthenticated, IsPanelUser]
+    # Solo para que el esquema OpenAPI tipe el id de la ruta: el queryset real
+    # lo arma ``get_queryset``.
+    queryset = User.objects.none()
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = User.objects.filter(role=User.Role.OPERARIO)
+        if user.is_platform_admin:
+            qs = filter_by_municipality(qs, self.request.query_params)
+        else:
+            qs = qs.for_user(user)
+        qs = (
+            qs.select_related("municipality", "operational_area__municipality")
+            .with_closed_count()
+            .order_by("name", "email")
+        )
+        # Solo en el listado, por lo mismo que en validadores: activar y
+        # desactivar tienen que alcanzar a la cuenta esté del lado que esté.
+        if self.action == "list":
+            params = self.request.query_params
+            qs = filter_by_area(qs, params)
+            qs = filter_by_state(qs, params)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return OperatorCreateSerializer
+        if self.action in WRITE_ACTIONS:
+            return OperatorUpdateSerializer
+        return OperatorSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        operator = serializer.save()
+        # Se relee por el queryset anotado: ``closed_count`` viene de una
+        # anotación y sobre la instancia recién creada no existiría. DRF omite
+        # en silencio un campo read_only sin atributo, así que el bug no
+        # avisaría.
+        operator = self.get_queryset().get(pk=operator.pk)
+        return Response(
+            self._read_serializer(operator, request).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        """Devuelve la fila completa tras editar, para que el panel refresque."""
+        super().update(request, *args, **kwargs)
+        operator = self.get_queryset().get(pk=self.get_object().pk)
+        return Response(self._read_serializer(operator, request).data)
+
+    def destroy(self, request, *args, **kwargs):
+        """No se borra: se desactiva.
+
+        Se responde ``405`` y no ``403``: el método no existe para nadie. El
+        objeto se busca igual antes de contestar para que un operario de otra
+        jurisdicción siga respondiendo ``404``, que es lo que dice US-034.
+        """
+        self.get_object()
+        return Response(
+            {"detail": NO_HARD_DELETE_OPERATOR_MESSAGE},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def deactivate(self, request, pk=None):
+        """Baja lógica: pierde el acceso a la app de inmediato.
+
+        No se borra el registro: los cierres que ejecutó conservan su identidad
+        en el historial de cada reporte.
+        """
+        return self._set_operator_active(request, active=False)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        """Reactiva al operario, si su municipalidad sigue en pie."""
+        return self._set_operator_active(request, active=True)
+
+    def _set_operator_active(self, request, *, active: bool) -> Response:
+        operator = self.get_object()
+        if active:
+            ensure_can_be_reactivated(operator)
+        operator.is_work_account_active = active
+        operator.save(update_fields=["is_work_account_active"])
+        operator = self.get_queryset().get(pk=operator.pk)
+        return Response(self._read_serializer(operator, request).data)
+
+    def _read_serializer(self, operator, request) -> OperatorSerializer:
+        return OperatorSerializer(operator, context={"request": request})

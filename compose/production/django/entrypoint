@@ -8,7 +8,17 @@ if [ -z "${POSTGRES_USER}" ]; then
     base_postgres_image_default_user='postgres'
     export POSTGRES_USER="${base_postgres_image_default_user}"
 fi
-export DATABASE_URL="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+# N-07: en producción Django entra con el rol de aplicación, sin
+# superusuario, que crea compose/production/postgres/init. Sin él (el compose
+# local) sigue con POSTGRES_USER.
+if [ -n "${POSTGRES_APP_USER:-}" ]; then
+    db_user="${POSTGRES_APP_USER}"
+    db_password="${POSTGRES_APP_PASSWORD}"
+else
+    db_user="${POSTGRES_USER}"
+    db_password="${POSTGRES_PASSWORD}"
+fi
+export DATABASE_URL="postgres://${db_user}:${db_password}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
 
 wait-for-it "${POSTGRES_HOST}:${POSTGRES_PORT}" -t 30
 

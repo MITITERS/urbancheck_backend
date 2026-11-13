@@ -3,6 +3,7 @@ from __future__ import annotations
 import typing
 
 from allauth.account.adapter import DefaultAccountAdapter
+from allauth.headless.adapter import DefaultHeadlessAdapter
 from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.conf import settings
 
@@ -46,3 +47,37 @@ class SocialAccountAdapter(DefaultSocialAccountAdapter):
                 if last_name := data.get("last_name"):
                     user.name += f" {last_name}"
         return user
+
+
+class HeadlessAdapter(DefaultHeadlessAdapter):
+    """Payload de usuario que devuelve allauth headless.
+
+    El panel necesita el rol, la municipalidad y el flag de contraseña temporal
+    en la respuesta del login para decidir el flujo sin una llamada extra
+    (US-017); la app, la marca del tutorial de bienvenida (US-051). El adapter
+    por defecto además descarta las claves con valor vacío o nulo, así que
+    ``municipality`` y ``onboarding_completed_at`` se agregan después del
+    filtrado: que lleguen en ``null`` es información, no ausencia de dato.
+    """
+
+    def serialize_user(self, user) -> dict[str, typing.Any]:
+        data = super().serialize_user(user)
+        municipality = getattr(user, "municipality", None)
+        data["role"] = user.role
+        data["must_change_password"] = user.must_change_password
+        # Nulo es la señal de "mostrar el tutorial" (US-051): tiene que llegar
+        # aunque el adapter base descarte los vacíos.
+        data["onboarding_completed_at"] = user.onboarding_completed_at
+        # La app frena al vecino que no aceptó los términos vigentes (RN-10)
+        # con este dato, igual que con la contraseña temporal.
+        data["must_accept_terms"] = user.must_accept_terms
+        data["municipality"] = (
+            {
+                "id": municipality.pk,
+                "city": municipality.city,
+                "province": municipality.province,
+            }
+            if municipality
+            else None
+        )
+        return data
