@@ -30,7 +30,7 @@ dependencies = [
   "drf-spectacular==0.30.0",
   "drf-spectacular-sidecar==2026.10.1",
   "flower==2.2.0",
-  "gunicorn==26.0.0",
+  "gunicorn==27.0.1",
   "hiredis==3.5.0",
   "onnxruntime==1.31.1",
   "opencv-python-headless==5.0.0.93",
