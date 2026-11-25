@@ -52,8 +52,14 @@ licencias CC BY y CC BY-SA exigen citar.
 | `clean_*` | 6 | Baches y calles sin rostros ni patentes |
 
 Hasta el 15/10/2026 este set estuvo versionado en
-`urbancheck/anonymization/benchmark/images/`. Se sacó del árbol; **sigue en el
-historial de git** (commit `068c0c5`) mientras el equipo no decida reescribirlo.
+`urbancheck/anonymization/benchmark/images/`. Se sacó del árbol el 15/10/2026 y
+**se eliminó del historial de git el 25/11/2026**: ninguna rama ni etiqueta del
+repositorio lo contiene. Las páginas de los pull requests anteriores a esa fecha
+pueden seguir mostrando los archivos, porque GitHub no permite reescribirlas.
+
+Quien tenga un clon anterior al 25/11/2026 tiene que borrarlo y volver a clonar.
+No hay que fusionar ni pushear ramas de un clon viejo: vuelven a meter las fotos
+en el historial.
 
 ## Criterio de etiquetado
 
